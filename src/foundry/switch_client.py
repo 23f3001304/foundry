@@ -56,11 +56,20 @@ class SwitchClient:
             self._call("POST", f"/agents/{self.agent_id}/message", json={"room_id": room_id, "content": content})
             return
         # The plain message route has no thread field; the session operations do.
-        session = {"X-Switch-Connection-Id": self.connection_id, "X-Switch-Session-Id": self.session_id}
+        session = self._session_headers()
         self._call("POST", f"/agents/{self.agent_id}/ops/connect_to_room", headers=session,
                    json={"room_id": room_id, "include_general_instructions": False})
         self._call("POST", f"/agents/{self.agent_id}/ops/post_message", headers=session,
                    json={"body": content, "thread_id": thread_id})
+
+    def read_context(self, room_id: str, limit: int = 30) -> str:
+        timeline = self._call("POST", f"/agents/{self.agent_id}/ops/read_context", headers=self._session_headers(),
+                              json={"room_id": room_id, "limit": limit}).json()["result"]
+        entries = [entry for thread in timeline["threads"] for entry in [thread["root"], *thread["replies"]]]
+        return "\n".join(f"{entry['sender_name']}: {entry['body']}" for entry in entries if entry["kind"] == "message")
+
+    def _session_headers(self) -> dict[str, str]:
+        return {"X-Switch-Connection-Id": self.connection_id, "X-Switch-Session-Id": self.session_id}
 
     def post_file(self, room_id: str, path: Path | str, caption: str) -> None:
         path = Path(path)

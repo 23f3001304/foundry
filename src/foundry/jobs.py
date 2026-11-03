@@ -69,6 +69,9 @@ def advance(job: Job, event: str) -> Job:
     return job
 
 
+COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes")
+
+
 class JobStore:
     def __init__(self, path: Path | str) -> None:
         self.path = str(path)
@@ -86,20 +89,27 @@ class JobStore:
         return job
 
     def get(self, job_id: str) -> Job:
-        with closing(sqlite3.connect(self.path)) as db:
-            row = db.execute(
-                "SELECT id, room_id, requester, approver, state, revision_rounds, brief, artifacts, approval, revision_notes"
-                " FROM jobs WHERE id = ?",
-                (job_id,),
-            ).fetchone()
-        if row is None:
+        rows = self._select("WHERE id = ?", job_id)
+        if not rows:
             raise KeyError(job_id)
-        return Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9])
+        return rows[0]
+
+    def all(self) -> list[Job]:
+        return self._select("ORDER BY rowid")
+
+    def in_room(self, room_id: str) -> list[Job]:
+        return self._select("WHERE room_id = ? ORDER BY rowid", room_id)
 
     def save(self, job: Job) -> None:
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute(
-                "INSERT OR REPLACE INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                f"""INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET {", ".join(f"{name} = excluded.{name}" for name in COLUMNS[1:])}""",
                 (job.id, job.room_id, job.requester, job.approver, job.state.value,
                  job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes),
             )
+
+    def _select(self, clause: str, *values: str) -> list[Job]:
+        with closing(sqlite3.connect(self.path)) as db:
+            rows = db.execute(f"SELECT {', '.join(COLUMNS)} FROM jobs {clause}", values).fetchall()
+        return [Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9]) for row in rows]
