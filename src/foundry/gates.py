@@ -58,8 +58,8 @@ class Gate:
         self.client = client
         self.extra_words = extra_words
 
-    def ask(self, job: Job, title: str, detail: str) -> None:
-        job.approval = {"request_id": f"{job.id}-{uuid.uuid4().hex[:8]}", "title": title, "detail": detail, "awaiting_notes": False}
+    def ask(self, job: Job, title: str, detail: str, room_id: str | None = None) -> None:
+        job.approval = {"request_id": f"{job.id}-{uuid.uuid4().hex[:8]}", "title": title, "detail": detail, "awaiting_notes": False, "room_id": room_id or job.room_id}
         job.revision_notes = None
         self._show(job)
 
@@ -75,12 +75,12 @@ class Gate:
             return Decision.NONE
         if outcome.state == "expired":
             title = job.approval["title"]
-            self.client.post_message(job.room_id, f"The approval for {title} ran out, so this job is on hold. {HOW_TO_ANSWER}")
+            self.client.post_message(job.approval_room, f"The approval for {title} ran out, so this job is on hold. {HOW_TO_ANSWER}")
             return Decision.EXPIRED
         if outcome.state != "answered":
             return Decision.NONE
         if outcome.answered_by != job.approver:
-            self.ask(job, job.approval["title"], job.approval["detail"])
+            self.ask(job, job.approval["title"], job.approval["detail"], job.approval_room)
             return Decision.NOT_APPROVER
         if outcome.answer == "approve":
             return self._finish(job, Decision.APPROVE)
@@ -109,7 +109,7 @@ class Gate:
 
     def _ask_for_notes(self, job: Job) -> Decision:
         job.approval["awaiting_notes"] = True
-        self.client.post_message(job.room_id, ASK_FOR_NOTES)
+        self.client.post_message(job.approval_room, ASK_FOR_NOTES)
         return Decision.NONE
 
     def _finish(self, job: Job, decision: Decision, notes: str | None = None) -> Decision:
@@ -129,20 +129,20 @@ class Gate:
 
 class CardGate(Gate):
     def _show(self, job: Job) -> None:
-        self.client.open_card(job.room_id, job.approval["request_id"], job.approval["title"], job.approval["detail"])
+        self.client.open_card(job.approval_room, job.approval["request_id"], job.approval["title"], job.approval["detail"])
 
     def _close(self, job: Job) -> None:
         # Switch marks a closed card "Cancelled", so say the answer did arrive.
         self.client.close_card(job.approval["request_id"])
-        self.client.post_message(job.room_id, f"Got your answer on {job.approval['title']}.")
+        self.client.post_message(job.approval_room, f"Got your answer on {job.approval['title']}.")
 
     def _refuse(self, job: Job) -> None:
-        self.client.post_message(job.room_id, ONLY_APPROVER)
+        self.client.post_message(job.approval_room, ONLY_APPROVER)
 
 
 class ReplyGate(Gate):
     def _show(self, job: Job) -> None:
-        self.client.post_message(job.room_id, f"{job.approval['title']}\n\n{job.approval['detail']}\n\n{HOW_TO_ANSWER}")
+        self.client.post_message(job.approval_room, f"{job.approval['title']}\n\n{job.approval['detail']}\n\n{HOW_TO_ANSWER}")
 
     def _close(self, job: Job) -> None:
         pass

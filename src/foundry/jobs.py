@@ -53,6 +53,11 @@ class Job:
     artifacts: list[str] = field(default_factory=list)
     approval: dict | None = None
     revision_notes: str | None = None
+    waiting_on: list[str] = field(default_factory=list)
+
+    @property
+    def approval_room(self) -> str:
+        return (self.approval or {}).get("room_id") or self.room_id
 
 
 def advance(job: Job, event: str) -> Job:
@@ -69,7 +74,7 @@ def advance(job: Job, event: str) -> Job:
     return job
 
 
-COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes")
+COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on")
 
 
 class JobStore:
@@ -80,7 +85,7 @@ class JobStore:
                 """CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY, room_id TEXT NOT NULL, requester TEXT NOT NULL, approver TEXT NOT NULL,
                     state TEXT NOT NULL, revision_rounds INTEGER NOT NULL, brief TEXT, artifacts TEXT NOT NULL,
-                    approval TEXT, revision_notes TEXT)"""
+                    approval TEXT, revision_notes TEXT, waiting_on TEXT NOT NULL)"""
             )
 
     def create(self, room_id: str, requester: str, approver: str) -> Job:
@@ -103,13 +108,13 @@ class JobStore:
     def save(self, job: Job) -> None:
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute(
-                f"""INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"""INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET {", ".join(f"{name} = excluded.{name}" for name in COLUMNS[1:])}""",
                 (job.id, job.room_id, job.requester, job.approver, job.state.value,
-                 job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes),
+                 job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes, json.dumps(job.waiting_on)),
             )
 
     def _select(self, clause: str, *values: str) -> list[Job]:
         with closing(sqlite3.connect(self.path)) as db:
             rows = db.execute(f"SELECT {', '.join(COLUMNS)} FROM jobs {clause}", values).fetchall()
-        return [Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9]) for row in rows]
+        return [Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10])) for row in rows]
