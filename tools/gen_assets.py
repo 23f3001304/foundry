@@ -1,6 +1,6 @@
 """Generate Foundry's art with Gemini image models on Vertex AI, then cut it to size.
 
-Usage: uv run --no-project --with pillow tools/gen_assets.py [name ...]
+Usage: uv run --no-project --with pillow --with numpy tools/gen_assets.py [name ...]
 Needs: `gcloud auth application-default login` and GOOGLE_CLOUD_PROJECT.
 With no names it makes every asset that doesn't exist yet. Raw output stays in assets/raw/.
 """
@@ -14,13 +14,47 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from math import ceil
 from pathlib import Path
 
+import numpy as np
 from PIL import Image, ImageDraw
 
 MODEL = os.environ.get("FOUNDRY_IMAGE_MODEL", "gemini-nano-banana-2.1")
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "assets" / "raw"
+GRID, COLOURS, CELL, CANVAS = 115, 30, 4, 512
+
+CHARACTER_STYLE = (
+    "Clean flat-colour chibi cartoon with a big head, thick dark outlines, flat colours with a single shadow tone, "
+    "simple big eyes and a small friendly mouth. An original character, not based on any existing franchise. "
+)
+ON_MAGENTA = (
+    " Whole body visible with nothing cut off by the frame. Solid flat pure magenta #FF00FF background with no shadow, "
+    "no text, no letters, no numbers, and no pink or magenta anywhere in the artwork."
+)
+
+TEAM = {
+    "smith": "short spiky black hair under a red bandana, welding goggles on the forehead, a brown leather apron over an "
+    "orange t-shirt, black trousers, white sneakers, holding a small hammer",
+    "apprentice": "a long black braid over one shoulder, welding goggles pushed up on the head, blue denim dungarees over "
+    "an orange t-shirt, a tool belt, white sneakers, holding a big spanner",
+    "reviewer": "a neat black moustache, a white hard hat, a navy work shirt with rolled sleeves, grey trousers, brown "
+    "boots, holding a clipboard and a magnifying glass",
+    "designer": "short wavy black hair, a paint-splashed cream apron over a teal kurta, black trousers, white sneakers, "
+    "holding a paintbrush and a small colour swatch card",
+}
+
+POSES = {
+    "brief_received": "holds up a sheet of paper covered in plain horizontal lines, looking pleased.",
+    "working": "swings the hammer down onto a small anvil, with bright yellow sparks flying.",
+    "needs_input": "scratches their head and looks up at a large blue question mark floating beside them.",
+    "approved": "gives a big thumbs up next to a large round green badge with a white check mark.",
+    "shipped": "runs forward carrying a brown parcel box, with short speed lines behind them.",
+    "revise": "holds a big pencil next to a blue circular arrow, looking thoughtful.",
+    "blocked": "stands with both palms raised next to a red octagon sign with a plain white horizontal bar.",
+    "celebrate": "jumps with both arms up as orange, yellow, blue and green confetti bursts around them.",
+}
 
 LOGO_STYLE = (
     "A clean, original circular emblem logo for a fictional business. Flat vector with no gradients or shadows, "
@@ -28,6 +62,24 @@ LOGO_STYLE = (
 )
 
 ASSETS = {
+    **{
+        name: {
+            "prompt": CHARACTER_STYLE + f"The character has {look}. Front view, standing relaxed and friendly." + ON_MAGENTA,
+            "out": f"assets/team/{name}.png",
+            "cut": "pixel",
+        }
+        for name, look in TEAM.items()
+    },
+    **{
+        state: {
+            "prompt": "Use the exact same character as the reference image, keeping the same face, hair, bandana, goggles, "
+            "apron, clothes, colours and art style. The character " + pose + ON_MAGENTA,
+            "refs": ["smith"],
+            "out": f"stickers/base/{state}.png",
+            "cut": "pixel",
+        }
+        for state, pose in POSES.items()
+    },
     "foundry-logo": {
         "prompt": LOGO_STYLE + " The emblem shows a crucible pouring a single stream of molten orange metal into a square "
         "mould, in charcoal #2B2D33 and molten orange #FF6A1A. No text.",
@@ -136,11 +188,42 @@ def cut_logo(image: Image.Image) -> Image.Image:
     return image
 
 
+def pixelate(image: Image.Image) -> Image.Image:
+    """Key the magenta, flatten to a palette, then let each grid cell take its most common colour."""
+    rgb = np.array(image.convert("RGB")).astype(int)
+    figure = (np.minimum(rgb[..., 0], rgb[..., 2]) - rgb[..., 1]) < 60
+    ys, xs = np.where(figure)
+    top, bottom, left, right = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    pitch = max(bottom - top, right - left) / GRID
+    rows, cols = ceil((bottom - top) / pitch), ceil((right - left) / pitch)
+    quantized = Image.fromarray(rgb[top:bottom, left:right].astype("uint8"), "RGB").quantize(COLOURS, Image.MEDIANCUT, dither=Image.NONE)
+    flat = np.array(quantized)
+    palette = np.array(quantized.getpalette()[: COLOURS * 3]).reshape(-1, 3)
+    mask = figure[top:bottom, left:right]
+    ink = palette.sum(axis=1).argmin()
+    cells = np.zeros((rows, cols, 4), "uint8")
+    for row in range(rows):
+        y0, y1 = int(row * pitch), max(int((row + 1) * pitch), int(row * pitch) + 1)
+        for col in range(cols):
+            x0, x1 = int(col * pitch), max(int((col + 1) * pitch), int(col * pitch) + 1)
+            cover = mask[y0:y1, x0:x1]
+            if cover.size == 0 or cover.mean() < 0.5:
+                continue
+            votes = flat[y0:y1, x0:x1][cover]
+            pick = ink if (palette[votes].sum(axis=1) < 150).mean() >= 0.3 else np.bincount(votes).argmax()
+            cells[row, col] = (*palette[pick], 255)
+    sprite = Image.fromarray(cells, "RGBA")
+    sprite = sprite.resize((sprite.width * CELL, sprite.height * CELL), Image.NEAREST)
+    canvas = Image.new("RGBA", (CANVAS, CANVAS), (0, 0, 0, 0))
+    canvas.paste(sprite, ((CANVAS - sprite.width) // 2, (CANVAS - sprite.height) // 2))
+    return canvas
+
+
 def finish(name: str, spec: dict) -> Path:
     out = ROOT / spec["out"]
     out.parent.mkdir(parents=True, exist_ok=True)
     image = Image.open(RAW / f"{name}.png")
-    cut = {"logo": cut_logo}.get(spec.get("cut"))
+    cut = {"logo": cut_logo, "pixel": pixelate}.get(spec.get("cut"))
     (cut(image) if cut else image.convert("RGB")).save(out, optimize=True)
     return out
 
