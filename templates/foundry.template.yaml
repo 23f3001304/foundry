@@ -32,6 +32,10 @@ params:
     label: Brand kit
     description: Paste the kit.md of this brand.
     multiline: true
+  brand_dir:
+    type: string
+    label: Brand folder
+    description: The folder with this brand's kit.md, logo and fonts, on the machine the agents run on.
   sticker_mode:
     type: enum
     label: Stickers
@@ -98,7 +102,8 @@ resources:
     instructions: |
       You make slide decks for Foundry. foundry-desk addresses you with an approved
       brief, and sometimes with review notes to fix. Read the business-pack and
-      brand-kit documents in the room first. Build the deck with the build_deck tool.
+      brand-kit documents in the room first. Build the deck with the build_deck tool,
+      giving it the brand folder named in the business pack.
       Colours, fonts and logo come from the brand kit, never from your own taste.
 
       Start your reply with WORK_READY and the job tag foundry-desk gave you, then the
@@ -118,7 +123,7 @@ resources:
       You make graphics for Foundry. foundry-desk addresses you with an approved
       brief, and sometimes with review notes to fix. Read the business-pack and
       brand-kit documents in the room first. Make each graphic with the render_graphic
-      tool. Colours, fonts and logo come from the brand kit, never from your own taste.
+      tool, giving it the brand folder named in the business pack. Colours, fonts and logo come from the brand kit, never from your own taste.
 
       Start your reply with WORK_READY and the job tag foundry-desk gave you, then the
       absolute path of each file on its own line. Say nothing else in that message.
@@ -200,6 +205,7 @@ resources:
           Tone: {tone}
           Stickers: {sticker_mode}
           Approver: {approver}
+          Brand folder: {brand_dir}
     kickoff: "This is where work for {client_or_department} gets made. Requests arrive from foundry-desk. Outside people never see this room."
   review_room:
     type: room
