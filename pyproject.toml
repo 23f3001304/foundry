@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Turns messy chat requests into approved, on-brand work through Switch rooms."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "httpx>=0.28.1",
+]
 
 [dependency-groups]
 dev = ["pytest>=8"]

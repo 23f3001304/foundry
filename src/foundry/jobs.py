@@ -51,6 +51,8 @@ class Job:
     revision_rounds: int = 0
     brief: str | None = None
     artifacts: list[str] = field(default_factory=list)
+    approval: dict | None = None
+    revision_notes: str | None = None
 
 
 def advance(job: Job, event: str) -> Job:
@@ -74,7 +76,8 @@ class JobStore:
             db.execute(
                 """CREATE TABLE IF NOT EXISTS jobs (
                     id TEXT PRIMARY KEY, room_id TEXT NOT NULL, requester TEXT NOT NULL, approver TEXT NOT NULL,
-                    state TEXT NOT NULL, revision_rounds INTEGER NOT NULL, brief TEXT, artifacts TEXT NOT NULL)"""
+                    state TEXT NOT NULL, revision_rounds INTEGER NOT NULL, brief TEXT, artifacts TEXT NOT NULL,
+                    approval TEXT, revision_notes TEXT)"""
             )
 
     def create(self, room_id: str, requester: str, approver: str) -> Job:
@@ -85,17 +88,18 @@ class JobStore:
     def get(self, job_id: str) -> Job:
         with closing(sqlite3.connect(self.path)) as db:
             row = db.execute(
-                "SELECT id, room_id, requester, approver, state, revision_rounds, brief, artifacts FROM jobs WHERE id = ?",
+                "SELECT id, room_id, requester, approver, state, revision_rounds, brief, artifacts, approval, revision_notes"
+                " FROM jobs WHERE id = ?",
                 (job_id,),
             ).fetchone()
         if row is None:
             raise KeyError(job_id)
-        return Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]))
+        return Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9])
 
     def save(self, job: Job) -> None:
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute(
-                "INSERT OR REPLACE INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (job.id, job.room_id, job.requester, job.approver, job.state.value,
-                 job.revision_rounds, job.brief, json.dumps(job.artifacts)),
+                 job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes),
             )
