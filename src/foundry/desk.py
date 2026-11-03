@@ -8,11 +8,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
+
 from foundry.buffer import Burst, MessageBuffer
 from foundry.gates import Decision, Gate, parse_reply, resolve_approver
 from foundry.intake import Kind, classify
 from foundry.jobs import Job, JobStore, State, advance
 from foundry.switch_client import Outcome, SwitchClient
+from foundry.voice import Transcript, VoiceError, transcribe
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,7 @@ BRIEF_AGENT = "foundry-brief"
 BRIEF_READY = "BRIEF_READY"
 ASK_WHAT_THEY_NEED = "Do you want something made from this? If so, tell me what you need."
 USE_THE_BUTTONS = "More than one approval is waiting on you here. Please use the buttons on the card you mean."
+RESEND_VOICE = "I couldn't read that voice note. Please resend it in under 30 seconds, or type it."
 DECISION_EVENTS = {
     (State.BRIEF_PENDING, Decision.APPROVE): "brief_approved",
     (State.BRIEF_PENDING, Decision.REVISE): "brief_revised",
@@ -52,12 +56,21 @@ class Settings:
 
 
 class Desk:
-    def __init__(self, client: SwitchClient, store: JobStore, gate: Gate, llm: Callable[[str], str], settings: Settings) -> None:
+    def __init__(
+        self,
+        client: SwitchClient,
+        store: JobStore,
+        gate: Gate,
+        llm: Callable[[str], str],
+        settings: Settings,
+        transcriber: Callable[[bytes, str], Transcript] = transcribe,
+    ) -> None:
         self.client = client
         self.store = store
         self.gate = gate
         self.llm = llm
         self.settings = settings
+        self.transcriber = transcriber
         self.buffer = MessageBuffer(settings.buffer_path, settings.quiet_seconds)
 
     def handle(self, event: dict | Outcome) -> None:
@@ -91,7 +104,26 @@ class Desk:
         self.gate.ask(job, f"Brief: {brief.splitlines()[0][:80]}", brief)
         self.store.save(job)
 
+    def _with_voice_as_text(self, event: dict) -> dict | None:
+        payload = event["payload"]
+        notes = [a for a in payload.get("attachments") or [] if a["mimetype"].startswith("audio/") or a["msgtype"] == "m.audio"]
+        if not notes:
+            return event
+        caption = payload["body"].strip()
+        heard = [caption] if caption and caption not in {note["filename"] for note in notes} else []
+        try:
+            for note in notes:
+                heard.append(self.transcriber(self.client.download(event["room_id"], note), note["mimetype"]).text)
+        except (VoiceError, httpx.HTTPError) as error:
+            logger.warning("Could not read a voice note: %s", error)
+            self.client.post_message(event["room_id"], RESEND_VOICE)
+            return None
+        return {**event, "payload": {**payload, "body": "\n".join(heard)}}
+
     def _handle_person(self, event: dict) -> None:
+        event = self._with_voice_as_text(event)
+        if event is None:
+            return
         payload = event["payload"]
         text = payload["body"].strip()
         if not text or self._answers_an_approval(event, text):

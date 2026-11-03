@@ -31,7 +31,7 @@ def _clean(text: str) -> str:
 DEFAULT_WORDS = {
     **{_clean(word): Decision.APPROVE for word in (
         "yes", "ok", "okay", "approve", "approved", "haan", "han", "haan ji",
-        "theek hai", "thik hai", "sahi hai", "हाँ", "हां", "ठीक है",
+        "theek hai", "thik hai", "sahi hai", "हाँ", "हां", "हाँ जी", "हां जी", "ठीक है", "सही है",
     )},
     **{_clean(word): Decision.REVISE for word in ("no", "nahi", "नहीं")},
 }
