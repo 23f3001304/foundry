@@ -93,41 +93,41 @@ ASSETS = {
         "aspect": "21:9",
         "out": "assets/readme-banner.png",
     },
-    "lantern-cafe-logo": {
+    "lalten-cafe-logo": {
         "prompt": LOGO_STYLE + " The emblem shows a small hanging lantern with a coffee cup as its flame window, in deep "
-        "brown #7A3E1D and warm cream. The words 'LANTERN CAFE' run once along the top of the circle in a friendly serif. The bottom of the circle has only a small plain ornament, and no other words appear anywhere.",
-        "out": "brands/lantern-cafe/logo.png",
+        "brown #7A3E1D and warm cream. The words 'LALTEN CAFE' run once along the top of the circle in a friendly serif. The bottom of the circle has only a small plain ornament, and no other words appear anywhere.",
+        "out": "brands/lalten-cafe/logo.png",
         "cut": "logo",
     },
-    "lantern-cafe-hero": {
+    "lalten-cafe-hero": {
         "prompt": "A warm, inviting photograph of a small neighbourhood Indian cafe counter at golden hour with brass "
         "lanterns, a chalkboard with no writing, ceramic cups and fresh pastries. No people, no text, no logos or brands.",
         "aspect": "16:9",
-        "out": "brands/lantern-cafe/hero.png",
+        "out": "brands/lalten-cafe/hero.png",
     },
-    "lantern-cafe-menu": {
+    "lalten-cafe-menu": {
         "prompt": "Overhead photograph of a rustic wooden table with filter coffee in a steel tumbler, masala chai, a "
         "vada pav and a croissant, soft daylight, plenty of empty space on the right. No people, no text, no logos.",
         "aspect": "16:9",
-        "out": "brands/lantern-cafe/menu.png",
+        "out": "brands/lalten-cafe/menu.png",
     },
-    "stonegate-homes-logo": {
+    "shilagate-homes-logo": {
         "prompt": LOGO_STYLE + " The emblem shows a simple arched stone gateway with a small house inside the arch, in "
-        "slate blue #2C4A5E and warm stone grey. The words 'STONEGATE HOMES' run around the circle in a clean sans-serif.",
-        "out": "brands/stonegate-homes/logo.png",
+        "slate blue #2C4A5E and warm stone grey. The words 'SHILAGATE HOMES' run around the circle in a clean sans-serif.",
+        "out": "brands/shilagate-homes/logo.png",
         "cut": "logo",
     },
-    "stonegate-homes-hero": {
+    "shilagate-homes-hero": {
         "prompt": "An architectural photograph of a modern mid-rise residential building in an Indian city at dusk, warm "
         "windows, landscaped entrance, clear sky. No people, no text, no signage, no logos.",
         "aspect": "16:9",
-        "out": "brands/stonegate-homes/hero.png",
+        "out": "brands/shilagate-homes/hero.png",
     },
-    "stonegate-homes-site": {
+    "shilagate-homes-site": {
         "prompt": "A photograph of a residential building under construction in India on a bright morning, concrete frame "
         "with scaffolding and neatly stacked materials, wide empty sky at the top. No people, no text, no signage, no logos.",
         "aspect": "16:9",
-        "out": "brands/stonegate-homes/site.png",
+        "out": "brands/shilagate-homes/site.png",
     },
 }
 
