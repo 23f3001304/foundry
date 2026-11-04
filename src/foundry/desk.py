@@ -6,7 +6,7 @@ import os
 import re
 import tempfile
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta, timezone
@@ -92,6 +92,26 @@ OWES_ASK = (
 LAST_LIST = "The list you wrote last time. Change what the approver asked about and keep the rest:"
 # A question left this long is dropped, so tomorrow's note isn't read as its answer.
 QUESTION_WINDOW = timedelta(hours=24)
+# What a voice note has come to: the sender hasn't answered yet, said it was right, or typed what they meant. Typed notes have none of these.
+UNCONFIRMED, CONFIRMED, CORRECTED = "unconfirmed", "confirmed", "corrected"
+RIGHT = "Right"
+WRONG = "Wrong"
+LATE_FIX_CHOICES = ("Re-make with the fix", "Carry on")
+VOICE_CARD_TITLE = "Check what I heard"
+VOICE_CARD_DETAIL = 'I heard: "{text}"\n\nIs that right?'
+# The brief or report card, when the sender is the one approving it, shows this and does both jobs.
+HEARD_LINE = 'What I heard from the voice note: "{text}"\nApproving this also confirms I heard it right.'
+ASK_FOR_THE_FIX = "Got it. Type the fix, or send the note again."
+CORRECTION = "Correction from the sender: {fix}"
+CARD_CLOSED_FOR_FIX = "The sender corrected what I heard, so I closed the card for {title}."
+LATE_FIX_TITLE = "Fix from the sender: {title}"
+LATE_FIX_DETAIL = 'The sender says I heard the voice note wrong. They meant: "{fix}"\n\nThe work has already started. Re-make it with the fix, or carry on as it is?'
+REMAKE_NOTE = 'The sender says the voice note was heard wrong. They meant: "{fix}"'
+FIX_ALREADY_DELIVERED = "That work is already delivered, so I have only noted the fix."
+# Lines on a job's attention list that this feature writes. None may start like WORK_CHECK_LINE's, or the next round of that check would drop them.
+VOICE_UNCONFIRMED = "The sender has not confirmed what the voice note said."
+FIX_NOT_MADE = 'The sender says the voice note was heard wrong. This work went on without their fix: "{fix}"'
+FIX_AFTER_DELIVERY = 'The sender says the voice note was heard wrong, after this work was delivered. Their fix: "{fix}"'
 # How far back an approved report still counts as evidence for a new note.
 REPORT_MEMORY = timedelta(days=30)
 DECISION_EVENTS = {
@@ -111,6 +131,10 @@ def sender_kind(payload: dict) -> str:
     if payload.get("sender_kind"):
         return payload["sender_kind"]
     return "agent" if payload["sender"].startswith(AGENT_SENDER_PREFIX) else "user"
+
+
+def _ids(entry_ids: Iterable[int]) -> str | None:
+    return ",".join(str(entry_id) for entry_id in entry_ids) or None
 
 
 def deliverable(path: str) -> bool:
@@ -363,8 +387,9 @@ class Desk:
             return
         job.brief = brief
         advance(job, "brief_drafted")
-        # Who owes what sits above the brief, on the same card.
-        self.gate.ask(job, f"Brief: {headline(brief)}", f"{owners}\n\n{brief}" if owners else brief, self._approval_room(job))
+        # Who owes what sits above the brief, on the same card, and what was heard sits below it when the sender is the one approving.
+        detail = f"{owners}\n\n{brief}" if owners else brief
+        self.gate.ask(job, f"Brief: {headline(brief)}", self._with_what_was_heard(job, detail), self._approval_room(job))
         self._sticker(self._approval_room(job), "needs_input")
         self.store.save(job)
 
@@ -591,6 +616,213 @@ class Desk:
             return None
         return {**event, "payload": {**payload, "body": "\n".join(heard), "spoken_language": language, "heard_entries": heard_entries}}
 
+    def _hear_voice(self, job: Job, burst: Burst) -> None:
+        # A voice note that became a request or a report. Only its sender knows what they said, so they approve what was heard.
+        words, entries = self._voice_in(job.bucket, burst.entry_ids)
+        if job.requester == job.approver:
+            # The card that asks them to approve the work shows what was heard and does both jobs.
+            job.heard = UNCONFIRMED
+        else:
+            self._ask_voice_approval(job, words or burst.text, entries)
+
+    def _ask_voice_approval(self, job: Job, heard_text: str, entries: Iterable[int] = ()) -> None:
+        # Work doesn't wait for the answer. Until it comes the note is unconfirmed, and the approver's final card says so.
+        job.heard = UNCONFIRMED
+        if VOICE_UNCONFIRMED not in job.attention:
+            job.attention.append(VOICE_UNCONFIRMED)
+        try:
+            self.cards.submit(
+                Trigger.VOICE, job.requester, job.bucket, job.room_id, VOICE_CARD_TITLE, VOICE_CARD_DETAIL.format(text=quiet(heard_text)), (RIGHT, WRONG),
+                job_id=job.id, data={"heard": heard_text, "entries": list(entries)},
+            )
+        except httpx.HTTPError as error:
+            logger.warning("Could not open a voice card for job %s, so what was heard stays unconfirmed: %s", job.id, error)
+
+    def _voice_in(self, bucket: str, message_ids: Iterable[int]) -> tuple[str, list[int]]:
+        # What speech-to-text heard in these logged messages, and the log entries that hold it. A message that came from voice names them in its ref.
+        messages = [self.log.get(bucket, message_id) for message_id in message_ids]
+        named = [int(part) for message in messages if message is not None for part in (message.ref or "").split(",") if part.strip().isdigit()]
+        heard = [entry for entry in (self.log.get(bucket, entry_id) for entry_id in named) if entry is not None and entry.kind == "voice_heard"]
+        return "\n".join(entry.text for entry in heard), [entry.id for entry in heard]
+
+    def _opening_ids(self, job: Job) -> list[int]:
+        opened = next((entry for entry in self.log.for_job(job.bucket, job.id) if entry.kind == "job_opened"), None)
+        return [int(part) for part in (opened.ref or "").split(",") if part.strip().isdigit()] if opened else []
+
+    def _with_what_was_heard(self, job: Job, detail: str) -> str:
+        # When the sender is the one approving, the card shows what was heard and does both jobs.
+        if job.heard != UNCONFIRMED or job.requester != job.approver:
+            return detail
+        words, _ = self._voice_in(job.bucket, self._opening_ids(job))
+        return f"{detail}\n\n{HEARD_LINE.format(text=quiet(words))}" if words else detail
+
+    def _confirm_if_it_showed_what_was_heard(self, job: Job, event: str | None) -> None:
+        shown = event == "brief_approved" or (event == "signoff_approved" and job.kind == "report")
+        if shown and job.heard == UNCONFIRMED and job.requester == job.approver:
+            words, entries = self._voice_in(job.bucket, self._opening_ids(job))
+            self._mark_confirmed(job, job.approver, job.room_id, self.clock(), words, entries)
+
+    def _mark_confirmed(self, job: Job, person: str, room_id: str, at: datetime, words: str, entries: Iterable[int]) -> None:
+        # The caller saves the job, as every other change to one is saved by whoever is working on it.
+        if job.heard == CONFIRMED:
+            return
+        job.heard = CONFIRMED
+        job.attention = [line for line in job.attention if line != VOICE_UNCONFIRMED]
+        self.log.add(at, job.bucket, room_id, person, "voice_confirmed", words, job_id=job.id, ref=_ids(entries))
+
+    def _open_voice_card(self, person: str, room_id: str) -> Card | None:
+        card = self.cards.open_for(person, self.settings.bucket_for(room_id))
+        return card if card is not None and card.trigger is Trigger.VOICE and card.room_id == room_id else None
+
+    def _answer_voice_by_word(self, card: Card, decision: Decision, at: datetime) -> None:
+        # Switch marks a closed card "Cancelled", so say the answer did arrive.
+        try:
+            self.client.close_card(card.request_id)
+        except httpx.HTTPError as error:
+            logger.warning("Could not close the voice card %s: %s", card.request_id, error)
+        right = decision is Decision.APPROVE
+        if right:
+            self.client.post_message(card.room_id, HEARD_THE_ANSWER)
+        self._take_voice_answer(card, RIGHT if right else WRONG, at)
+        self.cards.pump()
+
+    def _take_voice_answer(self, card: Card, choice: str | None, at: datetime) -> None:
+        if choice == RIGHT:
+            job = self._job_of(card)
+            if job is not None:
+                self._mark_confirmed(job, card.person, card.room_id, at, card.data.get("heard", ""), card.data.get("entries", []))
+                self.store.save(job)
+        elif choice == WRONG:
+            self.client.post_message(card.room_id, ASK_FOR_THE_FIX)
+            self.cards.note(card.request_id, awaiting_fix=self.clock().isoformat())
+        else:
+            logger.warning("Voice card %s had an answer naming no known choice, so the note stays unconfirmed.", card.request_id)
+        self.cards.finish(card.request_id, ANSWERED)
+
+    def _job_of(self, card: Card) -> Job | None:
+        try:
+            return self.store.get(card.job_id)
+        except KeyError:
+            logger.warning("Card %s is for a job that is gone: %s", card.request_id, card.job_id)
+            return None
+
+    def _fix_awaited(self, burst: Burst) -> tuple[Job, Card] | None:
+        # After Wrong, the sender's next words are the fix, for a day. With several Wrongs the newest comes first.
+        answered = self.cards.answered_for(burst.sender, self.settings.bucket_for(burst.room_id), Trigger.VOICE)
+        owed = [card for card in answered if card.room_id == burst.room_id and self._fix_still_owed(card)]
+        for card in sorted(owed, key=lambda card: datetime.fromisoformat(card.data["awaiting_fix"]), reverse=True):
+            job = self._job_of(card)
+            if job is not None:
+                return job, card
+        return None
+
+    def _fix_still_owed(self, card: Card) -> bool:
+        since = card.data.get("awaiting_fix")
+        return bool(since) and self.clock() - datetime.fromisoformat(since) <= QUESTION_WINDOW
+
+    def _take_voice_fix(self, job: Job, card: Card, burst: Burst) -> None:
+        # A note sent again is speech-to-text too, so its sender is asked about it. Words they typed are their own.
+        spoken = bool(burst.language)
+        self.log.add(burst.first_at, job.bucket, burst.room_id, burst.sender, "voice_corrected", burst.text, job_id=job.id, ref=_ids(card.data.get("entries", [])))
+        if spoken:
+            words, entries = self._voice_in(job.bucket, burst.entry_ids)
+            self._ask_voice_approval(job, words or burst.text, entries)
+        else:
+            job.heard = CORRECTED
+            job.attention = [line for line in job.attention if line != VOICE_UNCONFIRMED]
+        self._apply_voice_fix(job, burst.text, spoken)
+        self.store.save(job)
+        self.cards.note(card.request_id, awaiting_fix=None)
+
+    def _apply_voice_fix(self, job: Job, fix: str, spoken: bool = False) -> None:
+        # Where the job has got to decides what a fix can do. Foundry never restarts work by itself.
+        if job.state in (State.APPROVED, State.DELIVERED):
+            self._note_fix_after_delivery(job, fix, job.room_id)
+        elif job.kind == "report":
+            self._fix_report(job, fix, spoken)
+        elif job.state in (State.RECEIVED, State.BRIEF_PENDING):
+            self._fix_brief(job, fix, spoken)
+        else:
+            self._ask_about_late_fix(job, fix)
+
+    def _corrected_note(self, job: Job, fix: str, spoken: bool) -> str:
+        # A note sent again replaces what was heard. Typed words are added to it.
+        return fix if spoken else f"{job.brief or ''}\n\n{CORRECTION.format(fix=fix)}"
+
+    def _fix_brief(self, job: Job, fix: str, spoken: bool) -> None:
+        job.brief = self._corrected_note(job, fix, spoken)
+        if job.state is State.BRIEF_PENDING:
+            self._withdraw_approval(job)
+            advance(job, "brief_revised")
+        self._ask_for_brief(job)
+
+    def _fix_report(self, job: Job, fix: str, spoken: bool) -> None:
+        job.brief = self._corrected_note(job, fix, spoken)
+        if job.state is State.BLOCKED:
+            # It starts again from the note when someone restarts it, so the fix waits there.
+            return
+        if job.question:
+            self._close_question(job)
+        if job.state is State.SIGNOFF_PENDING:
+            self._withdraw_approval(job)
+            advance(job, "report_corrected")
+        self._clean_report(job)
+
+    def _withdraw_approval(self, job: Job) -> None:
+        # The card in front of the approver is about work that is about to change.
+        if job.approval is None:
+            return
+        request_id, title = job.approval["request_id"], job.approval["title"]
+        card = self.cards.get(request_id)
+        if card is None or card.state == OPEN:
+            try:
+                self.client.close_card(request_id)
+            except httpx.HTTPError as error:
+                logger.warning("Could not close the card for job %s: %s", job.id, error)
+            self.client.post_message(job.approval_room, CARD_CLOSED_FOR_FIX.format(title=quiet(title)))
+        if card is not None:
+            self.cards.finish(request_id, CLOSED)
+        job.approval = None
+
+    def _note_fix_after_delivery(self, job: Job, fix: str, room_id: str) -> None:
+        job.attention.append(FIX_AFTER_DELIVERY.format(fix=fix))
+        self.client.post_message(room_id, FIX_ALREADY_DELIVERED)
+
+    def _ask_about_late_fix(self, job: Job, fix: str) -> None:
+        title = quiet(LATE_FIX_TITLE.format(title=self._title(job)))
+        try:
+            self.cards.submit(
+                Trigger.LATE_FIX, job.approver, job.bucket, self._approval_room(job), title, LATE_FIX_DETAIL.format(fix=quiet(fix)), LATE_FIX_CHOICES,
+                job_id=job.id, data={"fix": fix},
+            )
+        except httpx.HTTPError as error:
+            logger.warning("Could not open a card about a late fix for job %s, so it goes on the final card instead: %s", job.id, error)
+            job.attention.append(FIX_NOT_MADE.format(fix=fix))
+
+    def _take_late_fix_answer(self, card: Card, choice: str | None) -> None:
+        if choice not in LATE_FIX_CHOICES:
+            logger.warning("Card %s had an answer naming no known choice, so the work carries on.", card.request_id)
+        job, fix = self._job_of(card), card.data.get("fix", "")
+        if job is not None:
+            if choice != LATE_FIX_CHOICES[0]:
+                job.attention.append(FIX_NOT_MADE.format(fix=fix))
+            elif job.state in (State.APPROVED, State.DELIVERED):
+                # Delivered since the card opened.
+                self._note_fix_after_delivery(job, fix, card.room_id)
+            else:
+                self._remake_with(job, fix)
+            self.store.save(job)
+        self.cards.finish(card.request_id, ANSWERED)
+
+    def _remake_with(self, job: Job, fix: str) -> None:
+        self._withdraw_approval(job)
+        job.revision_notes = REMAKE_NOTE.format(fix=fix)
+        # A job that is making stays where it is. The others go back to making, as they do for any change.
+        event = {State.REVIEWING: "review_failed", State.SIGNOFF_PENDING: "signoff_revised", State.BLOCKED: "unblock"}.get(job.state)
+        if event:
+            advance(job, event)
+        self._after_changes(job)
+
     def _handle_person(self, sent: dict) -> None:
         event = self._with_voice_as_text(sent)
         # Everything a person wrote is logged first, whatever the desk does with it. A note that could not be read is logged as it arrived.
@@ -609,11 +841,21 @@ class Desk:
 
     def _answers_an_approval(self, event: dict, text: str) -> bool:
         room_id, sender, at = event["room_id"], event["payload"]["sender"], self._sent_at(event["payload"])
-        is_decision = parse_reply(text, self.gate.extra_words) is not Decision.NONE
+        decision = parse_reply(text, self.gate.extra_words)
+        is_decision = decision is not Decision.NONE
         # Written notes are never a bare answer: Switch doesn't read them as one, so they can't be an echo, and swallowing them would lose them.
         is_bare_answer = (is_decision or only_switch_reads(text)) and revise_notes(text) is None
         # Before anything else can take the word for an answer.
         if is_bare_answer and self._is_echo(sender, room_id, at):
+            return True
+        plain_word = is_decision and revise_notes(text) is None
+        voice_card = self._open_voice_card(sender, room_id) if plain_word else None
+        if voice_card is not None:
+            # The card in front of the person is the one the word answers, and no other.
+            if self._open_question(room_id, sender, at):
+                self.client.post_message(room_id, CARD_AND_QUESTION)
+            else:
+                self._answer_voice_by_word(voice_card, decision, at)
             return True
         asking = [job for job in self.store.all() if job.approval and job.approval_room == room_id]
         waiting = self._a_word_can_answer(asking)
@@ -724,8 +966,12 @@ class Desk:
             self._card_ran_out(card)
         elif outcome.answered_by != card.person:
             self._ask_card_again(card)
-        # One branch per trigger from here down, so each one knows the right person answered. Voice and late-fix cards, who-owes-what cards and the daily report add theirs here.
+        # One branch per trigger from here down, so each one knows the right person answered. Who-owes-what cards and the daily report add theirs here.
         # Until then, a card with no branch is only marked answered, and nothing acts on the answer.
+        elif card.trigger is Trigger.VOICE:
+            self._take_voice_answer(card, outcome.chosen_from(card.choices), outcome.answered_at or self.clock())
+        elif card.trigger is Trigger.LATE_FIX:
+            self._take_late_fix_answer(card, outcome.chosen_from(card.choices))
         elif card.is_merged:
             self._take_routine_answer(card, outcome)
         else:
@@ -747,6 +993,12 @@ class Desk:
         self.cards.finish(card.request_id, EXPIRED)
         if card.trigger in HOLDS_JOB:
             self.client.post_message(card.room_id, CARD_RAN_OUT.format(title=card.title))
+        if card.trigger is Trigger.LATE_FIX:
+            # Nobody chose, so the work carries on, and the final card says the fix was never made.
+            job = self._job_of(card)
+            if job is not None:
+                job.attention.append(FIX_NOT_MADE.format(fix=card.data.get("fix", "")))
+                self.store.save(job)
 
     def _take_routine_answer(self, card: Card, outcome: Outcome) -> None:
         choice = outcome.chosen_from(card.choices)
@@ -794,9 +1046,16 @@ class Desk:
             self._after_changes(job)
         elif event == "signoff_approved":
             self._deliver(job)
+        # After the work above, so an approval that has to come round again is only logged once.
+        if decision is Decision.APPROVE:
+            self._confirm_if_it_showed_what_was_heard(job, event)
         self.store.save(job)
 
     def _take_burst(self, burst: Burst) -> None:
+        awaited = self._fix_awaited(burst)
+        if awaited:
+            self._take_voice_fix(*awaited, burst)
+            return
         asked = self._open_question(burst.room_id, burst.sender, burst.first_at)
         if asked:
             self._close_question(asked)
@@ -835,6 +1094,8 @@ class Desk:
         job = self.store.create(burst.room_id, burst.sender, self._approver_for(burst), self.settings.bucket_for(burst.room_id))
         opened_by = ",".join(str(entry_id) for entry_id in burst.entry_ids) or None
         self.log.add(self.clock(), job.bucket, burst.room_id, burst.sender, "job_opened", headline(burst.text), job_id=job.id, ref=opened_by)
+        if burst.language:
+            self._hear_voice(job, burst)
         return job
 
     def _start_report(self, burst: Burst) -> None:
@@ -900,11 +1161,12 @@ class Desk:
             if choices:
                 self._offer_choices(job, quiet(question), choices)
             return
-        result = replace(result, warnings=needs_attention(result))
+        unconfirmed = [VOICE_UNCONFIRMED] if VOICE_UNCONFIRMED in job.attention else []
+        result = replace(result, warnings=[*needs_attention(result), *unconfirmed])
         job.report, job.asked_at = quiet(result.text), None
         advance(job, "report_drafted")
         room = self._approval_room(job)
-        self.gate.ask(job, REPORT_CARD_TITLE, quiet(signoff_detail(result)), room)
+        self.gate.ask(job, REPORT_CARD_TITLE, self._with_what_was_heard(job, quiet(signoff_detail(result))), room)
         self._sticker(room, "needs_input")
 
     def _ask_for_brief(self, job: Job) -> None:

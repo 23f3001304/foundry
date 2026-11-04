@@ -43,6 +43,8 @@ TRANSITIONS = {
     (State.REVIEWING, "review_failed"): State.MAKING,
     (State.SIGNOFF_PENDING, "signoff_approved"): State.APPROVED,
     (State.SIGNOFF_PENDING, "signoff_revised"): State.MAKING,
+    # The sender corrects a report before anyone has signed it off, so it starts again without using up one of the approver's rounds.
+    (State.SIGNOFF_PENDING, "report_corrected"): State.RECEIVED,
     (State.APPROVED, "delivered"): State.DELIVERED,
     (State.BLOCKED, "unblock"): State.MAKING,
 }

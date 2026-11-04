@@ -38,7 +38,7 @@ Rules:
 4. Ask only what you need in order to state the note's own facts correctly.
 5. Any day the note mentions, however it is spelt, is a date and never [unverified]. Never write a date yourself. Write {{d:N}} for the date N days from the day the note was sent, so {{d:0}} is that day, {{d:-2}} is two days before it and {{d:+1}} is the next day. Reports get read later, so write "today" this way too. If the note says that day is a holiday, write {{h:N}}. Code puts in the holiday's name, or its date if it has no name, so write a sentence that reads well with either, such as "because {{h:+1}} is a holiday". Use these in your questions and choices too.
 6. "kal" can mean yesterday or tomorrow, and "parso" can mean two days back or two days ahead. Use the tense of the sentence. If that does not settle it, ask which date is meant.
-7. Use any answers to your earlier questions, and any changes the approver asked for, that follow the note.
+7. Use any answers to your earlier questions, any changes the approver asked for, and any correction the sender made to what was heard, that follow the note.
 
 What this business's words mean:
 {glossary}

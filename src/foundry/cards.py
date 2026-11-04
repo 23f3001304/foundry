@@ -222,6 +222,18 @@ class CardQueue:
         rows = self._select("WHERE person = ? AND bucket = ? AND state = ?", person, bucket, OPEN)
         return rows[0] if rows else None
 
+    def answered_for(self, person: str, bucket: str, trigger: Trigger) -> list[Card]:
+        return self._select("WHERE person = ? AND bucket = ? AND trigger = ? AND state = ? ORDER BY rowid", person, bucket, trigger.value, ANSWERED)
+
+    def note(self, request_id: str, **data) -> Card:
+        # What the desk learns about a card after it opens, such as that its sender still owes a fix.
+        card = self.get(request_id)
+        if card is None:
+            raise KeyError(request_id)
+        card.data.update(data)
+        self._save(card)
+        return card
+
     def finish(self, request_id: str, state: str) -> Card:
         if state not in ENDS:
             raise ValueError(f"{state} is not how a card ends")
