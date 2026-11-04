@@ -1211,7 +1211,7 @@ class Desk:
             self.cards.requeue_routine(card.request_id)
             return
         self.cards.finish(card.request_id, EXPIRED)
-        if card.trigger in (Trigger.VOICE, Trigger.DUE):
+        if card.trigger is Trigger.VOICE:
             # When it ran out, so a word long after can be told from one that is about this card.
             self.cards.note(card.request_id, ran_out_at=self.clock().isoformat())
         if card.trigger is Trigger.VOICE and card.item_id:

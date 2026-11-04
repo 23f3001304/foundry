@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from foundry.buffer import Burst
-from foundry.cards import ALREADY_THERE, ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, RIGHT, ROOM_GONE, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
+from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, RIGHT, ROOM_GONE, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
 from foundry.checks import LOW_CONFIDENCE, cell_number, jumped, numbers_in, outliers
 from foundry.cleanup import format_date
 from foundry.items import IN, Item, ItemState, ItemStore, Owed, going_without, parse_owes, status_line
@@ -51,9 +51,8 @@ DUE_FOR = "due"
 ANSWERING = "answering"
 AWAITING_NAME = "awaiting_name"
 AWAITING_TYPED = "awaiting_typed"
+# The wait for a name, or to be told how to hand one over, before the card comes back. ASK_INSTEAD says "two hours".
 NAME_WINDOW = timedelta(hours=2)
-# A due card that ran out is opened again if the asker writes or asks for status within this long.
-RAN_OUT_WINDOW = timedelta(hours=24)
 UNITS = (("month", 30 * 86400), ("week", 7 * 86400), ("day", 86400), ("hour", 3600), ("minute", 60))
 WHO_OWES = "Who owes what:"
 OWES = "Owes: {what} ({measure}). Due {due}."
@@ -78,15 +77,15 @@ DUE_TITLE = "Inputs: {job}"
 DUE_DETAIL = (
     "{job} is waiting on:\n{lines}\n\n"
     "Ask again sends one more message and gives them {hours} more hours. Ask someone else asks another person. "
-    "Go without leaves these out. The work starts once nothing else is open, and the final card names what is missing."
+    "Go without leaves out what has not come in and uses an answer nobody has confirmed as it was heard, marked as not confirmed. The work starts once nothing else is open."
 )
-# Said when the due card runs out: the job is on hold, and what the asker can do. Writing here, or asking where it stands, opens the card again.
+# Said when the due card runs out: the job is on hold, and what the asker can do. Writing here, or asking where it stands, makes a new card, however long it has been.
 DUE_RAN_OUT = (
     "The card for {title} ran out, so this job is on hold. Write anything here, or ask where it stands, and Foundry opens it again. "
-    'To hand an input to someone else now, write "ask Team Lead D instead of Team Lead C".'
+    'To hand an input to someone else now, write, for example, "ask Team Lead D instead of Team Lead C".'
 )
-DUE_OPENED_AGAIN = "I've opened the card for {title} again. Please answer it with its buttons."
-ASK_INSTEAD = 'To hand one of these to someone else, write "ask Team Lead D instead of {owner}".'
+DUE_OPENED_AGAIN = "There is a new card for {title} with where things stand now. Please answer it with its buttons."
+ASK_INSTEAD = 'To hand one of these to someone else, write, for example, "ask Team Lead D instead of {owner}". If you do nothing, the card comes back in two hours.'
 DUE_LINE = "- {input}, from {owner}: {state}."
 NO_REPLY = "no reply to Foundry yet"
 SAID = 'said "{reason}"'
@@ -94,13 +93,16 @@ WAITING_TO_CONFIRM = "waiting for them to confirm what Foundry heard"
 NOBODY = "nobody named"
 CANT_REACH_THEM = "Foundry can't reach them."
 NO_REMINDER_SENT = "Foundry couldn't send a reminder, because their last message on WhatsApp was over 24 hours ago."
+NO_REMINDER_WENT = "Foundry sent no reminder, because they had another card open or its time fell outside working hours."
+REMINDER_SKIPPED = "No reminder was sent to {owner} for {input} before the due time."
 STATUS_NO_REMINDER = "Foundry can't send {names} a reminder, because their last message on WhatsApp was over 24 hours ago"
 DUE_CLOSED = "Nothing the card for {title} listed is waiting on anyone now, so I closed it."
 WHO_INSTEAD = "Who should I ask instead of {owner} for {what}? Write their name here."
-WITHOUT_NOTED = "Going without {what}. The final card will say so."
+WITHOUT_NOTED = "Going without {what}."
+USING_AS_HEARD = "Using {what} as it was heard, marked as not confirmed."
+FINAL_SAYS_SO = "The final card will say so."
 # Lines on a job's attention list. None may start "No source found for " or "Could not read ", which the final card drops each round as its own.
 MISSING_INPUT = "{input} from {owner} was not received, so the work went ahead without it."
-MISSING_UNCONFIRMED = "{input} from {owner} was heard by voice but never confirmed, so the work went ahead without it."
 HEARD_BY_VOICE = "{owner}'s answer for {input} was heard by voice and not confirmed: {value}"
 NEWER_BY_VOICE = "{owner} also sent {input} by voice as {value}, and it was not confirmed, so the work uses {old}."
 # What the makers are told about the inputs. People wrote the values, so they are quieted where they are filled in.
@@ -109,7 +111,6 @@ INPUT_LINE = "- {input} ({measure}): {value}, from {owner}{how}"
 PASSED_ON_HOW = ", passed on by the asker"
 UNSURE_HOW = ", not confirmed by them"
 NOT_RECEIVED = "Not received: {what}. Say so in the work, and do not make up a figure for them."
-NOT_USED = "Heard by voice and not confirmed, so not used: {what}. Say so in the work, and do not make up a figure for them."
 MEASURES_HEADING = "This business names these measures. When an input is one of them, write its measure exactly as listed: {measures}."
 # What Foundry says back to someone whose reply it took. Names, answers and reasons come from people, so each is quieted where it is filled in.
 ANSWER_NOTED = "Got it. {input}: {value}."
@@ -216,9 +217,12 @@ def _unconfirmed(item: Item) -> bool:
     return item.answer is not None and not item.confirmed
 
 
+# Statuses that are about the request itself: it is badly formed or too big. Another try says the same. A refusal about who is asking (401), a conflict or a timeout says nothing about the person.
+ABOUT_THE_REQUEST = (400, 413, 414, 415, 422)
+
+
 def _will_not_pass(error: httpx.HTTPError) -> bool:
-    # Switch refused this one for what it is, such as a request it can't take. A busy server, a lost connection, a timeout or a rate limit may pass on another try.
-    return isinstance(error, httpx.HTTPStatusError) and 400 <= error.response.status_code < 500 and error.response.status_code not in (408, 429)
+    return isinstance(error, httpx.HTTPStatusError) and error.response.status_code in ABOUT_THE_REQUEST
 
 
 def last_wrote(writer: Writer, now: datetime) -> str:
@@ -408,7 +412,7 @@ class Coordinator:
         return bool(items)
 
     def ask(self, item: Item) -> None:
-        job, now = self.store.get(item.job_id), self.clock()
+        job, now, was_reachable = self.store.get(item.job_id), self.clock(), item.reachable
         # Saved before anything is sent, so a crash or a second start can't ask the same person twice.
         item.asked_at = now
         self.items.save(item)
@@ -428,7 +432,8 @@ class Coordinator:
             try:
                 self.client.post_message(job.room_id, self._not_asked(item))
             except httpx.HTTPError:
-                item.asked_at = None
+                # The asker was told nothing, so nothing is settled about this person: the retry asks them as if for the first time.
+                item.asked_at, item.reachable = None, was_reachable
                 self.items.save(item)
                 raise
 
@@ -565,7 +570,8 @@ class Coordinator:
                 item.reminded_at = now
                 self.items.save(item)
             return
-        if not self._reminder_wanted(item) or not self.can_reach(item, now) or not self._reminder_due(job, item, now):
+        # The cheap tests first: whether it is time, and only then whether the person can be reached, which looks through the log.
+        if not self._reminder_wanted(item) or not self._reminder_due(job, item, now) or not self.can_reach(item, now):
             return
         # A reminder is sent while the person has nothing else open, never queued. A queued one would open whenever the other card ended, at night or after the due time.
         # A routine card gives way to it, as it does to any card that is not routine.
@@ -594,10 +600,7 @@ class Coordinator:
                 job_id=item.job_id, item_id=item.id, request_id=request_id,
             )
         except httpx.HTTPError as error:
-            if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == ALREADY_THERE:
-                # An earlier try got through and only its reply was lost, so the reminder has been sent.
-                return
-            # Nothing got through, so a later tick is still owed the one reminder.
+            # Nothing got through, so a later tick is still owed the one reminder. A card Switch already had (409) is taken as open by the queue, so it doesn't come here.
             item.reminded_at = None
             if _room_gone(error):
                 logger.warning("Could not remind %s about item %s: Switch refused it (%s), so their room is probably gone.", item.owner_name, item.id, error.response.status_code)
@@ -627,6 +630,16 @@ class Coordinator:
                 raise
             logger.warning("Gave up on the due card for job %s: Switch refused it (%s), so the asker's room is probably gone.", job.id, error.response.status_code)
             self._no_room_for_due.add((job.id, for_time))
+            return
+        self._log_missed_reminders(job, due, now)
+
+    def _log_missed_reminders(self, job: Job, due: list[Item], now: datetime) -> None:
+        # Once, when the card is made, for each owner it lists who was owed a reminder and got none. Not on every tick.
+        said = {entry.item_id for entry in self.log.for_job(job.bucket, job.id) if entry.kind == "reminder_skipped"}
+        for item in due:
+            if self._reminder_wanted(item) and item.id not in said:
+                text = REMINDER_SKIPPED.format(owner=self._owner_name(item) or NOBODY, input=item.input)
+                self.log.add(now, item.bucket, item.room_id, DESK_NAME, "reminder_skipped", text, sender_name=DESK_NAME, job_id=job.id, item_id=item.id)
 
     def _due_cards(self, job: Job, *states: str) -> list[Card]:
         return [card for state in states for card in self.cards.find(job.requester, job.bucket, Trigger.DUE, state) if card.job_id == job.id]
@@ -651,7 +664,10 @@ class Coordinator:
         line = DUE_LINE.format(input=quiet(_one_line(item.input)), owner=quiet(_one_line(item.owner_name)) or NOBODY, state=state)
         if not item.reachable:
             return f"{line} {CANT_REACH_THEM}"
-        return f"{line} {NO_REMINDER_SENT}" if self._reminder_blocked(item, now) else line
+        if self._reminder_blocked(item, now):
+            return f"{line} {NO_REMINDER_SENT}"
+        # Someone who said something, or whose answer is waiting for their yes, was not owed a reminder. Anyone else who got none is named, so the asker knows.
+        return f"{line} {NO_REMINDER_WENT}" if self._reminder_wanted(item) else line
 
     def _close_due_cards(self, job: Job) -> None:
         # A due card whose items have all closed is about nothing, and a person has one open card at a time, so it would hold up their next. Switch marks a closed card "Cancelled", so say why.
@@ -694,10 +710,9 @@ class Coordinator:
         if lines:
             lines.insert(0, INPUTS_HEADING)
         missing = going_without(items)
-        for template, left_out in ((NOT_USED, [item for item in missing if _unconfirmed(item)]), (NOT_RECEIVED, [item for item in missing if not _unconfirmed(item)])):
-            if left_out:
-                what = "; ".join(f"{quiet(_one_line(item.input))}, from {quiet(_one_line(self._owner_name(item))) or NOBODY}" for item in left_out)
-                lines.append(template.format(what=what))
+        if missing:
+            what = "; ".join(f"{quiet(_one_line(item.input))}, from {quiet(_one_line(self._owner_name(item))) or NOBODY}" for item in missing)
+            lines.append(NOT_RECEIVED.format(what=what))
         return "\n".join(lines)
 
     # --- what the buttons on those cards do ---
@@ -804,21 +819,25 @@ class Coordinator:
         self.client.post_message(card.room_id, WHO_INSTEAD.format(owner=owner, what=quiet(_one_line(item.input))))
 
     def _open_ran_out_cards_again(self, burst: Burst, bucket: str) -> None:
-        # A due card that ran out leaves the job on hold. The asker writing in its room, or asking where things stand, within a day of that, opens it again, as for a voice note.
+        # A due card that ran out leaves the job on hold. The asker writing in its room, or asking where things stand, makes a new one, however long it has been:
+        # the job still waiting on something is the limit, and the asker's own message is the trigger.
         asking = might_be_status(burst.text) and is_short_ask(burst.text)
-        now, again = self.clock(), []
+        now, seen = self.clock(), set()
         for card in self.cards.find(burst.sender, bucket, Trigger.DUE, EXPIRED):
             job = self._job_by_id(card.job_id)
-            since = card.data.get("ran_out_at")
-            if job is None or job.state is not State.COLLECTING or not since or now - datetime.fromisoformat(since) > RAN_OUT_WINDOW:
+            if job is None or job.id in seen or job.state is not State.COLLECTING or self._due_cards(job, QUEUED, OPEN):
                 continue
-            if (card.room_id == burst.room_id or asking) and self._still_open(card) and not self._due_cards(job, QUEUED, OPEN):
-                again.append(card)
-        for card in again:
-            self.cards.ask_again(card.request_id)
-            self.client.post_message(card.room_id, DUE_OPENED_AGAIN.format(title=card.title))
-        if again:
-            self.cards.pump()
+            if (card.room_id == burst.room_id or asking) and self._still_open(card):
+                seen.add(job.id)
+                # Its text is out of date by now, so it is closed and a new card is made from what is open at this moment.
+                self.cards.finish(card.request_id, CLOSED)
+                with _trying(f"make a new due card for job {job.id}"):
+                    self._ask_at_due_time(job, self._open_items(job), now)
+                if self._due_cards(job, QUEUED, OPEN):
+                    try:
+                        self.client.post_message(card.room_id, DUE_OPENED_AGAIN.format(title=self._title(job)))
+                    except httpx.HTTPError as error:
+                        logger.warning("Could not say that a new card was made for job %s: %s", job.id, error)
 
     def _name_given(self, burst: Burst, bucket: str) -> bool:
         for card in reversed(self.cards.find(burst.sender, bucket, Trigger.DUE, ANSWERED)):
@@ -838,14 +857,22 @@ class Coordinator:
         return True
 
     def _go_without(self, card: Card, job: Job, items: list[Item]) -> None:
-        # Said before the items close, because closing the last one starts the makers.
-        # An answer that was heard by voice and never confirmed was not "not received", so it is not called that.
-        self._flag(job.id, [(MISSING_UNCONFIRMED if _unconfirmed(item) else MISSING_INPUT).format(input=item.input, owner=self._owner_name(item) or NOBODY) for item in items])
-        what = list(dict.fromkeys(quiet(_one_line(item.input)) for item in items))
-        self.client.post_message(card.room_id, WITHOUT_NOTED.format(what=_join(what, "and")))
-        for item in items:
-            item.state = ItemState.SKIPPED
+        # Going without means no more waiting. What has not come in is left out. An answer waiting for its Right or Wrong goes in as it was heard, marked unconfirmed and needing attention (design section 5).
+        heard, left_out = [item for item in items if _unconfirmed(item)], [item for item in items if not _unconfirmed(item)]
+        now = self.clock()
+        # Said before anything closes, because closing the last item starts the makers.
+        self._flag(job.id, [MISSING_INPUT.format(input=item.input, owner=self._owner_name(item) or NOBODY) for item in left_out])
+        said = []
+        if left_out:
+            said.append(WITHOUT_NOTED.format(what=_join(list(dict.fromkeys(quiet(_one_line(item.input)) for item in left_out)), "and")))
+        if heard:
+            said.append(USING_AS_HEARD.format(what=_join(list(dict.fromkeys(quiet(_one_line(item.input)) for item in heard)), "and")))
+        self.client.post_message(card.room_id, " ".join([*said, FINAL_SAYS_SO]))
+        for item in heard:
             self._close_voice_cards(item)
+            self._keep_if_nobody_can_confirm(item, now)
+        for item in left_out:
+            item.state = ItemState.SKIPPED
             self._close(item)
 
     def _job_by_id(self, job_id: str | None) -> Job | None:
@@ -1120,6 +1147,10 @@ class Coordinator:
             self.items.save(new)
         if new.reachable:
             self.client.post_message(tell_room, ASKED_INSTEAD.format(new=quiet(new.owner_name), input=quiet(item.input), old=quiet(item.owner_name)))
+        # If the asker was told how to hand one over and has now done it, the others don't wait out the rest of the wait.
+        for card in self._due_cards(job, ANSWERED):
+            if card.data.get(AWAITING_TYPED):
+                self.cards.note(card.request_id, **{AWAITING_TYPED: None})
 
     def _status(self, heard: _Heard) -> bool:
         # Only a short question gets a status. A longer message may be a note with a question in it, and a note is never swallowed.

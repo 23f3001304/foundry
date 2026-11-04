@@ -184,7 +184,13 @@ class CardQueue:
         card = Card(request_id or _new_id(), trigger, person, bucket, room_id, title, detail, list(choices), job_id, item_id, QUEUED, self.clock(), None, dict(data or {}))
         if now and self._nothing_in_the_way(person, bucket):
             # A card that can't open raises with nothing saved, so the caller's retry isn't a second card.
-            self._open(card)
+            try:
+                self._open(card)
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != ALREADY_THERE:
+                    raise
+                # Switch has this request id already, so an earlier try got through and only its reply was lost. The card is there, and the answer to it must find it here.
+                self._mark_open(card)
         else:
             self._save(card)
         return card
