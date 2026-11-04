@@ -54,9 +54,14 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+def _key(text: str) -> str:
+    # The agent is shown a name on one line with its mentions broken (quiet), so a name is matched back the same way it was shown.
+    return _one_line(text.replace(chr(0x200B), "")).casefold()
+
+
 def _writer_named(writers: list[Writer], ref: str) -> Writer | None:
-    wanted = ref.strip().casefold()
-    return next((writer for writer in writers if wanted and wanted in (writer.sender.casefold(), writer.sender_name.casefold())), None)
+    wanted = _key(ref)
+    return next((writer for writer in writers if wanted and wanted in (_key(writer.sender), _key(writer.sender_name))), None)
 
 
 class Coordinator:
@@ -85,7 +90,7 @@ class Coordinator:
     def people_for(self, job: Job) -> str:
         if not self.settings.is_internal(job.room_id):
             return ""
-        writers, now = self.log.writers(job.bucket), self.clock()
+        writers, now = self._writers(job.bucket), self.clock()
         if not writers:
             return NOBODY_YET
         return "\n".join([PEOPLE_HEADING, *(f"- {quiet(_one_line(_name(writer)))}: {last_wrote(writer, now)}" for writer in writers)])
@@ -104,7 +109,7 @@ class Coordinator:
             return brief, ""
         text, owed = parse_owes(brief, self._zone())
         self.items.drop_unasked(job.id)
-        writers, now = self.log.writers(job.bucket), self.clock()
+        writers, now = self._writers(job.bucket), self.clock()
         lines = []
         for what in owed:
             writer = _writer_named(writers, what.owner_ref)
@@ -127,8 +132,14 @@ class Coordinator:
         # Saved before anything is sent, so a crash or a second start can't ask the same person twice.
         item.asked_at = now
         self.items.save(item)
-        if not (item.reachable and self._send(job, item, now)):
-            self.client.post_message(job.room_id, self._not_asked(item))
+        try:
+            if not (item.reachable and self._send(job, item, now)):
+                self.client.post_message(job.room_id, self._not_asked(item))
+        except httpx.HTTPError:
+            # Nothing got through, so the retry has to ask this person.
+            item.asked_at = None
+            self.items.save(item)
+            raise
 
     def _send(self, job: Job, item: Item, now: datetime) -> bool:
         text = self._ask_text(job, item)
@@ -143,6 +154,10 @@ class Coordinator:
             return False
         self.log.add(now, item.bucket, item.room_id, DESK_NAME, "item_asked", text, sender_name=DESK_NAME, job_id=item.job_id, item_id=item.id)
         return True
+
+    def _writers(self, bucket: str) -> list[Writer]:
+        # The agents' own rooms are left out. The desk never reads a reply there, so a person asked there would never be heard.
+        return self.log.writers(bucket, excluding=self.settings.inside_rooms())
 
     def _ask_text(self, job: Job, item: Item) -> str:
         asker = next((_name(writer) for writer in self.log.writers(job.bucket) if writer.sender == job.requester), job.requester)

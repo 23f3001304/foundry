@@ -5,7 +5,7 @@ import re
 
 def quiet(text: str | None) -> str:
     # What people wrote must not wake an agent when the desk passes it on.
-    return (text or "").replace("@", "@​")
+    return (text or "").replace("@", "@\u200b")
 
 
 def headline(text: str) -> str:

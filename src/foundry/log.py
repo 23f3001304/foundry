@@ -1,7 +1,7 @@
 """The log: everything that reached or left Foundry, in time order, one bucket per client. It only grows."""
 
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -86,14 +86,16 @@ class Log:
             values.append(room_id)
         return self._select(f"{clause} ORDER BY at, id", *values)
 
-    def writers(self, bucket: str) -> list[Writer]:
+    def writers(self, bucket: str, excluding: Collection[str] = ()) -> list[Writer]:
+        # Rooms left out are ones Foundry can't ask in, so a person's room is their newest message outside them.
         marks = ", ".join("?" * len(WRITTEN))
+        skip = f" AND room_id NOT IN ({', '.join('?' * len(excluding))})" if excluding else ""
         with closing(sqlite3.connect(self.path)) as db:
             rows = db.execute(
-                f"""SELECT sender, sender_name, room_id, at FROM entries AS e WHERE bucket = ? AND kind IN ({marks}) AND id = (
-                        SELECT id FROM entries WHERE bucket = e.bucket AND sender = e.sender AND kind IN ({marks}) ORDER BY at DESC, id DESC LIMIT 1)
+                f"""SELECT sender, sender_name, room_id, at FROM entries AS e WHERE bucket = ? AND kind IN ({marks}){skip} AND id = (
+                        SELECT id FROM entries WHERE bucket = e.bucket AND sender = e.sender AND kind IN ({marks}){skip} ORDER BY at DESC, id DESC LIMIT 1)
                     ORDER BY at DESC, id DESC""",
-                (bucket, *WRITTEN, *WRITTEN),
+                (bucket, *WRITTEN, *excluding, *WRITTEN, *excluding),
             ).fetchall()
         return [Writer(sender, name, room_id, datetime.fromtimestamp(at, UTC)) for sender, name, room_id, at in rows]
 
