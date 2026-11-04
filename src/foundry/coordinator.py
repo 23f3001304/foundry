@@ -14,7 +14,7 @@ import httpx
 
 from foundry.buffer import Burst
 from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, RIGHT, ROOM_GONE, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
-from foundry.checks import LOW_CONFIDENCE, cell_number, jumped, numbers_in, outliers
+from foundry.checks import cell_number, jumped, numbers_in, outliers
 from foundry.cleanup import format_date
 from foundry.items import IN, Item, ItemState, ItemStore, Owed, going_without, parse_owes, status_line
 from foundry.jobs import Job, JobStore, State, advance
@@ -130,7 +130,6 @@ ANSWER_CHANGED = "{asker}, {owner} changed {input} from {old} to {new}. The work
 NO_ONE_WAITING = "Nothing is waiting on anyone here."
 ITEM_VOICE_DETAIL = 'I heard: "{heard}"\nI took that as {input}: {value}.\n\nIs that right?'
 # Lines on a job's attention list. None may start "No source found for " or "Could not read ": the final card drops those each round, as lines of its own number check.
-NOT_SURE_OF_ANSWER = "Foundry was not sure it read {owner}'s answer for {input} right: {value}."
 JUMPED = "{owner}'s answer for {input} is {value}, more than {share} away from their last answer on this measure, {old}."
 DISAGREE = "{owner} and {other} gave different answers for {input}: {value} and {other_value}."
 UNSEEN_NUMBER = "Foundry read {value} from {owner}'s answer for {input}, but that number is not in what they wrote."
@@ -1008,7 +1007,7 @@ class Coordinator:
             path.unlink(missing_ok=True)
             self.client.post_message(room_id, FILE_NO_FIGURES.format(name=shown))
             return False
-        self._record(item, str(path), at, room_id, confidence=None, said="", typed=False, file=True)
+        self._record(item, str(path), at, room_id, said="", typed=False, file=True)
         self._close_voice_cards(item)
         self.client.post_message(room_id, FILE_NOTED.format(input=quiet(item.input), name=shown))
         return True
@@ -1023,7 +1022,7 @@ class Coordinator:
         # They did hear it right, but the item was handed to someone else or gone without since, and a late Right does not answer it again.
         if item.state is not ItemState.SKIPPED and card.data.get("value") is not None:
             self._record(
-                item, card.data["value"], datetime.fromisoformat(card.data["at"]), card.room_id, confidence=card.data.get("confidence"), said=heard, typed=False, by=card.data.get("by"),
+                item, card.data["value"], datetime.fromisoformat(card.data["at"]), card.room_id, said=heard, typed=False, by=card.data.get("by"),
             )
 
     def drop_heard(self, card: Card) -> None:
@@ -1192,7 +1191,7 @@ class Coordinator:
         if burst.language:
             self._hold(heard, item, value, by)
             return
-        self._record(item, value, burst.first_at, burst.room_id, confidence=heard.reading.confidence, said=heard.text, typed=True, by=by)
+        self._record(item, value, burst.first_at, burst.room_id, said=heard.text, typed=True, by=by)
         self._close_voice_cards(item)
         if by is None:
             self.client.post_message(burst.room_id, ANSWER_NOTED.format(input=quiet(item.input), value=quiet(value)))
@@ -1208,7 +1207,7 @@ class Coordinator:
             item.answer, item.answer_entry, item.confirmed = value, None, False
             self.items.save(item)
         self._close_voice_cards(item)
-        data = {"heard": shown, "entries": entries, "value": value, "at": burst.first_at.isoformat(), "confidence": heard.reading.confidence, "by": by}
+        data = {"heard": shown, "entries": entries, "value": value, "at": burst.first_at.isoformat(), "by": by}
         try:
             self.cards.submit(
                 Trigger.VOICE, burst.sender, heard.bucket, burst.room_id, VOICE_CARD_TITLE, ITEM_VOICE_DETAIL.format(heard=quiet(shown), input=quiet(item.input), value=quiet(value)), (RIGHT, WRONG),
@@ -1231,14 +1230,14 @@ class Coordinator:
             return
         if item.state is ItemState.OPEN and item.answer == value and not item.confirmed:
             self._record(
-                item, value, datetime.fromisoformat(data["at"]), room_id, confidence=data.get("confidence"), said=data.get("heard", ""), typed=False, by=data.get("by"), confirmed=False,
+                item, value, datetime.fromisoformat(data["at"]), room_id, said=data.get("heard", ""), typed=False, by=data.get("by"), confirmed=False,
             )
         elif item.state in IN:
             # An answer already in stays in use. The newer one is only noted.
             self._flag(item.job_id, [NEWER_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value, old=self._said_as(item, item.answer))])
 
     def _record(
-        self, item: Item, value: str, at: datetime, room_id: str, *, confidence: float | None, said: str, typed: bool, by: str | None = None, confirmed: bool = True, file: bool = False,
+        self, item: Item, value: str, at: datetime, room_id: str, *, said: str, typed: bool, by: str | None = None, confirmed: bool = True, file: bool = False,
     ) -> None:
         # The one place an answer is taken in: it is logged with its measure, it closes the item and the checks run on it. The newest answer wins and the older ones stay in the log.
         # An answer with no voice_confirmed entry for its item is how the chain tells one nobody confirmed.
@@ -1256,7 +1255,7 @@ class Coordinator:
         self.items.save(item)
         if job is not None:
             # The checks compare figures, and a file's path is not one.
-            lines = [] if file else self._checks(job, item, value, previous, confidence, said if typed else None, key)
+            lines = [] if file else self._checks(job, item, value, previous, said if typed else None, key)
             if not confirmed:
                 lines.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value))
             if replaced is not None and self._changed(item, replaced, value) and job.state in STARTED:
@@ -1307,11 +1306,9 @@ class Coordinator:
         if job is not None:
             self.close_if_done(job)
 
-    def _checks(self, job: Job, item: Item, value: str, previous: Entry | None, confidence: float | None, typed: str | None, key: str) -> list[str]:
-        # Code does the comparing. A model only read the value out, and high confidence never takes a check away.
+    def _checks(self, job: Job, item: Item, value: str, previous: Entry | None, typed: str | None, key: str) -> list[str]:
+        # Code does the comparing. A model only read the value out.
         owner, lines = self._owner_name(item), []
-        if confidence is not None and confidence < LOW_CONFIDENCE:
-            lines.append(NOT_SURE_OF_ANSWER.format(owner=owner, input=item.input, value=value))
         if typed is not None and set(numbers_in(value)) - set(numbers_in(typed)):
             lines.append(UNSEEN_NUMBER.format(owner=owner, input=item.input, value=value))
         share = self.settings.pack_for(job.room_id).jump_share

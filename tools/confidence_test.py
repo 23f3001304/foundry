@@ -1,6 +1,7 @@
-"""Measures whether a model's low confidence means anything. Half of each set is deliberately garbled, and it all goes through the real clean-up and reading code.
+"""Measures whether a model's low confidence means anything. Half of the notes are deliberately garbled, and they all go through the real clean-up code.
 
-Exits 1 unless low confidence catches at least half the garbled and marks under a quarter of the clean, in both sets.
+Exits 1 unless low confidence catches at least half the garbled and marks under a quarter of the clean.
+It measured the reader of replies too, on 2026-11-05. That caught 3 of 10 garbled and marked 0 of 10 clean, so the reader no longer gives a confidence.
 
 uv run --env-file .env python tools/confidence_test.py
 """
@@ -16,9 +17,7 @@ from pathlib import Path
 from foundry.checks import LOW_CONFIDENCE
 from foundry.cleanup import CleanupFailed, clean_note
 from foundry.intake import default_llm
-from foundry.items import Item, ItemState
 from foundry.pack import load_pack
-from foundry.reading import read_message
 
 BRAND = Path(__file__).resolve().parent.parent / "brands" / "demo-it-firm"
 AT_ONCE = 4
@@ -48,29 +47,6 @@ NOTES = [
     ("xqj deploy portal 44 hmm yes no staging prod which one call me", True),
 ]
 
-# (a reply to the one item asked of a Team Lead, whether it is deliberately garbled).
-REPLIES = [
-    ("Team A closed 41 stories this sprint.", False),
-    ("41 stories closed.", False),
-    ("We closed 38 stories.", False),
-    ("41", False),
-    ("Stories closed this sprint: 27.", False),
-    ("Team A ne 41 stories close ki hain.", False),
-    ("Final count is 52 stories closed.", False),
-    ("33 stories closed, that is the final number.", False),
-    ("It's 19 stories for this sprint.", False),
-    ("Hamare 60 stories close ho gaye is sprint mein.", False),
-    ("maybe 40 or 14 not sure the sheet is gone", True),
-    ("4?1 stories or so", True),
-    ("uh thirty something, or was that last sprint", True),
-    ("41 ya 14, pata nahi, phir dekhta hoon", True),
-    ("some of them closed I think", True),
-    ("stries clsd mybe 2x or 3x chk", True),
-    ("the number the other team said, roughly", True),
-    ("20 ho gaya phir nahi 12 phir network kat gaya", True),
-    ("less than last time but more than before maybe", True),
-    ("hmm 7 or 70 depends how you count", True),
-]
 
 
 @dataclass(frozen=True)
@@ -98,11 +74,6 @@ def _cleanup_confidence(note: str, llm: Callable[[str], str]) -> float | None:
         return None
 
 
-def _reading_confidence(reply: str, llm: Callable[[str], str]) -> float | None:
-    item = Item("item-1", "job-1", "demo-it-firm", "@team-lead-a:localhost", "team-lead-a", "room-1", "Team A release status", "stories closed this sprint, a whole number", SENT_AT, ItemState.OPEN, None, None, None, SENT_AT, None, True, True)
-    return read_message(reply, [item], ["team-lead-a", "delivery-manager"], "team-lead-a", llm, SENT_AT.date()).confidence
-
-
 def _measure(name: str, cases: list[tuple[str, bool]], ask: Callable[[str], float | None]) -> Score:
     with ThreadPoolExecutor(AT_ONCE) as pool:
         confidences = list(pool.map(ask, [text for text, _ in cases]))
@@ -113,13 +84,9 @@ def _measure(name: str, cases: list[tuple[str, bool]], ask: Callable[[str], floa
     return found
 
 
-def main(cleanup_llm: Callable[[str], str], reading_llm: Callable[[str], str]) -> int:
-    scores = [
-        _measure("Clean-up", NOTES, lambda note: _cleanup_confidence(note, cleanup_llm)),
-        _measure("Reading", REPLIES, lambda reply: _reading_confidence(reply, reading_llm)),
-    ]
-    return 0 if all(found.meets_bar for found in scores) else 1
+def main(llm: Callable[[str], str]) -> int:
+    return 0 if _measure("Clean-up", NOTES, lambda note: _cleanup_confidence(note, llm)).meets_bar else 1
 
 
 if __name__ == "__main__":
-    sys.exit(main(default_llm(os.environ.get("FOUNDRY_CLEANUP_MODEL", "claude-sonnet-5-5")), default_llm()))
+    sys.exit(main(default_llm(os.environ.get("FOUNDRY_CLEANUP_MODEL", "claude-sonnet-5-5"))))
