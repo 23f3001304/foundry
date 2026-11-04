@@ -6,7 +6,8 @@ import os
 import re
 import tempfile
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -94,6 +95,17 @@ def deliverable(path: str) -> bool:
 
 def file_paths(text: str) -> list[str]:
     return [path for line in text.splitlines() for path in ([line.strip()] if deliverable(line.strip()) else line.split())]
+
+
+@contextmanager
+def _give_up_if_room_is_gone(what: str) -> Iterator[None]:
+    # Switch keeps answering 403 or 404 once a room is deleted. Left to raise, that would stop every other job on every tick.
+    try:
+        yield
+    except httpx.HTTPStatusError as error:
+        if error.response.status_code not in (403, 404):
+            raise
+        logger.warning("Gave up on %s: Switch refused it (%s), so its room is probably gone.", what, error.response.status_code)
 
 
 @dataclass(frozen=True)
@@ -203,7 +215,8 @@ class Desk:
 
     def tick(self, now: datetime) -> None:
         for burst in self.buffer.ready(now):
-            self._take_burst(burst)
+            with _give_up_if_room_is_gone(f"a message in room {burst.room_id}"):
+                self._take_burst(burst)
         for outcome in self.client.outcomes():
             self._handle_outcome(outcome)
         self._stop_quiet_jobs(now)
@@ -213,13 +226,16 @@ class Desk:
         for job in self.store.all():
             if job.kind != "work" or not job.asked_at or now - datetime.fromisoformat(job.asked_at) <= limit:
                 continue
-            if job.state is State.RECEIVED:
-                # No brief has been approved, so there is nothing a person could restart yet.
-                job.asked_at = None
-                self.client.post_message(job.room_id, NO_BRIEF)
-                self.store.save(job)
-            elif job.state in (State.MAKING, State.REVIEWING):
-                self._stop(job, f"Nobody on the team has answered for {self.settings.work_timeout_minutes} minutes.")
+            if job.state not in (State.RECEIVED, State.MAKING, State.REVIEWING):
+                continue
+            with _give_up_if_room_is_gone(f"job {job.id}"):
+                if job.state is State.RECEIVED:
+                    # No brief has been approved, so there is nothing a person could restart yet.
+                    job.asked_at = None
+                    self.client.post_message(job.room_id, NO_BRIEF)
+                else:
+                    self._stop(job, f"Nobody on the team has answered for {self.settings.work_timeout_minutes} minutes.")
+            self.store.save(job)
 
     def on_agent_message(self, event: dict) -> None:
         payload = event["payload"]
@@ -484,10 +500,11 @@ class Desk:
         except KeyError:
             logger.warning("Answer for an unknown job: %s", outcome.request_id)
         else:
-            if job.question and outcome.request_id == job.question["request_id"]:
-                self._take_pressed_answer(job, outcome)
-            else:
-                self._apply(job, self.gate.check(job, outcome))
+            with _give_up_if_room_is_gone(f"job {job.id}"):
+                if job.question and outcome.request_id == job.question["request_id"]:
+                    self._take_pressed_answer(job, outcome)
+                else:
+                    self._apply(job, self.gate.check(job, outcome))
         self.client.ack_outcome(outcome.session_id, outcome.request_id)
 
     def _take_pressed_answer(self, job: Job, outcome: Outcome) -> None:
