@@ -112,9 +112,28 @@ def jumped(previous: str, new: str, share: float) -> bool:
     return abs(after - before) > abs(before) * Decimal(str(share))
 
 
+MINUS_BEFORE = re.compile(r"(?<!\w)-\s*$")
+
+
+def _only_number(text: str) -> Decimal | None:
+    # The one number in a short reply such as "19,800 USD millions", read as numbers_in reads, so a year or a date is none.
+    # With two different numbers, such as "Q2 FY27 900", which is the figure would be a guess, so none is read.
+    text = WRITTEN_DATE.sub(" ", DATE_TOKEN.sub(" ", text))
+    found = [match for match in NUMBER.finditer(text) if not _is_year(text, match)]
+    if len({_normal(match.group()) for match in found}) != 1:
+        return None
+    sign = "-" if MINUS_BEFORE.search(text[: found[0].start()]) else ""
+    try:
+        return Decimal(sign + _normal(found[0].group()))
+    except InvalidOperation:
+        return None
+
+
 def _as_figure(value: str | int | float | Decimal) -> Decimal | None:
     if isinstance(value, str):
-        return figure(value)
+        # A value is what the reader took out of a reply, and it may carry a unit after the figure.
+        exact = figure(value)
+        return exact if exact is not None else _only_number(value)
     number = Decimal(str(value))
     return number if number.is_finite() else None
 

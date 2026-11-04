@@ -1346,7 +1346,8 @@ class Coordinator:
         # Every answer on a measure in this job is judged together, so a far figure that came first is judged once its peers have answered, and one that is no longer far is not.
         by_measure: dict[str, list[Item]] = {}
         for other in self.items.for_job(job.id):
-            if other.state in IN and other.confirmed and other.answer is not None:
+            # A file answer is not a figure, and digits in its name or folder must never be read as one.
+            if other.state in IN and other.confirmed and other.answer is not None and not self._is_file(other.answer, other):
                 by_measure.setdefault(_key(self._measure_key(other, job)), []).append(other)
         return [
             FAR_FROM_PEERS.format(owner=self._owner_name(answered[at]), input=answered[at].input, value=answered[at].answer)

@@ -1,6 +1,6 @@
-# The investment firm's quarterly review deck. A fictional firm, with job titles for people and made-up figures. The offices' words and files are scripted, and everything Foundry says back is real.
+# The investment firm's quarterly review deck. A fictional firm, with job titles for people and made-up figures. The offices' words and file are scripted, and everything Foundry says back is real.
 # {in:N} says the clock time N minutes after the scene began, because there is no fake clock.
-# Four offices answer by chat and one by a file, from scripts/scenes/data. Office E's figure is far from the other four, and the final card is meant to name it.
+# Four offices answer by chat and one by a file, from scripts/scenes/data. Office E's figure is far from the other three typed ones, and the final card is meant to name it.
 # Start the desk with FOUNDRY_QUIET_SECONDS=8. The desk, and the makers' tools that setup_makers.py wrote, need the same FOUNDRY_INPUTS_DIR, or a maker cannot open the file.
 name: investment_firm
 brand: demo-investment-firm
@@ -21,10 +21,11 @@ history:
   - {as: Office Head D, room: office-d, days_ago: 21, say: "Office D has moved to a new floor."}
   - {as: Office Head E, room: office-e, days_ago: 3, say: "Office E has a client review this week."}
 steps:
-  # The request, and the brief's card with who owes what. The deck is asked to chart each office and the year, so the makers have to use the data tools.
+  # The request, and the brief's card with who owes what. Each Office Head is asked for that office's own figure, so the five inputs read differently and none is told it disagrees with another.
+  # The deck is asked to chart each office and the year, so the makers have to use the data tools.
   - as: Analyst Lead
     room: analysts
-    say: "I need the quarterly review deck for the partners' meeting by {in:60}. Office Heads A, B, C, D and E each owe me their office's assets under management at the end of Q2 FY27, in USD millions, by {in:15}. I want a chart of the five offices, and a chart of how assets have moved over the past year."
+    say: "I need the quarterly review deck for the partners' meeting by {in:60}. Office Head A owes Office A's assets under management at the end of Q2 FY27, Office Head B owes Office B's assets under management, Office Head C owes Office C's assets under management, Office Head D owes Office D's assets under management and Office Head E owes Office E's assets under management, each by {in:15}. I want a chart of the five offices, and a chart of how assets have moved over the past year."
     wait_for: {button: Approve, timeout: 300}
   - as: Analyst Lead
     room: analysts
@@ -35,29 +36,21 @@ steps:
     wait_for: {text: "Exact measure", timeout: 180}
   - as: Office Head A
     room: office-a
-    say: "Office A ends the quarter with 6,420 in assets under management, in USD millions."
+    say: "Office A ends the quarter with 6,420 in assets under management."
     wait_for: {text: "Got it", timeout: 180}
   - as: Office Head B
     room: office-b
     wait_for: {text: "Exact measure", timeout: 180}
   - as: Office Head B
     room: office-b
-    say: "Office B ends the quarter with 5,180 in assets under management, in USD millions."
+    say: "Office B ends the quarter with 5,180 in assets under management."
     wait_for: {text: "Got it", timeout: 180}
-  # Office C sends a file, with no words beside it. Its asset classes add up to its figure, and the makers' tools open the file by its name.
-  - as: Office Head C
-    room: office-c
-    wait_for: {text: "Exact measure", timeout: 180}
-  - as: Office Head C
-    room: office-c
-    file: data/office-c-q2-fy27.csv
-    wait_for: {text: "I saved", timeout: 180}
   - as: Office Head D
     room: office-d
     wait_for: {text: "Exact measure", timeout: 180}
   - as: Office Head D
     room: office-d
-    say: "Office D ends the quarter with 7,050 in assets under management, in USD millions."
+    say: "Office D ends the quarter with 7,050 in assets under management."
     wait_for: {text: "Got it", timeout: 180}
   # Office E's figure is more than three times what it gave last quarter and far from the other offices. Code judges that, and nothing else changes.
   - as: Office Head E
@@ -65,9 +58,18 @@ steps:
     wait_for: {text: "Exact measure", timeout: 180}
   - as: Office Head E
     room: office-e
-    say: "Office E ends the quarter with 19,800 in assets under management, in USD millions."
+    say: "Office E ends the quarter with 19,800 in assets under management."
     wait_for: {text: "Got it", timeout: 180}
-  # Every office has answered, so the makers start. The deck's charts are worked out by code, and the reviewer checks the deck. The final card is meant to name Office E's figure.
+  # Office C sends a file last, with no words beside it, because a file answer has not been played live and the jump must not wait on it.
+  # Its asset classes add up to its figure, and the makers' tools open the file by its name. Until it is in, the makers have not started.
+  - as: Office Head C
+    room: office-c
+    wait_for: {text: "Exact measure", timeout: 180}
+  - as: Office Head C
+    room: office-c
+    file: data/office-c-q2-fy27.csv
+    wait_for: {text: "I saved", timeout: 180}
+  # Every office has answered, so the makers start. The deck's charts are to be worked out by code, and the reviewer checks the deck. The final card is meant to name Office E's figure.
   - as: Analyst Lead
     room: analysts
     wait_for: {text: "far from the others", timeout: 2700}
