@@ -13,6 +13,7 @@ def save(values: dict[str, str]) -> None:
     lines = ENV_FILE.read_text(encoding="utf-8").splitlines() if ENV_FILE.exists() else []
     kept = [line for line in lines if line.split("=", 1)[0] not in values]
     ENV_FILE.write_text("\n".join(kept + [f"{name}={value}" for name, value in values.items()]) + "\n", encoding="utf-8")
+    os.environ.update(values)
 
 
 def main() -> None:
