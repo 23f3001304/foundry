@@ -53,6 +53,8 @@ params:
     description: Ends each agent's name, so one client can have agents of its own, such as -phatakha. Leave empty for agents shared by every business that leaves it empty.
     pattern: "(-[a-z][a-z0-9-]*)?"
     required: false
+    # Switch reads an empty input as no value, so without a default it leaves {agent_suffix} unfilled in every agent's name and refuses the template.
+    default: ""
   bridge:
     type: bridge
     label: Team chat
