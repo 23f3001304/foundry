@@ -19,14 +19,17 @@ from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, O
 from foundry.checks import file_text, needs_attention, people_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date, signoff_detail
 from foundry.brand import HEX_COLOUR, BrandError
+from foundry.coordinator import Coordinator
 from foundry.delivery import DELIVERED, deliver, deliver_report
 from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, parse_reply, resolve_approver, revise_notes
 from foundry.intake import Kind, classify
+from foundry.items import OWES_FORMAT, ItemStore
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
 from foundry.log import Entry, Log
 from foundry.pack import Pack, load_pack
 from foundry.stickers import branded_sticker, sticker_for
 from foundry.switch_client import Outcome, SwitchClient
+from foundry.text import headline, quiet
 from foundry.voice import Transcript, VoiceError, speak, transcribe, translate
 
 logger = logging.getLogger(__name__)
@@ -79,6 +82,14 @@ RESEND_VOICE = "I couldn't read that voice note. Please resend it in under 30 se
 NO_REPORT = "I couldn't write that up just now. Send any reply to try again."
 ONLY_THE_SENDER = "Only the person who sent the note can answer this, so it is still waiting."
 HEARD_THE_ANSWER = "Got your answer."
+LOCAL_TIME = "Local time now: {now} ({day})."
+OWES_ASK = (
+    "If this work needs input from other people, add one line for each input after the brief, in exactly this form and with nothing else on the line:\n"
+    f"{OWES_FORMAT}\n"
+    "Write the person's name exactly as listed above, or leave it blank if nobody fits. Write the exact measure you need, such as the unit and whether it is a whole number. "
+    "Work the due time out from the local time above and write it as an ISO 8601 date and time with its UTC offset. If it needs nobody else's input, write no OWES lines."
+)
+LAST_LIST = "The list you wrote last time. Change what the approver asked about and keep the rest:"
 # A question left this long is dropped, so tomorrow's note isn't read as its answer.
 QUESTION_WINDOW = timedelta(hours=24)
 # How far back an approved report still counts as evidence for a new note.
@@ -100,16 +111,6 @@ def sender_kind(payload: dict) -> str:
     if payload.get("sender_kind"):
         return payload["sender_kind"]
     return "agent" if payload["sender"].startswith(AGENT_SENDER_PREFIX) else "user"
-
-
-def quiet(text: str | None) -> str:
-    # What people wrote must not wake an agent when the desk passes it on.
-    return (text or "").replace("@", "@\u200b")
-
-
-def headline(text: str) -> str:
-    line = re.sub(r"[*_`#]", "", text.strip().splitlines()[0]).strip()
-    return line.removeprefix("What is being made:").strip()[:80]
 
 
 def deliverable(path: str) -> bool:
@@ -255,6 +256,9 @@ class Desk:
         self.cards = CardQueue(settings.work_path, client, self.log, lambda: self.clock())
         if isinstance(gate, QueuedCardGate):
             gate.cards = self.cards
+        self.items = ItemStore(settings.work_path)
+        # Asked for the model and the clock each time, so a test that swaps either one reaches the coordinator too.
+        self.coordinator = Coordinator(client, store, self.items, self.log, self.cards, settings, lambda prompt: self.llm(prompt), lambda: self.clock(), self._ask_makers)
 
     def handle(self, event: dict | Outcome) -> None:
         if isinstance(event, Outcome):
@@ -353,12 +357,14 @@ class Desk:
         return None
 
     def _take_brief(self, job: Job, brief: str) -> None:
+        brief, owners = self.coordinator.take_brief(job, brief)
         if not brief:
             logger.warning("Ignored an empty brief for job %s", job.id)
             return
         job.brief = brief
         advance(job, "brief_drafted")
-        self.gate.ask(job, f"Brief: {headline(brief)}", brief, self._approval_room(job))
+        # Who owes what sits above the brief, on the same card.
+        self.gate.ask(job, f"Brief: {headline(brief)}", f"{owners}\n\n{brief}" if owners else brief, self._approval_room(job))
         self._sticker(self._approval_room(job), "needs_input")
         self.store.save(job)
 
@@ -777,6 +783,9 @@ class Desk:
             self._ask_for_brief(job)
         elif event == "unblock" and job.kind == "report":
             self._clean_report(job)
+        elif event == "brief_approved" and self.coordinator.start(job):
+            # Each owner has been asked. Makers start once every item is closed.
+            advance(job, "collect")
         elif event in ("brief_approved", "unblock"):
             self._sticker(self._approval_room(job), "working")
             self._ask_makers(job, retry=event == "unblock")
@@ -905,9 +914,19 @@ class Desk:
             f"Request:\n{quiet(job.brief)}",
             f"Recent room messages:\n{quiet(self.client.read_context(job.room_id))}",
         ]
+        if self.settings.is_internal(job.room_id):
+            lines += self._who_owes_prompt(job)
         if job.revision_notes:
             lines.append(f"The approver asked for these changes:\n{quiet(job.revision_notes)}")
         self.client.post_message(self.settings.workrooms_for(job.room_id).studio, "\n\n".join(lines))
+
+    def _who_owes_prompt(self, job: Job) -> list[str]:
+        now = self.clock().astimezone(self._business_zone())
+        lines = [self.coordinator.people_for(job), LOCAL_TIME.format(now=now.isoformat(timespec="minutes"), day=f"{now:%A}"), OWES_ASK]
+        # On a redraft the agent only has the brief, which no longer holds the list.
+        if job.revision_notes and (last := self.coordinator.draft_for(job)):
+            lines.append(f"{LAST_LIST}\n{last}")
+        return lines
 
 
 async def run(desk: Desk, rooms: list[str], tick_seconds: float = 3) -> None:

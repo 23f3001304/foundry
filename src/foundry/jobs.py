@@ -15,6 +15,7 @@ class State(Enum):
     RECEIVED = "received"
     BRIEF_PENDING = "brief_pending"
     MAKING = "making"
+    COLLECTING = "collecting"
     REVIEWING = "reviewing"
     SIGNOFF_PENDING = "signoff_pending"
     APPROVED = "approved"
@@ -32,6 +33,9 @@ TRANSITIONS = {
     (State.MAKING, "report_drafted"): State.SIGNOFF_PENDING,
     (State.BRIEF_PENDING, "brief_approved"): State.MAKING,
     (State.BRIEF_PENDING, "brief_revised"): State.RECEIVED,
+    # An approved brief that needs other people's input waits here until every item is closed.
+    (State.MAKING, "collect"): State.COLLECTING,
+    (State.COLLECTING, "inputs_closed"): State.MAKING,
     (State.MAKING, "work_ready"): State.REVIEWING,
     (State.MAKING, "stopped"): State.BLOCKED,
     (State.REVIEWING, "stopped"): State.BLOCKED,
