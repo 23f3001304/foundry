@@ -40,7 +40,7 @@ def _dashboard(named: object = None) -> tuple[dict, ...]:
     for number, listed in enumerate(named, start=1):
         if not isinstance(listed, dict) or not all(isinstance(listed.get(key), str) and listed[key].strip() for key in ("login", "acts_as")):
             raise PackError(f"I can't read entry {number} of dashboard in the pack: {listed!r}. Each needs a login and an acts_as, like {DASHBOARD_LINE}.")
-    return tuple(named)
+    return tuple({**listed, "acts_as": _approver(listed["acts_as"])} for listed in named)
 
 
 @dataclass(frozen=True)
@@ -72,10 +72,6 @@ def _approver(named: object) -> str:
     approver = str(named or "").strip()
     bridge = os.environ.get("FOUNDRY_MATTERMOST_BRIDGE", "").strip()
     return approver.replace("{bridge}", bridge) if bridge else approver
-
-
-def _dashboard(named: object) -> tuple[dict, ...]:
-    return tuple({**entry, "acts_as": _approver(entry.get("acts_as"))} for entry in named or ())
 
 
 def load_pack(brand_dir: Path | str) -> Pack:
