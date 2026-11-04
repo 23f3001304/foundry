@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 {% block main %}
-<h1>Data</h1>
-<p class="lead">Each business's brand kit, source documents and tables, which the desk and the makers read. A file is used as soon as it is saved: the tools and checks read the new file straight away, on jobs that are already running too, and the desk reads the documents again within a few seconds. The agents also have a copy of the brand kit in their room, which this does not change, so a change to the voice or the guidance also has to be made in Switch.</p>
+<header class="page-head">
+  <h1>Data</h1>
+  <p class="lead">Each business's brand kit, source documents and tables, which the desk and the makers read. A file is used as soon as it is saved: the tools and checks read the new file straight away, on jobs that are already running too, and the desk reads the documents again within a few seconds. The agents also have a copy of the brand kit in their room, which this does not change, so a change to the voice or the guidance also has to be made in Switch.</p>
+</header>
 {% if notice %}<p class="status" role="status">{{ notice }}</p>{% endif %}
 {% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
 {% if not clients %}
-<p class="note">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
+<p class="empty">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
 {% endif %}
 {% for c in clients %}
 <section id="data-{{ c.bucket }}">
@@ -16,8 +18,8 @@
   {% if c.files %}
   <ul class="rows">
     {% for f in c.files %}
-    <li class="response">
-      <h3><a href="/data/{{ c.link }}/{{ f.file|urlencode }}">{{ f.file }}</a></h3>
+    <li class="file-row">
+      <h3><a class="row-link" href="/data/{{ c.link }}/{{ f.file|urlencode }}">{{ f.file }}</a></h3>
       <p class="small">{{ f.kind }}. Changed {{ f.changed|when }}.</p>
     </li>
     {% endfor %}
@@ -25,27 +27,37 @@
   {% else %}
   <p class="note">This folder has no kit or source documents yet.</p>
   {% endif %}
-  {% if not c.has_kit %}
-  <form class="stack" method="post" action="/data/{{ c.link }}/kit.md" enctype="multipart/form-data">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label for="kit-{{ c.bucket }}">Add the brand kit</label>
-    <input id="kit-{{ c.bucket }}" name="upload" type="file" accept=".md,text/markdown,text/plain" required>
-    <p class="small">This business has no kit.md. A kit is a text file that starts with its name, colours, fonts and voice. The makers need it, so one they can't read is not saved.</p>
-    <div class="buttons"><button class="primary" type="submit">Add the kit</button></div>
-  </form>
-  {% endif %}
-  <form class="stack" method="post" action="/data/{{ c.link }}/add" enctype="multipart/form-data">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label for="add-{{ c.bucket }}">Add a source</label>
-    <input id="add-{{ c.bucket }}" name="upload" type="file" accept=".md,.csv,.xlsx,text/markdown,text/plain,text/csv" required>
-    <p class="small">A document is a text file whose name ends in .md, up to 200 KB. A table is a .csv or .xlsx file up to 2 MB, with headings, a row of data and some figures in it. If a source with that name is already there, this file replaces it.</p>
-    <div class="buttons"><button class="primary" type="submit">Add the file</button></div>
-  </form>
+  <div class="upload-forms">
+    {% if not c.has_kit %}
+    <form class="stack" method="post" action="/data/{{ c.link }}/kit.md" enctype="multipart/form-data">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="kit-{{ c.bucket }}">Add the brand kit</label>
+        <div class="inline-field">
+          <input id="kit-{{ c.bucket }}" name="upload" type="file" accept=".md,text/markdown,text/plain" required>
+          <button type="submit">Add the kit</button>
+        </div>
+        <p class="small">This business has no kit.md. A kit is a text file that starts with its name, colours, fonts and voice. The makers need it, so one they can't read is not saved.</p>
+      </div>
+    </form>
+    {% endif %}
+    <form class="stack" method="post" action="/data/{{ c.link }}/add" enctype="multipart/form-data">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <div class="field">
+        <label for="add-{{ c.bucket }}">Add a source</label>
+        <div class="inline-field">
+          <input id="add-{{ c.bucket }}" name="upload" type="file" accept=".md,.csv,.xlsx,text/markdown,text/plain,text/csv" required>
+          <button type="submit">Add the file</button>
+        </div>
+        <p class="small">A document is a text file whose name ends in .md, up to 200 KB. A table is a .csv or .xlsx file up to 2 MB, with headings, a row of data and some figures in it. If a source with that name is already there, this file replaces it.</p>
+      </div>
+    </form>
+  </div>
   {% endif %}
 </section>
 {% endfor %}
 {% if clients %}
-<p class="small">Logos, pictures and fonts are not changed here. The pack, pack.md, says who may use this dashboard, so it is only changed on the machine the desk runs on. Replacing a file can't be undone here.</p>
+<p class="small section-foot">Logos, pictures and fonts are not changed here. The pack, pack.md, says who may use this dashboard, so it is only changed on the machine the desk runs on. Replacing a file can't be undone here.</p>
 {% endif %}
 {% include "_recent.html" %}
 {% endblock %}

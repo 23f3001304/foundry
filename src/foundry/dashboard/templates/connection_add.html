@@ -1,25 +1,37 @@
 {% extends "base.html" %}
 {% block main %}
-<h1>Add a connection</h1>
+<header class="page-head">
+  <p class="crumb"><a href="/connections">Back to the connections</a></p>
+  <h1>Add a connection</h1>
+  {% if unsure %}
+  {% elif chosen %}
+  <p class="lead">Adding a {{ chosen.name }} connection. Anything secret you type here goes straight to Switch. Foundry does not keep it, log it or show it again, so if Switch says no, enter it again.</p>
+  {% elif kinds %}
+  <p class="lead">Which chat app do you want to connect?</p>
+  {% endif %}
+</header>
 {% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
 {% if unsure %}
 <p>Check <a href="{{ gateway_link }}">Switch's Gateway</a> before you add it again, so it isn't added twice. Anything secret you typed was not kept.</p>
 {% elif chosen %}
-<p class="lead">Adding a {{ chosen.name }} connection. Anything secret you type here goes straight to Switch. Foundry does not keep it, log it or show it again, so if Switch says no, enter it again.</p>
-<form class="stack" method="post" action="/connections/add" autocomplete="off">
+<form class="stack panel" method="post" action="/connections/add" autocomplete="off">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <input type="hidden" name="type" value="{{ chosen.key }}">
-  <label for="display_name">Name</label>
-  <input id="display_name" name="display_name" type="text" autocomplete="off" maxlength="80" required>
+  <div class="field">
+    <label for="display_name">Name</label>
+    <input id="display_name" name="display_name" type="text" autocomplete="off" maxlength="80" required>
+  </div>
   {% for field in chosen.fields %}
-  {% if field.boolean %}
-  <label for="field-{{ field.key }}"><input id="field-{{ field.key }}" name="field.{{ field.key }}" type="checkbox"{% if field.ticked %} checked{% endif %}> {{ field.label }}</label>
-  {% if field.hint %}<span class="small">{{ field.hint }}</span>{% endif %}
-  {% else %}
-  <label for="field-{{ field.key }}">{{ field.label }}{% if not field.required %} (optional){% endif %}</label>
-  {% if field.hint %}<span class="small">{{ field.hint }}</span>{% endif %}
-  <input id="field-{{ field.key }}" name="field.{{ field.key }}" type="{{ 'password' if field.secret else 'text' }}" autocomplete="off"{% if field.required %} required{% endif %}>
-  {% endif %}
+  <div class="field">
+    {% if field.boolean %}
+    <label class="check" for="field-{{ field.key }}"><input id="field-{{ field.key }}" name="field.{{ field.key }}" type="checkbox"{% if field.ticked %} checked{% endif %}> {{ field.label }}</label>
+    {% if field.hint %}<span class="small">{{ field.hint }}</span>{% endif %}
+    {% else %}
+    <label for="field-{{ field.key }}">{{ field.label }}{% if not field.required %} (optional){% endif %}</label>
+    {% if field.hint %}<span class="small">{{ field.hint }}</span>{% endif %}
+    <input id="field-{{ field.key }}" name="field.{{ field.key }}" type="{{ 'password' if field.secret else 'text' }}" autocomplete="off"{% if field.required %} required{% endif %}>
+    {% endif %}
+  </div>
   {% endfor %}
   <div class="buttons">
     <button class="primary" type="submit">Add the connection</button>
@@ -27,11 +39,9 @@
   </div>
 </form>
 {% elif kinds %}
-<p class="lead">Which chat app do you want to connect?</p>
-<ul class="plain">
-  {% for kind in kinds %}<li><a href="/connections/add?type={{ kind.key|urlencode }}">{{ kind.name }}</a></li>{% endfor %}
+<ul class="rows choice-list">
+  {% for kind in kinds %}<li><a class="row-link" href="/connections/add?type={{ kind.key|urlencode }}">{{ kind.name }}</a></li>{% endfor %}
 </ul>
 {% endif %}
-<p><a href="/connections">Back to the connections</a></p>
-<p class="small">Other kinds of change are made in <a href="{{ gateway_link }}">Switch's Gateway</a>.</p>
+<p class="small section-foot">Other kinds of change are made in <a href="{{ gateway_link }}">Switch's Gateway</a>.</p>
 {% endblock %}
