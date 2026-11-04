@@ -119,6 +119,11 @@ class SwitchClient:
                             yield event
                     except httpx.TransportError as error:
                         logger.warning("Switch stream dropped: %s", error)
+                    except httpx.HTTPStatusError as error:
+                        # A restarting Switch answers 5xx. Anything else, such as a wrong key, won't fix itself.
+                        if error.response.status_code < 500:
+                            raise
+                        logger.warning("Switch stream refused: %s", error)
                     await asyncio.sleep(self.reconnect_seconds)
             finally:
                 beat.cancel()

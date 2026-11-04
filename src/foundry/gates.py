@@ -1,12 +1,17 @@
 """Who may approve, and how an answer becomes a decision. Enforced in code, not in agent prompts."""
 
+import logging
 import re
 import unicodedata
 import uuid
 from enum import Enum
 
+import httpx
+
 from foundry.jobs import Job
 from foundry.switch_client import Outcome, SwitchClient
+
+logger = logging.getLogger(__name__)
 
 
 class Decision(Enum):
@@ -140,7 +145,11 @@ class CardGate(Gate):
 
     def _close(self, job: Job) -> None:
         # Switch marks a closed card "Cancelled", so say the answer did arrive.
-        self.client.close_card(job.approval["request_id"])
+        try:
+            self.client.close_card(job.approval["request_id"])
+        except httpx.HTTPError as error:
+            # A typed word has no retry, and a press on a card left open finds nothing waiting.
+            logger.warning("Could not close the card for job %s: %s", job.id, error)
         self.client.post_message(job.approval_room, f"Got your answer on {job.approval['title']}.")
 
     def _refuse(self, job: Job) -> None:
