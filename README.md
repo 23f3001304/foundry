@@ -2,7 +2,7 @@
 
 # Foundry
 
-A business's team asks for work in the chat they already use, by text or voice note. Agents in [Switch](https://github.com/sandbox-quantum/switch) rooms draft a brief, make the deck and the graphic, and check each other's work. A person approves the brief and signs off the result, and only then does anything go out.
+A business's team asks for work in the chat they already use, by text or voice note. Agents in [Switch](https://github.com/sandbox-quantum/switch) rooms draft a brief, make the deck and the graphic, and check each other's work. A person approves the brief and signs off the result before anything is delivered.
 
 The same setup also turns a messy note from the field into a clean report, and shows the person signing it exactly which words changed and which document backs each change.
 
@@ -12,9 +12,9 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe and Sh
 
 - **One setup across chat platforms.** A single Switch template creates the rooms, agents and documents, and names the chat platform as a setting. Foundry's code talks to Switch, not to a platform.
 - **Agents from different vendors check each other.** Claude writes and makes. The reviewer defaults to a different vendor's model through OpenCode, and Claude isn't among the template's defaults for that seat.
-- **Voice notes in Indian languages.** Sarvam's Saaras model reads Hinglish as spoken, a plain "haan" counts as approval, and whoever sends a voice note hears the reply in their language.
-- **Code holds the gates, not prompts.** Makers aren't called until a brief is approved, only the approver's answer counts, and nothing reaches the outside room before sign-off.
-- **A report can't quietly invent things.** The model proposes each change with its evidence. Code drops any change whose evidence isn't really in the named document, does all the date maths itself, and flags numbers and names it can't trace.
+- **Voice notes in Indian languages.** Sarvam's Saaras model reads Hinglish as spoken, a plain "haan" counts as approval, and whoever sends a voice note hears questions, the report and the final reply in their language. Cards stay in English.
+- **Code holds the gates, not prompts.** Makers aren't called until a brief is approved, only the approver's answer counts, and nothing is delivered before sign-off. A named approver signs off inside, so the client sees nothing until then. Someone approving their own job sees the brief and the files on the way.
+- **A report can't quietly invent things.** The model proposes each change with its evidence. Code drops any change whose evidence isn't really in the named document, does all the date maths itself, and flags numbers it can't trace. It flags names too, unless one opens a sentence, where a capital says nothing.
 
 ## What has actually been run
 
@@ -185,6 +185,7 @@ The contact sheet lists two electricians at Palm Court, so the desk asks which o
 
 - **Fonts:** a `.pptx` can't carry its fonts, so a machine without them shows a substitute. Install the files in `brands/<brand>/fonts` where you open the decks.
 - **Reviewer:** OpenCode's free tier has a usage limit, and the terminal can keep working after Switch-hosted OpenCode is refused. When that happens the room shows no error. The reviewer sits on "Working" until the 30-minute timeout, then a stuck card asks a person, so unchecked work never passes. OpenCode's own log says `Free usage limit reached`. To change the reviewer, set `FOUNDRY_REVIEWER_PROVIDER` and `FOUNDRY_REVIEWER_MODEL` in `.env` before creating the rooms. Codex needs an empty model. Claude works too, but then a vendor is checking its own work.
+- **Approver:** whoever asks approves their own job. To name someone for one business, set `approver` in quotes in `brands/<brand>/pack.md`, or use `FOUNDRY_APPROVER` for every business that doesn't set its own. The value is a Switch sender id, `@switch-mattermost-<bridge id>-<username>:localhost`. Once that person has sent a request, it's in the `requester` column of `foundry-jobs.db`. With a wrong id, nobody can answer the card.
 - **Voice:** set `SARVAM_API_KEY`. Voice notes over 30 seconds get a request to resend or type, which is the limit of Sarvam's REST route. Sarvam charges per call.
 - **Classifier:** with no `ANTHROPIC_API_KEY`, Foundry uses this machine's Claude Code login.
 - **Old databases:** the job and buffer files aren't migrated between versions. Delete `foundry-*.db` after pulling changes.
