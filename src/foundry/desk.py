@@ -15,12 +15,12 @@ from pathlib import Path
 import httpx
 
 from foundry.buffer import Burst, MessageBuffer
-from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, OPEN, SHOW_NEEDS, Card, CardQueue, Trigger
+from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, OPEN, QUEUED, SHOW_NEEDS, Card, CardQueue, Trigger
 from foundry.checks import file_text, needs_attention, people_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date, signoff_detail
 from foundry.brand import HEX_COLOUR, BrandError
 from foundry.delivery import DELIVERED, deliver, deliver_report
-from foundry.gates import Decision, Gate, QueuedCardGate, parse_reply, resolve_approver, revise_notes
+from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, parse_reply, resolve_approver, revise_notes
 from foundry.intake import Kind, classify
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
 from foundry.log import Entry, Log
@@ -272,7 +272,11 @@ class Desk:
                 with _give_up_if_room_is_gone(f"a message in room {burst.room_id}"):
                     self._take_burst(burst)
             for outcome in self.client.outcomes():
-                self._handle_outcome(outcome)
+                try:
+                    self._handle_outcome(outcome)
+                except Exception:
+                    # Not acknowledged, so Switch hands it over again next tick. The ones behind it still get their turn.
+                    logger.exception("Could not handle the outcome for %s, so it comes round again on the next tick.", outcome.request_id)
             self._stop_quiet_jobs(now)
         finally:
             # One job's trouble must not stop everyone else's cards and set times.
@@ -600,15 +604,17 @@ class Desk:
     def _answers_an_approval(self, event: dict, text: str) -> bool:
         room_id, sender, at = event["room_id"], event["payload"]["sender"], self._sent_at(event["payload"])
         is_decision = parse_reply(text, self.gate.extra_words) is not Decision.NONE
-        # Before anything else can take the word for an answer. Written notes never count: Switch doesn't read them as an answer, so they can't be an echo.
-        if is_decision and revise_notes(text) is None and self._is_echo(sender, room_id, at):
+        # Written notes are never a bare answer: Switch doesn't read them as one, so they can't be an echo, and swallowing them would lose them.
+        is_bare_answer = (is_decision or only_switch_reads(text)) and revise_notes(text) is None
+        # Before anything else can take the word for an answer.
+        if is_bare_answer and self._is_echo(sender, room_id, at):
             return True
         asking = [job for job in self.store.all() if job.approval and job.approval_room == room_id]
         waiting = self._a_word_can_answer(asking)
         theirs = self._a_word_can_answer([job for job in asking if job.approver == sender])
         for job in asking:
             if job.approver == sender and job.approval["awaiting_notes"]:
-                if is_decision and any(other is not job for other in theirs):
+                if (is_decision and any(other is not job for other in theirs)) or (is_bare_answer and self._another_card_is_up(job)):
                     # The person may mean the card in front of them, so this word can't count as the notes.
                     self.client.post_message(room_id, NOTES_AND_CARD)
                     return True
@@ -630,6 +636,11 @@ class Desk:
             self._decide(job, event)
             self.cards.pump()
         return True
+
+    def _another_card_is_up(self, job: Job) -> bool:
+        # Any card, not only another job's, because Switch reads the word as the answer to whatever is up in the room.
+        card = self.cards.open_for(job.approver, job.bucket)
+        return card is not None and card.room_id == job.approval_room
 
     def _is_echo(self, person: str, room_id: str, at: datetime) -> bool:
         # Switch sends a typed yes twice, as an answer and as a message, and the second must not approve whatever is up next.
@@ -676,13 +687,15 @@ class Desk:
     def _handle_outcome(self, outcome: Outcome) -> None:
         card = self.cards.get(outcome.request_id)
         self._note_answer_time(card, outcome)
+        if card is not None:
+            self.cards.got_through(card.request_id)
         if card is None or card.trigger in JOB_CARDS:
             # Finished first, so the log has the answer ahead of what it causes and a card it asks again for opens in this turn.
             if card is not None:
                 self.cards.finish(card.request_id, _state_after(card, outcome))
             self._take_job_answer(outcome)
-        elif card.state == OPEN:
-            # A press on a card already closed or returned to the queue changes nothing.
+        elif card.state in (OPEN, QUEUED):
+            # A queued card counts too. Its retry would hear that Switch already has it, then wait for an outcome that has already come. A press on a card already dealt with changes nothing.
             with _give_up_if_room_is_gone(f"card {card.request_id}"):
                 self._take_card_answer(card, outcome)
         self.client.ack_outcome(outcome.session_id, outcome.request_id)

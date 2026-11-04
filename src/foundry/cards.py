@@ -242,12 +242,20 @@ class CardQueue:
         card = self.get(request_id)
         if card is None:
             raise KeyError(request_id)
-        if card.state != OPEN:
+        if card.state in ENDS:
             return
         self.finish(request_id, EXPIRED)
         if not card.is_merged:
             data = {key: value for key, value in card.data.items() if key not in (ONE_BY_ONE, DETAIL_POSTED)}
             self._save_again(card, {**data, WAITING_SINCE: self.clock().isoformat()})
+
+    def got_through(self, request_id: str) -> None:
+        # An outcome proves Switch took this card, even if the reply to opening it was lost. Another card may be up by now, so a queued card can't be marked open too. It stays queued until its outcome ends it.
+        card = self.get(request_id)
+        if card.opened_at is None:
+            card.opened_at = self.clock()
+            self._save(card)
+            self._log_opened(card)
 
     def ask_again(self, request_id: str) -> None:
         # Switch has this request as answered, so the next try at the person takes a new id. It opens when the queue next runs.
@@ -263,7 +271,7 @@ class CardQueue:
         card = self.get(request_id)
         if card is None:
             raise KeyError(request_id)
-        if card.state != OPEN:
+        if card.state in ENDS:
             return []
         for item in (self.get(item_id) for item_id in card.data[ITEMS]):
             if item.state != IN_ROUTINE:
@@ -372,13 +380,17 @@ class CardQueue:
     def _mark_open(self, card: Card) -> None:
         card.state, card.opened_at = OPEN, self.clock()
         self._save(card)
+        self._log_opened(card)
+
+    def _log_opened(self, card: Card) -> None:
         self._log(card, "card_opened", DESK_NAME)
         for item_id in card.data.get(ITEMS, ()):
             self._log(self.get(item_id), "card_opened", DESK_NAME)
 
     def _open_routine(self, person: str, bucket: str, items: list[Card]) -> None:
         # One room to a card, so nothing said in an inside room shows in a client's. The rest wait for their own card.
-        first = items[0]
+        # The room that has waited longest goes first. An item that comes back is stamped afresh, so it can't keep another room waiting for good.
+        first = min(items, key=_waiting_since)
         same_room = [item for item in items if item.room_id == first.room_id]
         lines = [f"- {item.title}{'' if _is_clean(item) else NEEDS_YOU}" for item in same_room]
         # A merged card takes its first item's trigger, so it still comes from the list and still reads as routine.

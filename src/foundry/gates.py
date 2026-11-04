@@ -43,6 +43,14 @@ DEFAULT_WORDS = {
 }
 
 
+# Switch reads these as an answer to a card when they are the whole message, and parse_reply doesn't. Its full list is _DECISIONS in bridges/collaboration/session/text.py.
+ONLY_SWITCH_READS = frozenset({"y", "n", "allow", "deny", "denied", "decline", "reject"})
+
+
+def only_switch_reads(text: str) -> bool:
+    return _clean(text) in ONLY_SWITCH_READS
+
+
 def resolve_approver(requester: str, setting: str | None) -> str:
     return setting or requester
 

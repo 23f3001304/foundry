@@ -19,10 +19,13 @@ def _clock_times(values: list | tuple) -> tuple[str, ...]:
     return tuple(f"{value // 60:02d}:{value % 60:02d}" if isinstance(value, int) else str(value) for value in values)
 
 
-def _set_times(named: list | tuple = ()) -> tuple[str, ...]:
+def _set_times(named: object = None) -> tuple[str, ...]:
+    # YAML reads a lone 18:00 as the number 1080, and a quoted one would be read a character at a time.
+    if named is not None and not isinstance(named, list):
+        raise PackError(f"I can't read set_times {named!r} in the pack. Write it as a list, like [10:00, 18:00].")
     # FOUNDRY_SET_TIMES is for short live runs, so it beats whatever a pack names.
     override = tuple(time.strip() for time in os.environ.get("FOUNDRY_SET_TIMES", "").split(",") if time.strip())
-    return override or _clock_times(named) or DEFAULT_SET_TIMES
+    return override or _clock_times(named or ()) or DEFAULT_SET_TIMES
 
 
 @dataclass(frozen=True)
@@ -62,7 +65,7 @@ def load_pack(brand_dir: Path | str) -> Pack:
         report_room=data.get("report_room", "").strip(),
         sources=sources,
         approver=str(data.get("approver") or "").strip(),
-        set_times=_set_times(data.get("set_times") or ()),
+        set_times=_set_times(data.get("set_times")),
         jump_share=float(data.get("jump_share", Pack.jump_share)),
         working_hours=_clock_times(data.get("working_hours") or Pack.working_hours),
         ask_again_hours=int(data.get("ask_again_hours", Pack.ask_again_hours)),
