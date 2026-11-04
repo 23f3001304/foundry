@@ -15,7 +15,7 @@ from pathlib import Path
 import httpx
 
 from foundry.buffer import Burst, MessageBuffer
-from foundry.cleanup import CleanupFailed, ReportStore, clean_note, signoff_detail
+from foundry.cleanup import CleanupFailed, clean_note, format_date, signoff_detail
 from foundry.brand import BrandError
 from foundry.delivery import DELIVERED, deliver, deliver_report
 from foundry.gates import Decision, Gate, parse_reply, resolve_approver
@@ -63,6 +63,8 @@ ONLY_THE_SENDER = "Only the person who sent the note can answer this, so it is s
 HEARD_THE_ANSWER = "Got your answer."
 # A question left this long is dropped, so tomorrow's note isn't read as its answer.
 QUESTION_WINDOW = timedelta(hours=24)
+# How far back an approved report still counts as evidence for a new note.
+REPORT_MEMORY = timedelta(days=30)
 DECISION_EVENTS = {
     (State.BRIEF_PENDING, Decision.APPROVE): "brief_approved",
     (State.BRIEF_PENDING, Decision.REVISE): "brief_revised",
@@ -125,7 +127,6 @@ class Settings:
     sticker_mode: str = "subtle"
     work_timeout_minutes: int = 30
     packs: dict[str, Pack] = field(default_factory=dict)
-    reports_path: Path | str = "foundry-reports.db"
     utc_offset_minutes: int = 330
     brands: dict[str, str] = field(default_factory=dict)
     log_path: Path | str = "foundry-log.db"
@@ -170,7 +171,6 @@ class Settings:
             work_timeout_minutes=int(os.environ.get("FOUNDRY_WORK_TIMEOUT_MINUTES", "30")),
             packs=_packs_from(os.environ.get("FOUNDRY_PACKS", "")),
             brands=_brands_from(os.environ.get("FOUNDRY_PACKS", ""), workrooms),
-            reports_path=os.environ.get("FOUNDRY_REPORTS_DB", "foundry-reports.db"),
             utc_offset_minutes=int(os.environ.get("FOUNDRY_UTC_OFFSET_MINUTES", "330")),
             log_path=os.environ.get("FOUNDRY_LOG_DB", "foundry-log.db"),
             work_path=os.environ.get("FOUNDRY_WORK_DB", "foundry-work.db"),
@@ -222,7 +222,6 @@ class Desk:
         self.speaker = speaker
         self.translator = translator
         self.buffer = MessageBuffer(settings.buffer_path, settings.quiet_seconds)
-        self.reports = ReportStore(settings.reports_path)
         self.log = Log(settings.log_path)
 
     def handle(self, event: dict | Outcome) -> None:
@@ -412,7 +411,7 @@ class Desk:
         self._sticker(job.room_id, "approved")
         if job.kind == "report":
             deliver_report(job, self.client, self._report_rooms(job))
-            self.reports.add(job.room_id, job.report)
+            self.log.add(self.clock(), job.bucket, job.room_id, DESK, "report_approved", job.report, job_id=job.id)
             self._reply_aloud(job, job.report)
         else:
             deliver(job, self.client, job.room_id)
@@ -626,12 +625,20 @@ class Desk:
 
     def _start_report(self, burst: Burst) -> None:
         job = self._open_job(burst)
-        local = timezone(timedelta(minutes=self.settings.utc_offset_minutes))
-        job.kind, job.brief, job.sent_at, job.language = "report", burst.text, burst.first_at.astimezone(local).isoformat(), burst.language
+        job.kind, job.brief, job.sent_at, job.language = "report", burst.text, burst.first_at.astimezone(self._business_zone()).isoformat(), burst.language
         self.store.save(job)
         self._sticker(burst.room_id, "brief_received")
         self._clean_report(job)
         self.store.save(job)
+
+    def _business_zone(self) -> timezone:
+        return timezone(timedelta(minutes=self.settings.utc_offset_minutes))
+
+    def _earlier_reports(self, bucket: str, now: datetime) -> str:
+        # Only approved reports count, and each line says which business day it was approved on.
+        approved = self.log.between(bucket, now - REPORT_MEMORY, now, kinds=["report_approved"])
+        zone = self._business_zone()
+        return "\n".join(f"{format_date(entry.at.astimezone(zone).date())}: {line}" for entry in approved for line in entry.text.splitlines() if line.strip())
 
     def _offer_choices(self, job: Job, question: str, choices: list[str]) -> None:
         request_id = f"{job.id}-{uuid.uuid4().hex[:8]}"
@@ -660,7 +667,7 @@ class Desk:
             job.brief += f"\n\nThe approver asked for these changes:\n{job.revision_notes}"
             job.revision_notes = None
         pack = self.settings.pack_for(job.room_id)
-        earlier = "\n".join([pack.sources.get("reports", ""), *self.reports.recent(job.room_id)])
+        earlier = "\n".join(filter(None, [pack.sources.get("reports", ""), self._earlier_reports(job.bucket, self.clock())]))
         try:
             result = clean_note(job.brief, datetime.fromisoformat(job.sent_at), replace(pack, sources={**pack.sources, "reports": earlier}), self.cleanup_llm or self.llm)
         except CleanupFailed as error:

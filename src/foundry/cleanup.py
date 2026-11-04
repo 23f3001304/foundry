@@ -3,12 +3,9 @@
 import json
 import logging
 import re
-import sqlite3
 from collections.abc import Callable
-from contextlib import closing
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
-from pathlib import Path
 
 import anthropic
 
@@ -226,19 +223,3 @@ def _check(report: str, note: str, kept: list[Change], pack: Pack) -> list[str]:
 def _date_text(match: re.Match, sent_at: datetime, holidays: dict[date, str]) -> str:
     day = date_from_offset(sent_at, int(match.group(2)))
     return describe_holiday(day, holidays) if match.group(1) == "h" else format_date(day)
-
-
-class ReportStore:
-    def __init__(self, path: Path | str) -> None:
-        self.path = str(path)
-        with closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("CREATE TABLE IF NOT EXISTS reports (room_id TEXT NOT NULL, text TEXT NOT NULL)")
-
-    def add(self, room_id: str, text: str) -> None:
-        with closing(sqlite3.connect(self.path)) as db, db:
-            db.execute("INSERT INTO reports VALUES (?, ?)", (room_id, text))
-
-    def recent(self, room_id: str, limit: int = 10) -> list[str]:
-        with closing(sqlite3.connect(self.path)) as db:
-            rows = db.execute("SELECT text FROM reports WHERE room_id = ? ORDER BY rowid DESC LIMIT ?", (room_id, limit)).fetchall()
-        return [row[0] for row in reversed(rows)]
