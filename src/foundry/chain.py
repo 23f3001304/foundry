@@ -419,7 +419,8 @@ class _Trail:
     def _file(self, path: str, hits: Hits) -> None:
         name = Path(path).name
         self._add(self.copies[path].made, MADE, name, DIRECT)
-        for link, _ in hits:
+        # The same number on two slides is one use of it.
+        for link in {(link.text, entry_id): link for link, entry_id in hits}.values():
             self._add(link, USED, f"{name}: {link.text}", DIRECT)
 
     def _reviews(self, first_made: int) -> None:
