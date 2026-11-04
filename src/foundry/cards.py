@@ -70,14 +70,17 @@ ROUTINE_CLOSED = "I closed your routine card because something needs a decision 
 CARD_LIMIT = 700
 READ_ABOVE = "The full text is just above this card."
 ROOM_GONE = (403, 404)
+# Switch has this request id already, so an earlier try got through and only its reply was lost.
+ALREADY_THERE = 409
 SLOT_FORMAT = "%Y-%m-%d %H:%M"
 # Inside Card.data. A merged card lists its items. An item the person asked to see waits its turn alone, not for a set time.
 ITEMS = "items"
 ONE_BY_ONE = "one_by_one"
 WAITING_SINCE = "waiting_since"
+DETAIL_POSTED = "detail_posted"
 # Stands in for a person in set_time_runs, to record that a bucket has reached a set time at all.
 EVERYONE = ""
-COLUMNS =("request_id", "trigger", "person", "bucket", "room_id", "title", "detail", "choices", "job_id", "item_id", "state", "created_at", "opened_at", "data")
+COLUMNS = ("request_id", "trigger", "person", "bucket", "room_id", "title", "detail", "choices", "job_id", "item_id", "state", "created_at", "opened_at", "data")
 
 
 @dataclass
@@ -166,6 +169,7 @@ class CardQueue:
             )
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_open_card ON cards (person, bucket) WHERE state = 'open'")
             db.execute("CREATE TABLE IF NOT EXISTS set_time_runs (bucket TEXT NOT NULL, person TEXT NOT NULL, slot TEXT NOT NULL, PRIMARY KEY (bucket, person, slot))")
+            db.execute("CREATE TABLE IF NOT EXISTS answer_times (person TEXT NOT NULL, room_id TEXT NOT NULL, answered_at TEXT NOT NULL, PRIMARY KEY (person, room_id))")
 
     def submit(self, trigger: Trigger, person: str, bucket: str, room_id: str, title: str, detail: str, choices: tuple[str, ...] | list[str] = (), job_id: str | None = None, item_id: str | None = None, data: dict | None = None, request_id: str | None = None) -> Card:
         now = ROUTE[trigger].now
@@ -179,19 +183,11 @@ class CardQueue:
 
     def pump(self) -> None:
         queued = self._select("WHERE state = ? ORDER BY rowid", QUEUED)
-        for card in [c for c in queued if not c.is_routine] + [c for c in queued if c.data.get(ONE_BY_ONE)]:
-            if self.open_for(card.person, card.bucket) is not None:
-                continue
-            try:
-                self._open(card)
-            except httpx.HTTPStatusError as error:
-                if error.response.status_code not in ROOM_GONE:
-                    raise
-                logger.warning("Gave up on card %s for job %s: Switch refused it (%s), so its room is probably gone.", card.request_id, card.job_id, error.response.status_code)
-                self.finish(card.request_id, CLOSED)
+        for card in [c for c in queued if not c.is_routine] + [c for c in queued if c.is_merged or c.data.get(ONE_BY_ONE)]:
+            if self.open_for(card.person, card.bucket) is None:
+                self._try_to_open(card)
 
     def run_set_times(self, bucket: str, times: tuple[str, ...], offset_minutes: int, now: datetime) -> None:
-        self.pump()
         slot = _latest_slot(times, offset_minutes, now)
         if slot is None:
             return
@@ -203,9 +199,9 @@ class CardQueue:
             if self._has_run(bucket, person, name) or not any(_waiting_since(item) <= slot for item in items):
                 continue
             in_the_way = self.open_for(person, bucket)
-            if in_the_way is None:
+            if in_the_way is None and not self._routine_card_is_waiting(person, bucket):
                 self._open_routine(person, bucket, items)
-            elif not in_the_way.is_routine:
+            elif in_the_way is not None and not in_the_way.is_routine:
                 # A decision card is up. These wait behind it, and this set time stays due until it's answered.
                 continue
             self._record_run(bucket, person, name)
@@ -250,29 +246,52 @@ class CardQueue:
             return
         self.finish(request_id, EXPIRED)
         if not card.is_merged:
-            data = {key: value for key, value in card.data.items() if key != ONE_BY_ONE}
+            data = {key: value for key, value in card.data.items() if key not in (ONE_BY_ONE, DETAIL_POSTED)}
             self._save_again(card, {**data, WAITING_SINCE: self.clock().isoformat()})
 
-    def answer_routine(self, request_id: str, choice: str | None) -> list[Card]:
+    def ask_again(self, request_id: str) -> None:
+        # Switch has this request as answered, so the next try at the person takes a new id. It opens when the queue next runs.
+        card = self.get(request_id)
+        if card is None:
+            raise KeyError(request_id)
+        self.finish(request_id, CLOSED)
+        self._save_again(card, card.data)
+
+    def answer_routine(self, request_id: str, choice: str | None, hand_off: Callable[[Card], None] = lambda item: None) -> list[Card]:
         # One press only ever approves what is clean. Whatever is left goes back for the next set time.
+        # Each item is handed on before it's marked, and the card ends last, so if a hand-off raises the same answer comes round again and carries on from there.
         card = self.get(request_id)
         if card is None:
             raise KeyError(request_id)
         if card.state != OPEN:
             return []
-        approved = []
         for item in (self.get(item_id) for item_id in card.data[ITEMS]):
+            if item.state != IN_ROUTINE:
+                continue
             if choice == APPROVE_CLEAN and _is_clean(item):
-                approved.append(self.finish(item.request_id, ANSWERED))
+                hand_off(item)
+                self.finish(item.request_id, ANSWERED)
             elif choice == SHOW_NEEDS and not _is_clean(item):
                 item.state, item.data[ONE_BY_ONE] = QUEUED, True
                 self._save(item)
         self.finish(request_id, ANSWERED)
         self.pump()
-        return approved
+        return [item for item in (self.get(item_id) for item_id in card.data[ITEMS]) if item.state == ANSWERED]
 
     def waiting(self, bucket: str) -> list[Card]:
         return self._select("WHERE bucket = ? AND state = ? ORDER BY rowid", bucket, QUEUED)
+
+    def note_answer(self, person: str, room_id: str, at: datetime) -> None:
+        latest = self.last_answer(person, room_id)
+        if latest is not None and latest >= at:
+            return
+        with closing(sqlite3.connect(self.path)) as db, db:
+            db.execute("INSERT OR REPLACE INTO answer_times VALUES (?, ?, ?)", (person, room_id, at.isoformat()))
+
+    def last_answer(self, person: str, room_id: str) -> datetime | None:
+        with closing(sqlite3.connect(self.path)) as db:
+            row = db.execute("SELECT answered_at FROM answer_times WHERE person = ? AND room_id = ?", (person, room_id)).fetchone()
+        return datetime.fromisoformat(row[0]) if row else None
 
     def _nothing_in_the_way(self, person: str, bucket: str) -> bool:
         in_the_way = self.open_for(person, bucket)
@@ -292,7 +311,7 @@ class CardQueue:
             logger.warning("Could not close routine card %s: %s", card.request_id, error)
         self.finish(card.request_id, CLOSED)
         if not card.is_merged:
-            self._save_again(card, card.data)
+            self._save_again(card, {key: value for key, value in card.data.items() if key != DETAIL_POSTED})
 
     def _save_again(self, card: Card, data: dict) -> None:
         # Switch has already seen this request id, so the item comes back under a new one.
@@ -306,41 +325,78 @@ class CardQueue:
                 item.data[WAITING_SINCE] = self.clock().isoformat()
                 self._save(item)
 
-    def _open(self, card: Card) -> None:
-        detail = fit_detail(self.client, card.room_id, card.detail)
-        if card.choices:
-            question = "\n\n".join(part for part in (card.title, detail) if part)
-            self.client.open_question_card(card.room_id, card.request_id, question, card.choices)
-        else:
-            self.client.open_card(card.room_id, card.request_id, card.title, detail)
-        card.state, card.opened_at = OPEN, self.clock()
-        self._save(card)
-        self._log(card, "card_opened", DESK_NAME)
-
-    def _open_routine(self, person: str, bucket: str, items: list[Card]) -> None:
-        first = items[0]
-        lines = [f"- {item.title}{'' if _is_clean(item) else NEEDS_YOU}" for item in items]
-        # A merged card takes its first item's trigger, so it still comes from the list and still reads as routine.
-        card = Card(_new_id(), first.trigger, person, bucket, first.room_id, ROUTINE_TITLE, "\n".join(lines), [APPROVE_CLEAN, SHOW_NEEDS], None, None, QUEUED, self.clock(), None, {ITEMS: [item.request_id for item in items]})
+    def _try_to_open(self, card: Card) -> None:
+        # One refusal must not hold up anyone else's cards or set times, so what Switch answers stops here.
         try:
             self._open(card)
         except httpx.HTTPStatusError as error:
-            if error.response.status_code not in ROOM_GONE:
-                raise
-            logger.warning("Gave up on the routine items in room %s: Switch refused them (%s), so the room is probably gone.", first.room_id, error.response.status_code)
-            for item in items:
-                if item.room_id == first.room_id:
-                    self.finish(item.request_id, CLOSED)
-            return
-        for item in items:
+            status = error.response.status_code
+            if status in ROOM_GONE:
+                logger.warning("Gave up on card %s for job %s: Switch refused it (%s), so its room is probably gone.", card.request_id, card.job_id, status)
+                self._give_up(card)
+            elif status == ALREADY_THERE:
+                self._mark_open(card)
+            else:
+                self._try_again_later(card, error)
+        except httpx.HTTPError as error:
+            self._try_again_later(card, error)
+
+    def _give_up(self, card: Card) -> None:
+        for item_id in card.data.get(ITEMS, ()):
+            self.finish(item_id, CLOSED)
+        self.finish(card.request_id, CLOSED)
+
+    def _try_again_later(self, card: Card, error: httpx.HTTPError) -> None:
+        logger.warning("Could not open card %s for job %s, so it stays queued for the next try: %s", card.request_id, card.job_id, error)
+        self._save(card)
+
+    def _open(self, card: Card) -> None:
+        detail = self._detail_that_fits(card)
+        if card.choices:
+            # A question's title is the question itself, under the heading the client gives a person's note. On any other card the title is the heading.
+            heading = {} if card.trigger is Trigger.QUESTION else {"title": card.title}
+            self.client.open_question_card(card.room_id, card.request_id, detail or card.title, card.choices, **heading)
+        else:
+            self.client.open_card(card.room_id, card.request_id, card.title, detail)
+        self._mark_open(card)
+
+    def _detail_that_fits(self, card: Card) -> str:
+        # A card can take several tries to open, and the room should only read its text once.
+        if card.data.get(DETAIL_POSTED):
+            return READ_ABOVE
+        detail = fit_detail(self.client, card.room_id, card.detail)
+        if detail != card.detail:
+            card.data[DETAIL_POSTED] = True
+        return detail
+
+    def _mark_open(self, card: Card) -> None:
+        card.state, card.opened_at = OPEN, self.clock()
+        self._save(card)
+        self._log(card, "card_opened", DESK_NAME)
+        for item_id in card.data.get(ITEMS, ()):
+            self._log(self.get(item_id), "card_opened", DESK_NAME)
+
+    def _open_routine(self, person: str, bucket: str, items: list[Card]) -> None:
+        # One room to a card, so nothing said in an inside room shows in a client's. The rest wait for their own card.
+        first = items[0]
+        same_room = [item for item in items if item.room_id == first.room_id]
+        lines = [f"- {item.title}{'' if _is_clean(item) else NEEDS_YOU}" for item in same_room]
+        # A merged card takes its first item's trigger, so it still comes from the list and still reads as routine.
+        card = Card(_new_id(), first.trigger, person, bucket, first.room_id, ROUTINE_TITLE, "\n".join(lines), [APPROVE_CLEAN, SHOW_NEEDS], None, None, QUEUED, self.clock(), None, {ITEMS: [item.request_id for item in same_room]})
+        # Saved before the first try, so a retry keeps this id and Switch can say it already has the card.
+        self._save(card)
+        for item in same_room:
             item.state = IN_ROUTINE
             self._save(item)
-            self._log(item, "card_opened", DESK_NAME)
+        self._try_to_open(card)
+
+    def _routine_card_is_waiting(self, person: str, bucket: str) -> bool:
+        return any(card.is_merged and card.person == person for card in self.waiting(bucket))
 
     def _routine_waiting(self, bucket: str) -> dict[str, list[Card]]:
         people: dict[str, list[Card]] = {}
         for card in self.waiting(bucket):
-            if card.is_routine and not card.data.get(ONE_BY_ONE):
+            if card.is_routine and not card.is_merged and not card.data.get(ONE_BY_ONE):
                 people.setdefault(card.person, []).append(card)
         return people
 

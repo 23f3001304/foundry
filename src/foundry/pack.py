@@ -2,6 +2,7 @@
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -9,9 +10,13 @@ import yaml
 DEFAULT_SET_TIMES = ("10:00", "18:00")
 
 
+class PackError(ValueError):
+    pass
+
+
 def _clock_times(values: list | tuple) -> tuple[str, ...]:
     # YAML reads an unquoted 10:00 as the number 600.
-    return tuple(value if isinstance(value, str) else f"{value // 60:02d}:{value % 60:02d}" for value in values)
+    return tuple(f"{value // 60:02d}:{value % 60:02d}" if isinstance(value, int) else str(value) for value in values)
 
 
 def _set_times(named: list | tuple = ()) -> tuple[str, ...]:
@@ -34,6 +39,14 @@ class Pack:
     ask_again_hours: int = 24
     measures: tuple[str, ...] = ()
     dashboard: tuple[dict, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Refused here, when the desk starts. Left alone, a typo would raise on every tick.
+        for time in self.set_times:
+            try:
+                datetime.strptime(time, "%H:%M")
+            except ValueError:
+                raise PackError(f"I can't read the set time {time!r}. Write it as HH:MM on a 24-hour clock, like 18:00, in FOUNDRY_SET_TIMES or the pack's set_times.") from None
 
 
 def load_pack(brand_dir: Path | str) -> Pack:

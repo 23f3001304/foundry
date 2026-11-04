@@ -9,13 +9,17 @@ from foundry.desk import Desk, Settings, run
 from foundry.gates import QueuedCardGate
 from foundry.intake import default_llm
 from foundry.jobs import JobStore
+from foundry.pack import PackError
 from foundry.switch_client import SwitchClient
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    settings = Settings.from_env()
+    try:
+        settings = Settings.from_env()
+    except PackError as error:
+        raise SystemExit(str(error)) from None
     if not settings.workrooms:
         raise SystemExit("Set FOUNDRY_ROOMS first. tools/create_rooms.py writes it for you.")
     client = SwitchClient(os.environ["SWITCH_URL"], os.environ["FOUNDRY_DESK_ID"], os.environ["FOUNDRY_DESK_KEY"])

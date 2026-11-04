@@ -35,6 +35,7 @@ class Outcome:
     answer: str | None
     answered_by: str | None
     answers: list[dict] | None = None
+    answered_at: datetime | None = None
 
     def chosen_from(self, choices: list[str]) -> str | None:
         picked = ((self.answers or [{}])[0].get("selected_option_ids") or [None])[0]
@@ -107,12 +108,12 @@ class SwitchClient:
             "expires_at": (datetime.now(UTC) + CARD_LIFETIME).isoformat(),
         })
 
-    def open_question_card(self, room_id: str, request_id: str, question: str, choices: list[str]) -> None:
+    def open_question_card(self, room_id: str, request_id: str, question: str, choices: list[str], title: str = QUESTION_CARD_TITLE) -> None:
         self._call("POST", f"/agent-sessions/{self.session_id}/approvals", json={
             "request_id": request_id,
             "turn_id": request_id,
             "kind": "questions",
-            "title": QUESTION_CARD_TITLE,
+            "title": title[:MAX_TITLE_CHARS],
             "detail": None,
             "options": [],
             "questions": [{
@@ -133,7 +134,7 @@ class SwitchClient:
 
     def outcomes(self) -> list[Outcome]:
         return [
-            Outcome(row["sessionId"], row["requestId"], row["state"], row["answer"], row["answeredBy"], row.get("answers"))
+            Outcome(row["sessionId"], row["requestId"], row["state"], row["answer"], row["answeredBy"], row.get("answers"), datetime.fromisoformat(row["answeredAt"]) if row.get("answeredAt") else None)
             for row in self._call("GET", "/agent-sessions/approvals/outcomes").json()
         ]
 
