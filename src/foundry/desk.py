@@ -364,6 +364,11 @@ class Desk:
         elif marker == WORK_BLOCKED:
             if agent in job.waiting_on:
                 self._stop(job, text or MAKER_STUCK)
+        elif job.pending_fix:
+            # The reviewer looked at work made before the sender's fix, so a pass or a fail from them is no verdict on what the fix asks for.
+            # The makers go back to it, with the reviewer's notes if they gave any, and nothing goes to sign-off.
+            self._fail_round(job, _lines(text if marker == REVIEW_FAIL else job.revision_notes, REMAKE_NOTE.format(fix=job.pending_fix)))
+            self.store.save(job)
         elif marker == REVIEW_PASS:
             advance(job, "review_passed")
             job.asked_at = None
@@ -693,8 +698,17 @@ class Desk:
         return card if card is not None and card.trigger is Trigger.VOICE and card.room_id == room_id else None
 
     def _voice_cards_that_ran_out(self, person: str, room_id: str) -> list[Card]:
+        # Only lately, and only while the work isn't signed off. A word days later, or about work that has gone out, is not an answer to a card nobody can see.
         cards = self.cards.find(person, self.settings.bucket_for(room_id), Trigger.VOICE, EXPIRED)
-        return [card for card in cards if card.room_id == room_id]
+        return [card for card in cards if card.room_id == room_id and self._ran_out_lately(card) and self._not_signed_off(card)]
+
+    def _ran_out_lately(self, card: Card) -> bool:
+        since = card.data.get("ran_out_at")
+        return bool(since) and self.clock() - datetime.fromisoformat(since) <= QUESTION_WINDOW
+
+    def _not_signed_off(self, card: Card) -> bool:
+        job = self._job_of(card)
+        return job is not None and job.state not in (State.APPROVED, State.DELIVERED)
 
     def _answer_voice_cards_that_ran_out(self, cards: list[Card], decision: Decision, at: datetime) -> None:
         if len(cards) == 1:
@@ -859,15 +873,15 @@ class Desk:
     def _remake_with(self, job: Job, fix: str) -> None:
         # The fix goes in the brief, so any later ask carries it, and in the notes, so this ask says what changed.
         job.brief = self._corrected_note(job, fix, spoken=False)
-        if job.state is State.MAKING and job.waiting_on:
-            # They are working from the old brief, and asking again now would let their first replies count as the new work.
-            # The fix goes out when they come back, and their old work is never reviewed.
+        if (job.state is State.MAKING and job.waiting_on) or job.state is State.REVIEWING:
+            # The makers are working from the old brief, or the reviewer is looking at what they made from it. Asking again now would let their first replies,
+            # or the reviewer's verdict, count for the new work. The fix goes out when they come back, and what they made is never signed off.
             job.pending_fix = _lines(job.pending_fix, fix)
             return
         self._withdraw_approval(job)
         job.revision_notes = _lines(job.revision_notes, REMAKE_NOTE.format(fix=fix))
         # The others go back to making, as they do for any change.
-        event = {State.REVIEWING: "review_failed", State.SIGNOFF_PENDING: "signoff_revised", State.BLOCKED: "unblock"}.get(job.state)
+        event = {State.SIGNOFF_PENDING: "signoff_revised", State.BLOCKED: "unblock"}.get(job.state)
         if event:
             advance(job, event)
         self._after_changes(job)
@@ -1044,6 +1058,9 @@ class Desk:
             self.cards.requeue_routine(card.request_id)
             return
         self.cards.finish(card.request_id, EXPIRED)
+        if card.trigger is Trigger.VOICE:
+            # When it ran out, so a word long after can be told from one that is about this card.
+            self.cards.note(card.request_id, ran_out_at=self.clock().isoformat())
         if card.trigger in HOLDS_JOB:
             self.client.post_message(card.room_id, CARD_RAN_OUT.format(title=card.title))
         if card.trigger is Trigger.LATE_FIX:
@@ -1225,6 +1242,8 @@ class Desk:
 
     def _ask_for_brief(self, job: Job) -> None:
         job.asked_at = self.clock().isoformat()
+        # The request in this ask has any fix the sender gave, so none is left waiting. One that was is not a reason to throw this draft away.
+        job.pending_fix = ""
         lines = [
             f"@{BRIEF_AGENT} Job #{job.id[:6]}. Draft a brief for this request. Start your reply with {BRIEF_READY} #{job.id[:6]}, then the brief.",
             f"Request:\n{quiet(job.brief)}",
