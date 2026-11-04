@@ -16,15 +16,16 @@ logger = logging.getLogger(__name__)
 LOW_CONFIDENCE = 0.6
 NOT_SURE = "The model said it was not sure this report is right."
 # Only what people said. A reviewer's note, an agent's marker or a card must not make a number look sourced.
-PEOPLE_WORDS = ("message", "voice_heard", "voice_corrected", "item_answer", "item_passed_on")
+PEOPLE_WORDS = ("message", "voice_heard", "voice_corrected", "item_answer", "item_passed_on", "revision_notes")
 
 MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b\.?"
 YEAR = r"(?:19|20)\d{2}"
 DAY = r"\d{1,2}(?:st|nd|rd|th)?"
 # 8 Nov 2026, 8th of November, Nov 8, 2026 and 2026-11-08.
 WRITTEN_DATE = re.compile(rf"\b{DAY}\s+(?:of\s+)?{MONTH}(?:,?\s+{YEAR})?|\b{MONTH}\s+{DAY}\b(?:,?\s+{YEAR})?|\b{YEAR}-\d{{2}}-\d{{2}}\b")
-# A year is four plain digits. With a comma, as in 2,026, it is a quantity.
+# A year is four plain digits. With a comma, as in 2,026, or after a currency mark or before a %, as in ₹1999 and 2000%, it is a quantity.
 YEAR_ONLY = re.compile(YEAR)
+CURRENCY_BEFORE = re.compile(r"(?:₹|(?<![A-Za-z])Rs\.?|[$€£])\s*$")
 # Commas that group thousands, as in 1,200,000 and the Indian 12,34,567.
 GROUPED = re.compile(r"\d{1,3}(?:(?:,\d{3})+|(?:,\d{2})*,\d{3})(?:\.\d+)?")
 DECIMAL = re.compile(r"\d+\.\d+")
@@ -42,7 +43,14 @@ def _normal(token: str) -> str:
 def numbers_in(text: str) -> list[str]:
     # Dates are written by code or are not measures, so neither counts as a number.
     text = WRITTEN_DATE.sub(" ", DATE_TOKEN.sub(" ", text))
-    return list(dict.fromkeys(_normal(token) for token in NUMBER.findall(text) if not YEAR_ONLY.fullmatch(token)))
+    return list(dict.fromkeys(_normal(match.group()) for match in NUMBER.finditer(text) if not _is_year(text, match)))
+
+
+def _is_year(text: str, number: re.Match) -> bool:
+    if not YEAR_ONLY.fullmatch(number.group()):
+        return False
+    money = CURRENCY_BEFORE.search(text, max(0, number.start() - 8), number.start()) is not None
+    return not (money or text.startswith("%", number.end()))
 
 
 def unsourced_numbers(output: str, sources: list[str]) -> list[str]:

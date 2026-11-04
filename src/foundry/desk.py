@@ -48,6 +48,8 @@ FILE_KINDS = {".pptx", ".png", ".jpg", ".jpeg", ".pdf"}
 SIGNOFF = "Approve to deliver this work, or ask for changes."
 NO_SOURCE = "No source found for {numbers} in {name}."
 UNREADABLE = "Could not read {name}, so its numbers were not checked."
+# Those two lines with their blanks left open, so a later round can tell which attention lines this check wrote and which another check did.
+WORK_CHECK_LINE = re.compile("|".join(".+".join(map(re.escape, re.split(r"\{\w+\}", line))) for line in (NO_SOURCE, UNREADABLE)))
 # The card only holds so much, so a file with many unsourced numbers shows the first few.
 MOST_NUMBERS_LISTED = 8
 REPORT_CARD_TITLE = "Report for sign-off"
@@ -408,7 +410,8 @@ class Desk:
         room = self._approval_room(job)
         for path in job.artifacts:
             self.client.post_file(room, path, f"For your sign-off: {Path(path).name}")
-        job.attention = self._attention_for_work(job)
+        # Last round's lines from this check go, because that work has changed. Lines other checks wrote stay.
+        job.attention = [line for line in job.attention if not WORK_CHECK_LINE.fullmatch(line)] + self._attention_for_work(job)
         lines = "\n".join(quiet(line) for line in job.attention)
         self.gate.ask(job, f"Final work: {self._title(job)}", f"{lines}\n\n{SIGNOFF}" if lines else SIGNOFF, room)
         self._sticker(room, "needs_input")
@@ -513,9 +516,17 @@ class Desk:
         stamp = payload.get("timestamp")
         return datetime.fromtimestamp(stamp / 1000, UTC) if stamp is not None else self.clock()
 
-    def _log_person(self, event: dict, kind: str, text: str, ref: str | None = None) -> Entry:
+    def _log_person(self, event: dict, kind: str, text: str, ref: str | None = None, job: Job | None = None) -> Entry:
         payload, room_id = event["payload"], event["room_id"]
-        return self.log.add(self._sent_at(payload), self.settings.bucket_for(room_id), room_id, payload["sender"], kind, text, sender_name=payload.get("sender_name") or "", ref=ref)
+        bucket = job.bucket if job else self.settings.bucket_for(room_id)
+        return self.log.add(self._sent_at(payload), bucket, room_id, payload["sender"], kind, text, sender_name=payload.get("sender_name") or "", job_id=job.id if job else None, ref=ref)
+
+    def _decide(self, job: Job, event: dict) -> None:
+        decision = self.gate.check(job, event)
+        if decision is Decision.REVISE and job.revision_notes:
+            # The approver's own words, kept on the job so a number they ask for counts as sourced. A reviewer's notes never come this way.
+            self._log_person(event, "revision_notes", job.revision_notes, job=job)
+        self._apply(job, decision)
 
     def _with_voice_as_text(self, event: dict) -> dict | None:
         payload = event["payload"]
@@ -559,7 +570,7 @@ class Desk:
         theirs = [job for job in waiting if job.approver == sender]
         for job in theirs:
             if job.approval["awaiting_notes"]:
-                self._apply(job, self.gate.check(job, event))
+                self._decide(job, event)
                 return True
         if parse_reply(text, self.gate.extra_words) is Decision.NONE:
             return False
@@ -573,7 +584,7 @@ class Desk:
             self.client.post_message(room_id, USE_THE_BUTTONS)
         elif theirs or waiting:
             job = theirs[0] if theirs else waiting[-1]
-            self._apply(job, self.gate.check(job, event))
+            self._decide(job, event)
         return True
 
     def _handle_outcome(self, outcome: Outcome) -> None:
