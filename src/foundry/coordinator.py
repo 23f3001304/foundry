@@ -1,6 +1,7 @@
 """Turns a brief into a list of who owes what, shows it on the brief card, asks each person once and reads what they say back. Internal mode only."""
 
 import logging
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,7 @@ from foundry.cleanup import format_date
 from foundry.items import IN, Item, ItemState, ItemStore, Owed, parse_owes, status_line
 from foundry.jobs import Job, JobStore, State
 from foundry.log import Entry, Log, Writer
-from foundry.reading import Reading, asks_for_status, might_be_status, read_message
+from foundry.reading import Reading, asks_for_status, is_short_ask, might_be_status, read_message
 from foundry.switch_client import DESK_NAME, SwitchClient
 from foundry.text import headline, quiet
 
@@ -43,6 +44,7 @@ ANSWER_NOTED = "Got it. {input}: {value}."
 PASSED_ON_NOTED = "Got it. {input}: {value}, as passed on by {asker}."
 REASON_NOTED = "Noted. It shows in the status, and I won't ask again unless the asker does."
 WHICH = "{owner}, which one is that for: {options}? Say its name."
+WHO = "{owner}, who is that from: {options}? Say their name."
 ONLY_THE_ASKER = "Only the person who asked can pass an answer on, so I haven't used that."
 NOT_YOURS = "Only the person who asked, or the person it was asked of, can hand this to someone else, so I haven't changed anything."
 AWAY = "away"
@@ -132,8 +134,12 @@ def _join(names: list[str]) -> str:
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
 
 
+def _names_another(reading: Reading, candidates: list[Item]) -> bool:
+    # A model that names an item outside the candidates has the wrong person, so the reply is not theirs to answer and is not read at all.
+    return reading.item_id is not None and all(item.id != reading.item_id for item in candidates)
+
+
 def _pick(reading: Reading, candidates: list[Item]) -> Item | None:
-    # Only one of the candidates, so a model that names someone else's item gets nowhere near it.
     named = next((item for item in candidates if item.id == reading.item_id), None)
     if named is not None:
         return named
@@ -154,6 +160,8 @@ class _Heard:
     open_here: list[Item]
     # They were already asked which one, so they are not asked again.
     again: bool
+    # What the reader was shown: the burst, with anything they said before being asked which.
+    text: str
 
 
 class Coordinator:
@@ -304,10 +312,11 @@ class Coordinator:
         listed = [*own, *(item for item in open_here if item.id not in {mine.id for mine in own})][:MOST_ITEMS_LISTED]
         names = [_name(writer) for writer in self._writers(bucket)[:MOST_PEOPLE_LISTED]]
         text = f"{earlier}\n{burst.text}" if earlier else burst.text
-        reading = read_message(text, listed, names, self._name_of(burst.sender, bucket), self.llm, self.clock().astimezone(self._zone()).date())
+        titles = {job.id: self._headline(job) for job in map(self._job_of, listed) if job is not None}
+        reading = read_message(text, listed, names, self._name_of(burst.sender, bucket), self.llm, self.clock().astimezone(self._zone()).date(), titles)
         handlers = {"answer": self._answer, "reason": self._reason, "passed_on": self._passed_on, "unavailable": self._away, "replace": self._replace, "status": self._status}
         handler = handlers.get(reading.kind)
-        return handler is not None and handler(_Heard(burst, bucket, reading, own, open_here, bool(earlier)))
+        return handler is not None and handler(_Heard(burst, bucket, reading, own, open_here, bool(earlier), text))
 
     def tell_stage(self, burst: Burst) -> bool:
         # A client who asks where their work is gets its stage and nothing else, read by code. No model sees an agency room's messages for this.
@@ -328,7 +337,8 @@ class Coordinator:
             return
         heard, entries = card.data.get("heard", ""), card.data.get("entries", [])
         self.log.add(at, card.bucket, card.room_id, card.person, "voice_confirmed", heard, job_id=item.job_id, item_id=item.id, ref=_ids(entries))
-        if card.data.get("value") is not None:
+        # They did hear it right, but the item was handed to someone else or gone without since, and a late Right does not answer it again.
+        if item.state is not ItemState.SKIPPED and card.data.get("value") is not None:
             self._record(
                 item, card.data["value"], datetime.fromisoformat(card.data["at"]), card.room_id, confidence=card.data.get("confidence"), said=heard, typed=False, by=card.data.get("by"),
             )
@@ -341,7 +351,7 @@ class Coordinator:
             self.items.save(item)
 
     def _answer(self, heard: _Heard) -> bool:
-        if not heard.own:
+        if not heard.own or _names_another(heard.reading, heard.own):
             return False
         item = _pick(heard.reading, heard.own)
         if item is None:
@@ -351,7 +361,7 @@ class Coordinator:
 
     def _reason(self, heard: _Heard) -> bool:
         pool = [item for item in heard.own if item.state is ItemState.OPEN]
-        if not pool:
+        if not pool or _names_another(heard.reading, pool):
             return False
         item = _pick(heard.reading, pool)
         if item is None:
@@ -375,7 +385,11 @@ class Coordinator:
             return True
         if not mine:
             return False
-        matches = [item for item in mine if _owned_by(item, reading.person)] or mine
+        owners = [item for item in mine if _owned_by(item, reading.person)]
+        if reading.person and (not owners or (named is not None and named.id not in {item.id for item in owners})):
+            # The name is nobody who owes anything here, or not the owner of the item named. Closing either would be a guess, so nothing is.
+            return self._ask_who(heard, mine)
+        matches = owners or mine
         item = named or (matches[0] if len(matches) == 1 else None)
         if item is None:
             return self._ask_which(heard, matches)
@@ -393,15 +407,12 @@ class Coordinator:
         else:
             # Said of someone else, it applies to the job they most recently owe something for and no other.
             items = [item for item in heard.open_here if _owned_by(item, reading.person)]
-            writer = _writer_named(self._writers(heard.bucket), reading.person)
-            if items:
-                job_id = items[-1].job_id
-                items = [item for item in items if item.job_id == job_id]
-                who, name = items[0].owner or items[0].owner_name, items[0].owner_name
-            elif writer is not None:
-                who, name = writer.sender, _name(writer)
-            else:
+            if not items:
+                # Nothing is owed by them, so there is nothing to follow, and what was written may be a note with a name in it.
                 return False
+            job_id = items[-1].job_id
+            items = [item for item in items if item.job_id == job_id]
+            who, name = items[0].owner or items[0].owner_name, items[0].owner_name
             reason = AWAY_PER.format(away=away, speaker=speaker)
         # A reason stops the one reminder and shows in the status, and the item stays open.
         for item in items:
@@ -443,6 +454,9 @@ class Coordinator:
         return True
 
     def _status(self, heard: _Heard) -> bool:
+        # Only a short question gets a status. A longer message may be a note with a question in it, and a note is never swallowed.
+        if not (might_be_status(heard.burst.text) and is_short_ask(heard.burst.text)):
+            return False
         named = next((item for item in [*heard.own, *heard.open_here] if item.id == heard.reading.item_id), None)
         job = self._job_of(named) if named is not None else None
         shown = [job] if job is not None else self._jobs_in_progress(heard.bucket)[:MOST_JOBS_SHOWN]
@@ -461,8 +475,11 @@ class Coordinator:
         line = status_line(asked)
         return f"{title}: {line}." if job.state is State.COLLECTING else f"{title}: {stage}. {line}."
 
+    def _headline(self, job: Job) -> str:
+        return headline(job.brief or "this job").rstrip(".")
+
     def _title(self, job: Job) -> str:
-        return quiet(headline(job.brief or "this job").rstrip("."))
+        return quiet(self._headline(job))
 
     def _accept(self, heard: _Heard, item: Item, value: str, by: str | None = None) -> None:
         burst = heard.burst
@@ -470,7 +487,7 @@ class Coordinator:
         if burst.language:
             self._hold(heard, item, value, by)
             return
-        self._record(item, value, burst.first_at, burst.room_id, confidence=heard.reading.confidence, said=burst.text, typed=True, by=by)
+        self._record(item, value, burst.first_at, burst.room_id, confidence=heard.reading.confidence, said=heard.text, typed=True, by=by)
         self._close_voice_cards(item)
         if by is None:
             self.client.post_message(burst.room_id, ANSWER_NOTED.format(input=quiet(item.input), value=quiet(value)))
@@ -578,13 +595,28 @@ class Coordinator:
             self.cards.finish(card.request_id, CLOSED)
 
     def _ask_which(self, heard: _Heard, options: list[Item]) -> bool:
+        return self._ask_once(heard, WHICH, self._labels(options))
+
+    def _ask_who(self, heard: _Heard, options: list[Item]) -> bool:
+        owners = (quiet(_one_line(self._owner_name(item) or f"whoever owes {item.input}")) for item in options)
+        return self._ask_once(heard, WHO, list(dict.fromkeys(owners)))
+
+    def _ask_once(self, heard: _Heard, template: str, options: list[str]) -> bool:
         # Asked once. What they said is kept and read again with their reply, and if that is still unclear nothing more is asked.
         if not heard.again:
             burst = heard.burst
             self._asked_which[(burst.sender, heard.bucket)] = (burst.first_at, burst.text)
-            inputs = list(dict.fromkeys(quiet(_one_line(item.input)) for item in options))
-            self.client.post_message(burst.room_id, WHICH.format(owner=quiet(self._name_of(burst.sender, heard.bucket)), options=_join(inputs)))
+            self.client.post_message(burst.room_id, template.format(owner=quiet(self._name_of(burst.sender, heard.bucket)), options=_join(options)))
         return True
+
+    def _labels(self, options: list[Item]) -> list[str]:
+        # An input is named by its text. When two items ask for the same text, the job says which is which.
+        same = Counter(_key(item.input) for item in options)
+        labels = []
+        for item in options:
+            job = self._job_of(item) if same[_key(item.input)] > 1 else None
+            labels.append(quiet(_one_line(f"{item.input} ({self._headline(job)})" if job is not None else item.input)))
+        return list(dict.fromkeys(labels))
 
     def _earlier_unclear(self, burst: Burst, bucket: str) -> str:
         asked = self._asked_which.pop((burst.sender, bucket), None)

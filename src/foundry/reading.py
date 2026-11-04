@@ -3,7 +3,7 @@
 import json
 import logging
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 
@@ -25,6 +25,9 @@ LONE_STATUS = re.compile(
     r"|(?:is|are)\s+(?:the|my|our)\s+[^.!?]{1,60}?\s+(?:ready|done|finished)(?:\s+yet)?",
     re.IGNORECASE,
 )
+# A status question is one short sentence. Anything longer may be a note that has a question in it, and a note must never be lost to a reading.
+MOST_STATUS_WORDS = 12
+SENTENCE_BREAK = re.compile(r"[.!?]\s|\n")
 REPLY_TAG = re.compile(r"</?reply>", re.IGNORECASE)
 PROMPT = """You read one reply in a work chat for a business. People were asked to send inputs. Decide what the reply is.
 
@@ -75,6 +78,11 @@ def might_be_status(text: str) -> bool:
     return STATUS_WORDS.search(text) is not None or ("?" in text and STATUS_ENDINGS.search(text) is not None)
 
 
+def is_short_ask(text: str) -> bool:
+    asked = text.strip().rstrip("?!. ")
+    return 0 < len(asked.split()) <= MOST_STATUS_WORDS and SENTENCE_BREAK.search(asked) is None
+
+
 def asks_for_status(text: str) -> bool:
     return LONE_STATUS.fullmatch(text.strip().rstrip("?!. ").strip()) is not None
 
@@ -84,15 +92,19 @@ def _line(text: str | None) -> str:
     return quiet(" ".join((text or "").split()))
 
 
-def _item_line(number: int, item: Item) -> str:
+def _item_line(number: int, item: Item, titles: Mapping[str, str]) -> str:
     line = f"#{number} | {_line(item.owner_name) or 'nobody named'} | {_line(item.input)} | {_line(item.measure)}"
+    # The same owner can owe the same input in two jobs, and only the job tells them apart.
+    line = f"{line} | job: {_line(titles[item.job_id])}" if item.job_id in titles else line
     return f"{line} | already answered: {_line(item.answer)}" if item.state in IN else line
 
 
-def read_message(text: str, open_items: Iterable[Item], people: Iterable[str], sender: str, llm: Callable[[str], str], today: date | None = None) -> Reading:
+def read_message(
+    text: str, open_items: Iterable[Item], people: Iterable[str], sender: str, llm: Callable[[str], str], today: date | None = None, titles: Mapping[str, str] | None = None,
+) -> Reading:
     items = list(open_items)
     prompt = PROMPT.format(
-        items="\n".join(_item_line(number, item) for number, item in enumerate(items, start=1)) or "(none)",
+        items="\n".join(_item_line(number, item, titles or {}) for number, item in enumerate(items, start=1)) or "(none)",
         people=", ".join(_line(person) for person in people) or "(nobody yet)",
         today=f"Today is {today:%A}, {today.isoformat()}. " if today else "",
         sender=_line(sender),
