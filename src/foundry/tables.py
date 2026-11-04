@@ -24,7 +24,7 @@ MOST_ROWS_READ = 50_000
 MOST_EMPTY_ROWS = 1000
 DELIMITERS = ",;\t"
 NOT_A_TABLE = "I can read {kinds} files, not {name}."
-NO_FILE = "There is no file at {path}."
+NO_FILE = "There is no file named {name}."
 NO_ROWS = "{name} has no rows."
 TOO_MANY_ROWS = "{name} has more than {most} rows, which is too many to read."
 NOT_TEXT = "{name} is not a text file I can read."
@@ -92,13 +92,21 @@ def is_under(text: str, folder: Path | str) -> bool:
     A path on another machine, written \\\\server\\share or //server/share, is never under a folder here. Asking the system to resolve one contacts the server it names,
     which stalls the desk, and gives a server somebody else controls a sign-in handshake. So every check that goes on to resolve a path asks this first.
     """
-    if text.startswith(("\\\\", "//")):
+    if _on_the_network(text):
         return False
     try:
-        path, root = os.path.normcase(os.path.normpath(text)), os.path.normcase(os.path.abspath(folder))
-        return os.path.isabs(text) and path.startswith(root + os.sep)
+        path = os.path.normcase(os.path.normpath(text))
+        # The folder is set by whoever runs the desk, so it is safe to ask where it really is. The desk keeps its files at that real place, and a folder reached
+        # through a junction, a link or a short name is written in the setting one way and in the log another. A folder on a share is never asked, and the answer never is.
+        roots = {os.path.abspath(folder)} | ({os.path.realpath(folder)} if not _on_the_network(str(folder)) else set())
+        return os.path.isabs(text) and any(path.startswith(os.path.normcase(root) + os.sep) for root in roots)
     except ValueError:
         return False
+
+
+def _on_the_network(text: str) -> bool:
+    # Either slash begins the same network path, so \\host, //host, /\host and \/host are one thing.
+    return text.replace("\\", "/").startswith("//")
 
 
 def is_file_answer(text: str, inputs_dir: Path | str | None, bucket: str, job_id: str | None) -> bool:
@@ -120,9 +128,10 @@ def read_file(source: Path | str) -> Table:
     kind = path.suffix.lower()
     if kind not in TABLE_KINDS:
         raise MakerError(NOT_A_TABLE.format(kinds=" and ".join(TABLE_KINDS), name=path.name))
-    if not path.is_file():
-        raise MakerError(NO_FILE.format(path=source))
     try:
+        # Asking whether it is there can be refused too, and a refusal is told like any other file that cannot be opened.
+        if not path.is_file():
+            raise MakerError(NO_FILE.format(name=path.name))
         table = _read_csv(path) if kind == ".csv" else _read_xlsx(path)
     except OSError as error:
         # A file another program holds open, or a disk that fails, is told in plain words like any other file that cannot be read.

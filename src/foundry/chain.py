@@ -231,21 +231,22 @@ def _parse(target: str, paths: Collection[str]) -> Target:
     raise ValueError(NOT_A_TARGET.format(target=target))
 
 
-def _flag_text(target: Target, said: Entry | None, known: dict[str, str]) -> str:
+def _flag_text(target: Target, said: Entry | None, known: dict[str, str], inputs_dir: Path | str | None = None) -> str:
     name = Path(target.path).name
     if said is not None:
-        words = " ".join(said.text.split())
+        # A file somebody sent is named by its name, because the flag is read by people and the folder it is kept in is not for them.
+        words = " ".join(shown_words(said, inputs_dir).split())
         return f"Flagged what {name_of(said, known)} said: {words if len(words) <= MOST_FLAGGED_TEXT else words[:MOST_FLAGGED_TEXT].rstrip() + '...'}"
     return {FILE: f"Flagged {name}", TEXT: f"Flagged {target.needle} in {name}"}[target.kind]
 
 
-def flag(log: Log, bucket: str, by: str, target: str, job_id: str, room_id: str, at: datetime) -> Entry:
+def flag(log: Log, bucket: str, by: str, target: str, job_id: str, room_id: str, at: datetime, inputs_dir: Path | str | None = None) -> Entry:
     # The log only grows, so a flag that points at nothing is refused rather than kept.
     found = _parse(target, _made_paths(log.for_job(bucket, job_id)))
     said = log.get(bucket, found.entry) if found.kind == ENTRY else None
     if found.kind == ENTRY and said is None:
         raise ValueError(NOT_A_TARGET.format(target=target))
-    return log.add(at, bucket, room_id, by, "flag", _flag_text(found, said, names(log, bucket)), job_id=job_id, ref=target)
+    return log.add(at, bucket, room_id, by, "flag", _flag_text(found, said, names(log, bucket), inputs_dir), job_id=job_id, ref=target)
 
 
 # The chain

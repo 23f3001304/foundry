@@ -1595,7 +1595,7 @@ class Desk:
             # Any entry of the bucket would let someone walk the log one number at a time.
             raise Refused(NOT_IN_THIS_JOB)
         try:
-            flagged = flag(self.log, job.bucket, command.acts_as, target, job.id, job.room_id, self.clock())
+            flagged = flag(self.log, job.bucket, command.acts_as, target, job.id, job.room_id, self.clock(), self.settings.inputs_dir)
         except ValueError as error:
             raise Refused(str(error)) from None
         self._log_dashboard(command, job.bucket, job.room_id, LOG_FLAGGED.format(flagged=flagged.text, via=VIA_DASHBOARD), job.id, str(flagged.id))

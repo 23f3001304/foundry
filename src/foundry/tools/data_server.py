@@ -64,8 +64,10 @@ NO_ORDER_FORM = (
     "I cannot put the rows in order by {column}: {cell} says {text!r}, which is not a form I read. "
     "I read dates like 2026-11-03, months like Jan 2026, January 2026 or Jan-26, quarters like 2026-Q3, Q3 2026 or Q4'25, "
     "financial-year quarters like Q1 FY26 or Q1 FY2026, whole years and numbers. "
-    "A date written like 15/01/2026 is not read, because whether the day or the month comes first is a guess."
+    "A date written like 15/01/2026 is not read, because whether the day or the month comes first is a guess, "
+    "and neither is a month with a day, like Jan 28, because a number after a month and a space is not a year."
 )
+SAME_PERIOD = "There is more than one row for {periods}. Rows for one period keep the order they have in the file, so which comes last is a guess. Check the growth means what you want."
 SHOWN_SOME = "Showing the first {shown} of {total} rows. calculate works on all of them."
 UNSAVED_CELL = "{cell} is a formula with no saved value"
 UNSAVED_NOTE = UNSAVED_CELL + ". Open the file in a spreadsheet program and save it, so its result is stored."
@@ -98,6 +100,12 @@ TITLE_WIDTH, TITLE_LINE = 45, 0.085
 def _clean(text: str) -> str:
     # What people wrote must not wake an agent when a tool hands it on. It is done once, on the way out, because quieting twice would break the mention twice.
     return quiet(text)
+
+
+def _brief(text: str) -> str:
+    # What people wrote, quieted, and cut short where it would run on, for a message that names a cell or a column.
+    text = _clean(text)
+    return text if len(text) <= MOST_CELL_CHARS else text[:MOST_CELL_CHARS] + "..."
 
 
 def _one_line(text: str) -> str:
@@ -215,7 +223,7 @@ def _shown(cell: object) -> object:
 @mcp.tool()
 def read_table(token: str, source: str) -> dict:
     """Read a table. token is your log token. source is one of three things, and anything else is refused:
-    answers: followed by your log token, for what people gave this job; the absolute path of a file someone sent this job as an answer, which job_facts shows;
+    answers: followed by your log token, for what people gave this job; the file name of a file someone sent this job as an answer, such as Team_Lead_B-q3.csv, which job_facts shows;
     or the absolute path of a CSV or XLSX file in the sources folder of this client's brand folder.
 
     The first row is the headings. Answers come as rows of owner, measure, value and entry, where entry is the log entry's number.
@@ -257,7 +265,8 @@ def _year(text: str) -> int:
 # The periods a column can be put in order by, each read within its own form. A financial year is ordered against other financial years, and never against the calendar.
 PERIODS = (
     ("date", re.compile(r"(\d{4})-(\d{2})(?:-(\d{2}))?(?:[T ].*)?"), lambda found: (int(found[1]), int(found[2]), int(found[3] or 0))),
-    ("month", re.compile(rf"{MONTH}\.?[\s\-/']*{YEAR}", re.IGNORECASE), lambda found: (_year(found[2]), MONTHS[found[1][:3].lower()])),
+    # Four digits are a year however they follow the month. Two are a year only after a dash, an apostrophe or a slash, because Jan 28 is a day and not 2028.
+    ("month", re.compile(rf"{MONTH}\.?(?:\s*(\d{{4}})|\s*[-/']\s*(\d{{4}}|\d{{2}}))", re.IGNORECASE), lambda found: (_year(found[2] or found[3]), MONTHS[found[1][:3].lower()])),
     ("financial quarter", re.compile(rf"Q([1-4])[\s\-']*FY\s*{YEAR}|FY\s*{YEAR}[\s\-]*Q([1-4])", re.IGNORECASE), lambda found: (_year(found[2] or found[3]), int(found[1] or found[4]))),
     ("quarter", re.compile(rf"(\d{{4}})[\s\-]*Q([1-4])|Q([1-4])[\s\-']*{YEAR}", re.IGNORECASE), lambda found: (_year(found[1] or found[4]), int(found[2] or found[3]))),
 )
@@ -292,12 +301,27 @@ def _descending_periods(table: Table, used: list[Used]) -> bool:
     return all(earlier >= later for earlier, later in zip(values, values[1:])) and any(earlier > later for earlier, later in zip(values, values[1:]))
 
 
-def _in_order(column: str, used: list[Used]) -> list[Used]:
+def _in_order(table: Table, order_position: int, used: list[Used]) -> tuple[list[Used], list[str]]:
     # Oldest to newest, or smallest to largest. A column that mixes dates with words has no order, and saying so beats guessing one.
     kinds = {item.order[0] for item in used}
     if len(kinds) > 1:
-        raise MakerError(NO_ORDER_AT_ALL.format(column=column, kinds=" and ".join(sorted(kinds))))
-    return sorted(used, key=lambda item: item.order[1])
+        raise MakerError(NO_ORDER_AT_ALL.format(column=table.columns[order_position], kinds=" and ".join(sorted(kinds))))
+    # Two rows for one period keep the order they have in the file, and the sort is stable. Which comes last is then a guess, so it is said.
+    # Within a group, because two groups each having a January is how a table of groups is meant to look.
+    first_written: dict[tuple, str] = {}
+    twice: list[str] = []
+    for item in used:
+        place = (item.group, item.order)
+        label = _brief(words(item.row.cells[order_position])) + (f" ({item.group})" if item.group is not None else "")
+        if place not in first_written:
+            first_written[place] = label
+        elif first_written[place] not in twice:
+            twice.append(first_written[place])
+    warnings = []
+    if twice:
+        listed = ", ".join(twice[:MOST_LISTED]) + (f", and {len(twice) - MOST_LISTED} more" if len(twice) > MOST_LISTED else "")
+        warnings.append(SAME_PERIOD.format(periods=listed))
+    return sorted(used, key=lambda item: item.order[1]), warnings
 
 
 def _out(value: Decimal) -> int | float:
@@ -310,8 +334,7 @@ def _left_out(table: Table, row: Row, position: int) -> str:
         return UNSAVED_CELL.format(cell=place)
     if cell is None:
         return f"{place} is blank"
-    text = _clean(str(cell))
-    return f"{place} says {(text if len(text) <= MOST_CELL_CHARS else text[:MOST_CELL_CHARS] + '...')!r}, which is not a number"
+    return f"{place} says {_brief(str(cell))!r}, which is not a number"
 
 
 def _gather(table: Table, position: int, group_position: int | None, order_position: int | None = None) -> tuple[list[Used], list[str]]:
@@ -334,7 +357,7 @@ def _gather(table: Table, position: int, group_position: int | None, order_posit
             left_out.append(NO_ORDER.format(cell=address(row.number, order_position), column=table.columns[order_position]))
             continue
         if order is not None and order[0] == "unreadable":
-            raise MakerError(NO_ORDER_FORM.format(column=table.columns[order_position], cell=address(row.number, order_position), text=order[1]))
+            raise MakerError(NO_ORDER_FORM.format(column=_brief(table.columns[order_position]), cell=address(row.number, order_position), text=_brief(order[1])))
         used.append(Used(row, number, group, order))
     return used, left_out
 
@@ -413,7 +436,8 @@ def calculate(token: str, source: str, operation: str, column: str, group_by: st
     growth is the percent change, rounded to two places, from the first number in the column to the last. First and last are in the order of the rows in the file,
     or in the order of the order_by column when you give one: oldest to newest for dates, months, quarters and years, smallest to largest for numbers. Give order_by whenever the rows might not be oldest first.
     order_by reads dates like 2026-11-03, months like Jan 2026, January 2026 or Jan-26, quarters like 2026-Q3, Q3 2026 or Q4'25, financial-year quarters like Q1 FY26, whole years and numbers.
-    It refuses anything else, including 15/01/2026, because which of the day and the month comes first is a guess.
+    It refuses anything else, including 15/01/2026, because which of the day and the month comes first is a guess, and Jan 28, because that is a day and not a year.
+    Two rows for one period keep their order in the file, and a warning names the period.
     column is the column of numbers. group_by is optional: it splits total, average and growth by that column, and makes rank rank the groups by their total.
     Groups whose names differ only in capitals or spacing are one group. With no group_by, rank ranks the rows, named by the first column.
     A cell with no number, whether blank, words or a formula with no saved result, is left out and named in left_out, and the same goes in warning.
@@ -437,7 +461,8 @@ def calculate(token: str, source: str, operation: str, column: str, group_by: st
         raise MakerError(NO_NUMBERS.format(column=table.columns[position], why="; ".join(left_out[:MOST_LISTED])))
     warnings = []
     if operation == "growth" and order_position is not None:
-        used = _in_order(table.columns[order_position], used)
+        used, same_period = _in_order(table, order_position, used)
+        warnings += same_period
     elif operation == "growth" and position != 0 and _descending_periods(table, used):
         warnings.append(GROWTH_BACKWARDS.format(column=table.columns[0]))
     groups: dict[str | None, list[Used]] = {}
@@ -486,8 +511,9 @@ def _result_text(result: object) -> str:
 
 
 def _no_mark(text: str) -> str:
-    # The names before the result are written without the mark that comes before it, so that the first mark in an entry is always that one.
-    return text.replace(RESULT, " - ")
+    # The names before the result are written without any = in them, so that the first mark in an entry is always the one before the result.
+    # Taking out only the whole mark left "net = = 777" with a mark made of the two = on either side of the space it was replaced by.
+    return text.replace("=", "-")
 
 
 def _log_calculation(job: Job, log: Log, answer: dict, source_name: str, table: Table, shown: list[Used]) -> None:

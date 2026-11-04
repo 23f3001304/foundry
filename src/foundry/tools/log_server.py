@@ -8,6 +8,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from foundry.chain import Step, chain_for, name_of, names, visible_entries
+from foundry.checks import shown_words
 from foundry.items import Item, ItemStore, status_line
 from foundry.jobs import Job, JobStore
 from foundry.log import Entry, Log
@@ -59,8 +60,9 @@ def _text(text: str) -> str:
     return json.dumps(quiet(text), ensure_ascii=False)
 
 
-def _entry_line(entry: Entry, known: dict[str, str]) -> str:
-    return f"[{entry.id}] {_when(entry.at)} | {_one_line(name_of(entry, known))} | {entry.kind} | {_text(entry.text)}"
+def _entry_line(entry: Entry, known: dict[str, str], inputs_dir: str | None = None) -> str:
+    # A file somebody sent is shown by its name, and a model is never told the folder it is kept in.
+    return f"[{entry.id}] {_when(entry.at)} | {_one_line(name_of(entry, known))} | {entry.kind} | {_text(shown_words(entry, inputs_dir))}"
 
 
 def _item_line(item: Item) -> str:
@@ -86,7 +88,9 @@ def job_facts(token: str) -> str:
         return "\n".join([AS_DATA, NOTHING_YET])
     known = names(log, job.bucket)
     # What the tool says about its own lines comes first, because everything under the heading is data.
-    return "\n".join([GIVE_THE_ENTRY, AS_DATA, *(_entry_line(entry, known) for entry in entries)])
+    # With no inputs folder named, no path is a file, which is the careful way for it to fail.
+    inputs = os.environ.get("FOUNDRY_INPUTS_DIR") or None
+    return "\n".join([GIVE_THE_ENTRY, AS_DATA, *(_entry_line(entry, known, inputs) for entry in entries)])
 
 
 @mcp.tool()

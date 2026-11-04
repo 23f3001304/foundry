@@ -96,19 +96,21 @@ def _line(text: str | None) -> str:
     return quiet(" ".join((text or "").split()))
 
 
-def _item_line(number: int, item: Item, titles: Mapping[str, str]) -> str:
+def _item_line(number: int, item: Item, titles: Mapping[str, str], answers: Mapping[str, str]) -> str:
     line = f"#{number} | {_line(item.owner_name) or 'nobody named'} | {_line(item.input)} | {_line(item.measure)}"
     # The same owner can owe the same input in two jobs, and only the job tells them apart.
     line = f"{line} | job: {_line(titles[item.job_id])}" if item.job_id in titles else line
-    return f"{line} | already answered: {_line(item.answer)}" if item.state in IN else line
+    # An answer is shown as the caller says it is, which for a file is its name, because the folder it is kept in is not for a model to be told.
+    return f"{line} | already answered: {_line(answers.get(item.id, item.answer))}" if item.state in IN else line
 
 
 def read_message(
     text: str, open_items: Iterable[Item], people: Iterable[str], sender: str, llm: Callable[[str], str], today: date | None = None, titles: Mapping[str, str] | None = None,
+    answers: Mapping[str, str] | None = None,
 ) -> Reading:
     items = list(open_items)
     prompt = PROMPT.format(
-        items="\n".join(_item_line(number, item, titles or {}) for number, item in enumerate(items, start=1)) or "(none)",
+        items="\n".join(_item_line(number, item, titles or {}, answers or {}) for number, item in enumerate(items, start=1)) or "(none)",
         people=", ".join(_line(person) for person in people) or "(nobody yet)",
         today=f"Today is {today:%A}, {today.isoformat()}. " if today else "",
         sender=_line(sender),

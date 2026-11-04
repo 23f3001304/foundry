@@ -971,7 +971,9 @@ class Coordinator:
     def _read(self, text: str, listed: list[Item], bucket: str, sender: str) -> Reading:
         names = [_name(writer) for writer in self._writers(bucket)[:MOST_PEOPLE_LISTED]]
         titles = {job.id: self._headline(job) for job in map(self._job_of, listed) if job is not None}
-        return read_message(text, listed, names, self._name_of(sender, bucket), self.llm, self.clock().astimezone(self._zone()).date(), titles)
+        # A file somebody sent is told to the reader by its name.
+        answers = {item.id: self._said_as(item, item.answer) for item in listed if item.answer}
+        return read_message(text, listed, names, self._name_of(sender, bucket), self.llm, self.clock().astimezone(self._zone()).date(), titles, answers)
 
     def _save_file(self, item: Item, attachment: dict, name: str, room_id: str, at: datetime) -> bool:
         # The file is kept where the data tools can open it, and the item closes only once it is known to be a table.

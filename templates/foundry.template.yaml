@@ -135,7 +135,7 @@ resources:
       numbers yourself: call calculate, and call read_table to look at a table first. Both take your
       log token first. Then the table is one of three things, and any other file is refused: answers:
       followed by your log token, for what people gave this job; a file someone sent this job as an
-      answer, by its file name, or by the path job_facts shows; or a CSV or XLSX file in the sources
+      answer, by its file name as job_facts lists it; or a CSV or XLSX file in the sources
       folder of this client's brand folder. Every result lists the rows it came from, and calculate
       records its result on the job, so a figure it worked out is counted as backed. When it says it
       left out a cell, or gives any warning, say so wherever you use the result. draw_chart draws a bar, line or pie chart in the brand's colours, and
@@ -176,7 +176,7 @@ resources:
       The foundry-data tool does the arithmetic in code. Never add up, average, rank or compare
       numbers yourself: call calculate, and call read_table to look at a table first. Both take your
       log token first. Then the table is answers: followed by your log token, a file someone sent this
-      job as an answer, by its file name or by the path job_facts shows, or a CSV or XLSX file in the
+      job as an answer, by its file name as job_facts lists it, or a CSV or XLSX file in the
       sources folder of this client's brand folder. Any other file is refused. calculate records its
       result on the job, so a figure it worked out is counted as backed. When it says it left out a
       cell, or gives any warning, say so. Write on a graphic only a number a tool result or a log entry gave.
