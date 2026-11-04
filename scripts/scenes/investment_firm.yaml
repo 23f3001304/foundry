@@ -69,10 +69,10 @@ steps:
     room: office-c
     file: data/office-c-q2-fy27.csv
     wait_for: {text: "I saved", timeout: 180}
-  # Every office has answered, so the makers start. The deck's charts are to be worked out by code, and the reviewer checks the deck. The final card is meant to name Office E's figure.
+  # Every office has answered, so the makers start. The wait is for the whole of the check's wording, because the brief agent quotes the kit's "far from the others". The deck's charts are to be worked out by code, and the reviewer checks the deck. The final card is meant to name Office E's figure.
   - as: Analyst Lead
     room: analysts
-    wait_for: {text: "far from the others", timeout: 2700}
+    wait_for: {text: "far from the others given for this measure", timeout: 2700}
   - as: Analyst Lead
     room: analysts
     press: Approve
