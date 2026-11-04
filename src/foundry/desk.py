@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import re
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta, timezone
@@ -14,14 +15,14 @@ import httpx
 from foundry.buffer import Burst, MessageBuffer
 from foundry.cleanup import CleanupFailed, ReportStore, clean_note, signoff_detail
 from foundry.brand import BrandError
-from foundry.delivery import deliver, deliver_report
+from foundry.delivery import DELIVERED, deliver, deliver_report
 from foundry.gates import Decision, Gate, parse_reply, resolve_approver
 from foundry.intake import Kind, classify
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
 from foundry.pack import Pack, load_pack
 from foundry.stickers import branded_sticker, sticker_for
 from foundry.switch_client import Outcome, SwitchClient
-from foundry.voice import Transcript, VoiceError, transcribe
+from foundry.voice import Transcript, VoiceError, speak, transcribe, translate
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +168,8 @@ class Desk:
         settings: Settings,
         transcriber: Callable[[bytes, str], Transcript] = transcribe,
         cleanup_llm: Callable[[str], str] | None = None,
+        speaker: Callable[[str, str], bytes | None] = speak,
+        translator: Callable[[str, str], str] = translate,
     ) -> None:
         self.clock = lambda: datetime.now(UTC)
         self.client = client
@@ -176,6 +179,8 @@ class Desk:
         self.settings = settings
         self.transcriber = transcriber
         self.cleanup_llm = cleanup_llm
+        self.speaker = speaker
+        self.translator = translator
         self.buffer = MessageBuffer(settings.buffer_path, settings.quiet_seconds)
         self.reports = ReportStore(settings.reports_path)
 
@@ -352,8 +357,10 @@ class Desk:
         if job.kind == "report":
             deliver_report(job, self.client, self._report_rooms(job))
             self.reports.add(job.room_id, job.report)
+            self._reply_aloud(job, job.report)
         else:
             deliver(job, self.client, job.room_id)
+            self._reply_aloud(job, DELIVERED)
         self._sticker(job.room_id, "shipped")
         if clean_run:
             self._sticker(job.room_id, "celebrate")
@@ -363,6 +370,33 @@ class Desk:
         named = self.settings.pack_for(job.room_id).report_room
         other = {"studio": rooms.studio, "review": rooms.review}.get(named, named)
         return list(dict.fromkeys(room for room in (job.room_id, other) if room))
+
+    def _reply_aloud(self, job: Job, text: str) -> None:
+        if job.language:
+            self._reply(job, text)
+
+    def _reply(self, job: Job, text: str) -> None:
+        # Someone who spoke hears the answer in their own language, with the words beside it.
+        if not job.language:
+            self.client.post_message(job.room_id, text)
+            return
+        try:
+            words = self.translator(text, job.language)
+        except VoiceError as error:
+            logger.warning("Could not translate a reply: %s", error)
+            self.client.post_message(job.room_id, text)
+            return
+        try:
+            audio = self.speaker(words, job.language)
+            if audio is not None:
+                with tempfile.TemporaryDirectory() as folder:
+                    path = Path(folder) / "reply.wav"
+                    path.write_bytes(audio)
+                    self.client.post_file(job.room_id, path, words)
+                return
+        except (VoiceError, httpx.HTTPError) as error:
+            logger.warning("Could not send a spoken reply: %s", error)
+        self.client.post_message(job.room_id, words)
 
     def _sticker_path(self, room_id: str, event: str) -> Path | None:
         brand = self.settings.brands.get(room_id)
@@ -389,14 +423,17 @@ class Desk:
             return event
         caption = payload["body"].strip()
         heard = [caption] if caption and caption not in {note["filename"] for note in notes} else []
+        language = None
         try:
             for note in notes:
-                heard.append(self.transcriber(self.client.download(event["room_id"], note), note["mimetype"]).text)
+                transcript = self.transcriber(self.client.download(event["room_id"], note), note["mimetype"])
+                heard.append(transcript.text)
+                language = transcript.language
         except (VoiceError, httpx.HTTPError) as error:
             logger.warning("Could not read a voice note: %s", error)
             self.client.post_message(event["room_id"], RESEND_VOICE)
             return None
-        return {**event, "payload": {**payload, "body": "\n".join(heard)}}
+        return {**event, "payload": {**payload, "body": "\n".join(heard), "spoken_language": language}}
 
     def _handle_person(self, event: dict) -> None:
         event = self._with_voice_as_text(event)
@@ -407,7 +444,7 @@ class Desk:
         if not text or self._answers_an_approval(event, text) or event["room_id"] in self.settings.inside_rooms():
             return
         at = datetime.fromtimestamp(payload["timestamp"] / 1000, UTC)
-        self.buffer.add(event["room_id"], payload["sender"], text, at)
+        self.buffer.add(event["room_id"], payload["sender"], text, at, payload.get("spoken_language"))
         if self.settings.quiet_seconds == 0:
             self.tick(at)
 
@@ -463,6 +500,7 @@ class Desk:
         asked = self._open_question(burst.room_id, burst.sender, burst.first_at)
         if asked:
             asked.brief += f"\nAnswered: {burst.text}"
+            asked.language = burst.language or asked.language
             self._clean_report(asked)
             self.store.save(asked)
             return
@@ -471,7 +509,7 @@ class Desk:
             self._start_report(burst)
         elif kind is Kind.REQUEST:
             job = self.store.create(burst.room_id, burst.sender, resolve_approver(burst.sender, self.settings.approver))
-            job.brief = burst.text
+            job.brief, job.language = burst.text, burst.language
             self.store.save(job)
             self._sticker(burst.room_id, "brief_received")
             self._ask_for_brief(job)
@@ -488,7 +526,7 @@ class Desk:
     def _start_report(self, burst: Burst) -> None:
         job = self.store.create(burst.room_id, burst.sender, resolve_approver(burst.sender, self.settings.approver))
         local = timezone(timedelta(minutes=self.settings.utc_offset_minutes))
-        job.kind, job.brief, job.sent_at = "report", burst.text, burst.first_at.astimezone(local).isoformat()
+        job.kind, job.brief, job.sent_at, job.language = "report", burst.text, burst.first_at.astimezone(local).isoformat(), burst.language
         self.store.save(job)
         self._sticker(burst.room_id, "brief_received")
         self._clean_report(job)
@@ -505,13 +543,13 @@ class Desk:
         except CleanupFailed as error:
             logger.warning("Could not clean up the note for job %s: %s", job.id, error)
             job.asked_at = self.clock().isoformat()
-            self.client.post_message(job.room_id, NO_REPORT)
+            self._reply(job, NO_REPORT)
             return
         if result.questions:
             question = "\n".join(result.questions)
             job.brief += f"\n\nAsked: {question}"
             job.asked_at = self.clock().isoformat()
-            self.client.post_message(job.room_id, quiet(question))
+            self._reply(job, quiet(question))
             return
         job.report, job.asked_at = quiet(result.text), None
         advance(job, "report_drafted")

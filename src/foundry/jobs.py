@@ -62,6 +62,7 @@ class Job:
     kind: str = "work"
     sent_at: str | None = None
     report: str | None = None
+    language: str | None = None
 
     @property
     def approval_room(self) -> str:
@@ -82,7 +83,7 @@ def advance(job: Job, event: str) -> Job:
     return job
 
 
-COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report")
+COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report", "language")
 
 
 class JobStore:
@@ -94,7 +95,7 @@ class JobStore:
                     id TEXT PRIMARY KEY, room_id TEXT NOT NULL, requester TEXT NOT NULL, approver TEXT NOT NULL,
                     state TEXT NOT NULL, revision_rounds INTEGER NOT NULL, brief TEXT, artifacts TEXT NOT NULL,
                     approval TEXT, revision_notes TEXT, waiting_on TEXT NOT NULL, asked_at TEXT,
-                    kind TEXT NOT NULL, sent_at TEXT, report TEXT)"""
+                    kind TEXT NOT NULL, sent_at TEXT, report TEXT, language TEXT)"""
             )
 
     def create(self, room_id: str, requester: str, approver: str) -> Job:
@@ -117,10 +118,10 @@ class JobStore:
     def save(self, job: Job) -> None:
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute(
-                f"""INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"""INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET {", ".join(f"{name} = excluded.{name}" for name in COLUMNS[1:])}""",
                 (job.id, job.room_id, job.requester, job.approver, job.state.value,
-                 job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes, json.dumps(job.waiting_on), job.asked_at, job.kind, job.sent_at, job.report),
+                 job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes, json.dumps(job.waiting_on), job.asked_at, job.kind, job.sent_at, job.report, job.language),
             )
 
     def _select(self, clause: str, *values: str) -> list[Job]:
