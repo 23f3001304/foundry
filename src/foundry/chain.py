@@ -60,7 +60,12 @@ NO_SOURCE_DETAIL = "No entry for this job gives {needle}."
 NOT_FLAGGED = "Entry {entry_id} is not a flagged item."
 NOT_A_TARGET = "Cannot flag {target!r}. It is not a file made for this job, a number or statement in one, or an entry in this log."
 SOURCE_LINE = "Source: {parts}"
-TIME_OF_DAY = re.compile(r"\d{1,2}:\d{2}\s*[ap]m", re.IGNORECASE)
+HOUR, MINUTE = r"(?:[01]?\d|2[0-3])", r"[0-5]\d"
+TIME = rf"\b{HOUR}(?::{MINUTE}(?::{MINUTE})?(?:\s*[ap]m\b)?|\s*[ap]m\b)(?:\s*UTC\b)?"
+DATE = r"\b\d{4}-\d{2}-\d{2}\b"
+# A date, a time of day, or both, the way job_facts prints them and the ways a maker might write them: 2026-11-04 18:12 UTC, 18:12, 6:12 pm, 6 pm.
+WHEN = re.compile(rf"{DATE}(?:\s+{TIME})?|{TIME}", re.IGNORECASE)
+MENTION_BREAK = "​"
 
 FILE, TEXT, ENTRY = "file", "text", "entry"
 
@@ -105,6 +110,11 @@ def name_of(entry: Entry, known: dict[str, str]) -> str:
     return entry.sender_name or known.get(entry.sender) or entry.sender
 
 
+def plain(name: str) -> str:
+    # A name as a maker copies it from job_facts: without the break after an @, with one space between words, and in any case.
+    return " ".join(name.replace(MENTION_BREAK, "").split()).casefold()
+
+
 def _number(text: str) -> int | None:
     return int(text) if text.isascii() and text.isdigit() else None
 
@@ -140,10 +150,10 @@ def source_line(links: Iterable[Link]) -> str:
 
 
 def without_times_in_source_lines(text: str, links: list[Link]) -> str:
-    # The line a deck prints under a slide says when a number was given, and a time of day is not a figure to check. The rest of the line is a maker's words, so it is checked.
+    # The line a deck prints under a slide says when a number was given, and a date or time of day is not a figure to check. The rest of the line is a maker's words, so it is checked.
     for slide in dict.fromkeys(link.slide for link in links):
         line = source_line(link for link in links if link.slide == slide)
-        text = text.replace(line, TIME_OF_DAY.sub("", line))
+        text = text.replace(line, WHEN.sub("", line))
     return text
 
 
@@ -371,9 +381,9 @@ class _Trail:
         if self.copies and not used:
             # No file of this job used the flagged thing, so nothing the job delivered is behind it.
             return
-        names = {Path(path).name for path in used}
+        files = {Path(path).name for path in used}
         # A job that made no file is a report, and all it delivered is the report.
-        sent = [entry for entry in self.job if entry.kind == "delivered" and (not self.copies or names & {name.strip() for name in entry.text.split(",")})]
+        sent = [entry for entry in self.job if entry.kind == "delivered" and (not self.copies or files & {name.strip() for name in entry.text.split(",")})]
         if not sent:
             return
         last = sent[-1]

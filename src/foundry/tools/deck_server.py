@@ -26,7 +26,7 @@ DRAWING = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 SOURCE_BOX = (56, 500, 780, 28)
 NARROW_SOURCE_BOX = (56, 500, 580, 28)
 SOURCE_SIZES = (11, 7)
-SOURCE_SHAPE = 'Each source is {"value": "62%", "entry": 123, "label": "Team Lead B, 6:12 pm"}.'
+SOURCE_SHAPE = 'Each source is {"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 UTC"}.'
 
 
 def _apply_theme(deck: Presentation, brand: Brand) -> None:
@@ -222,9 +222,9 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     Any slide can also have "highlight": words on that slide to put on the brand's accent colour, for the one thing that matters most.
     highlight does the same for the title slide. Text that cannot fit raises an error. Shorten it or split the slide.
 
-    Only when foundry-desk's message asks for sources, a slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 6:12 pm"}],
+    Only when foundry-desk's message asks for sources, a slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 UTC"}],
     one for each number or fact on that slide that came from a log entry. value is the words on the slide. entry is the number job_facts gave that entry.
-    label holds the name job_facts shows for that entry and when it was said. The slide prints them as a small line, and the links are saved beside the deck.
+    label is the name job_facts shows for that entry, a comma, and the date and time it shows, written as in the example. The slide prints them as a small line, and the links are saved beside the deck.
     """
     brand = load_brand_dir(brand_dir)
     deck = Presentation()

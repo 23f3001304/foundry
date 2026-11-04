@@ -88,16 +88,24 @@ class Log:
 
     def writers(self, bucket: str, excluding: Collection[str] = ()) -> list[Writer]:
         # Rooms left out are ones Foundry can't ask in, so a person's room is their newest message outside them.
+        # One pass over the bucket's written entries in time order, so it grows with the log and not with the log times the people in it.
         marks = ", ".join("?" * len(WRITTEN))
         skip = f" AND room_id NOT IN ({', '.join('?' * len(excluding))})" if excluding else ""
         with closing(sqlite3.connect(self.path)) as db:
             rows = db.execute(
-                f"""SELECT sender, sender_name, room_id, at FROM entries AS e WHERE bucket = ? AND kind IN ({marks}){skip} AND id = (
-                        SELECT id FROM entries WHERE bucket = e.bucket AND sender = e.sender AND kind IN ({marks}){skip} ORDER BY at DESC, id DESC LIMIT 1)
-                    ORDER BY at DESC, id DESC""",
-                (bucket, *WRITTEN, *excluding, *WRITTEN, *excluding),
+                f"SELECT sender, sender_name, room_id, at FROM entries WHERE bucket = ? AND kind IN ({marks}){skip} ORDER BY at, id",
+                (bucket, *WRITTEN, *excluding),
             ).fetchall()
-        return [Writer(sender, name, room_id, datetime.fromtimestamp(at, UTC)) for sender, name, room_id, at in rows]
+        newest: dict[str, tuple[str, float]] = {}
+        names: dict[str, str] = {}
+        for sender, name, room_id, at in rows:
+            # A sender moves to the end each time they write, so the dict ends up oldest writer first.
+            newest.pop(sender, None)
+            newest[sender] = (room_id, at)
+            # Their name is the newest they wrote under, so one message logged with no name does not hide it.
+            if name:
+                names[sender] = name
+        return [Writer(sender, names.get(sender, ""), room_id, datetime.fromtimestamp(at, UTC)) for sender, (room_id, at) in reversed(newest.items())]
 
     def last_answer(self, bucket: str, sender: str, measure: str) -> Entry | None:
         rows = self._select("WHERE bucket = ? AND sender = ? AND kind = 'item_answer' AND ref = ? ORDER BY at DESC, id DESC LIMIT 1", bucket, sender, measure)
