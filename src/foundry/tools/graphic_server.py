@@ -78,6 +78,8 @@ def render_graphic(brand_dir: str, headline: str, subline: str, size: str, out_p
     path = Path(out_path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(path)
+    # The desk cannot read an image, so the words it drew go beside it for the number check.
+    Path(f"{path}.txt").write_text("\n".join(text for text in (headline, subline) if text), encoding="utf-8")
     return str(path)
 
 

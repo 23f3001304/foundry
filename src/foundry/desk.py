@@ -15,8 +15,9 @@ from pathlib import Path
 import httpx
 
 from foundry.buffer import Burst, MessageBuffer
+from foundry.checks import file_text, needs_attention, people_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date, signoff_detail
-from foundry.brand import BrandError
+from foundry.brand import HEX_COLOUR, BrandError
 from foundry.delivery import DELIVERED, deliver, deliver_report
 from foundry.gates import Decision, Gate, parse_reply, resolve_approver
 from foundry.intake import Kind, classify
@@ -45,6 +46,10 @@ REVIEW_FAIL = "REVIEW_FAIL"
 MARKER = re.compile(rf"(?:@\S+\s+)*({BRIEF_READY}|{WORK_READY}|{WORK_BLOCKED}|{REVIEW_PASS}|{REVIEW_FAIL})(?:\s+#(\w+))?(?:\s+(.*))?", re.DOTALL)
 FILE_KINDS = {".pptx", ".png", ".jpg", ".jpeg", ".pdf"}
 SIGNOFF = "Approve to deliver this work, or ask for changes."
+NO_SOURCE = "No source found for {numbers} in {name}."
+UNREADABLE = "Could not read {name}, so its numbers were not checked."
+# The card only holds so much, so a file with many unsourced numbers shows the first few.
+MOST_NUMBERS_LISTED = 8
 REPORT_CARD_TITLE = "Report for sign-off"
 HOW_TO_RESTART = "Approve to try again, or ask for changes to give new notes."
 STUCK = f"This job has been through {MAX_REVISION_ROUNDS} rounds of changes, so it has stopped. {HOW_TO_RESTART}"
@@ -403,8 +408,40 @@ class Desk:
         room = self._approval_room(job)
         for path in job.artifacts:
             self.client.post_file(room, path, f"For your sign-off: {Path(path).name}")
-        self.gate.ask(job, f"Final work: {self._title(job)}", SIGNOFF, room)
+        job.attention = self._attention_for_work(job)
+        lines = "\n".join(quiet(line) for line in job.attention)
+        self.gate.ask(job, f"Final work: {self._title(job)}", f"{lines}\n\n{SIGNOFF}" if lines else SIGNOFF, room)
         self._sticker(room, "needs_input")
+
+    def _attention_for_work(self, job: Job) -> list[str]:
+        sources = self._sources_for(job)
+        lines = []
+        for path in job.artifacts:
+            name, text = Path(path).name, file_text(path)
+            if text is None:
+                lines.append(UNREADABLE.format(name=name))
+                continue
+            missing = unsourced_numbers(text, sources)
+            if missing:
+                shown, more = ", ".join(missing[:MOST_NUMBERS_LISTED]), len(missing) - MOST_NUMBERS_LISTED
+                lines.append(NO_SOURCE.format(numbers=f"{shown} and {more} more" if more > 0 else shown, name=name))
+        return lines
+
+    def _sources_for(self, job: Job) -> list[str]:
+        # The approved brief, what people said on this job, and the client's own documents.
+        pack = self.settings.pack_for(job.room_id)
+        return [job.brief or "", *people_words(self.log, job.bucket, job.id), *pack.sources.values(), self._kit_text(job.room_id)]
+
+    def _kit_text(self, room_id: str) -> str:
+        brand = self.settings.brands.get(room_id)
+        if not brand:
+            return ""
+        try:
+            # A colour code is not a number anyone said.
+            return HEX_COLOUR.sub("", (BRANDS / brand / "kit.md").read_text(encoding="utf-8"))
+        except OSError as error:
+            logger.warning("Could not read the brand kit for room %s: %s", room_id, error)
+            return ""
 
     def _deliver(self, job: Job) -> None:
         clean_run = job.revision_rounds == 0
@@ -685,6 +722,7 @@ class Desk:
             if choices:
                 self._offer_choices(job, quiet(question), choices)
             return
+        result = replace(result, warnings=needs_attention(result))
         job.report, job.asked_at = quiet(result.text), None
         advance(job, "report_drafted")
         room = self._approval_room(job)

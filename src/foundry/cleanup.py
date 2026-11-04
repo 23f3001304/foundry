@@ -22,6 +22,7 @@ Reply with JSON only, with these keys:
 "changes": every replacement you made, each with "original", "replacement", "source" and "evidence".
 "questions": your questions for the sender, or [].
 "choices": when you ask exactly one question and the sources list the possible answers, those answers as short labels, or [].
+"confidence": a number from 0 to 1 for how sure you are that the report says what the sender meant. Give a low number when the note is garbled, cut off, or could be read more than one way.
 
 Rules:
 1. Remove filler and local words that add nothing, such as "bhaiya", and fix plain spelling mistakes. Keep every fact in the note. Add no fact that the note or a source does not give. The report says only what the note says, so do not ask about or remark on anything the note leaves out.
@@ -85,6 +86,8 @@ class CleanResult:
     warnings: list[str]
     original_note: str
     choices: list[str] = field(default_factory=list)
+    # How sure the model said it was, from 0 to 1. None when it gave no usable number.
+    confidence: float | None = None
 
 
 def date_from_offset(sent_at: datetime, offset_days: int) -> date:
@@ -115,7 +118,7 @@ def clean_note(note: str, sent_at: datetime, pack: Pack, llm: Callable[[str], st
     def with_dates(text: str) -> str:
         return DATE_TOKEN.sub(lambda match: _date_text(match, sent_at, holidays), text)
 
-    draft, changes, questions, choices = _read_answer(_ask(note, sent_at, pack, llm))
+    draft, changes, questions, choices, confidence = _read_answer(_ask(note, sent_at, pack, llm))
     if questions:
         return CleanResult("", [], [with_dates(question) for question in questions], [], [], note, [with_dates(choice) for choice in choices])
     if not draft.strip():
@@ -135,7 +138,7 @@ def clean_note(note: str, sent_at: datetime, pack: Pack, llm: Callable[[str], st
     warnings = unplaced + _check(DATE_TOKEN.sub("", draft), note, kept, pack)
     text = with_dates(draft)
     shown = [replace(change, replacement=with_dates(change.replacement)) for change in kept]
-    return CleanResult(text, shown, [], list(dict.fromkeys(UNVERIFIED.findall(text))), warnings, note)
+    return CleanResult(text, shown, [], list(dict.fromkeys(UNVERIFIED.findall(text))), warnings, note, confidence=confidence)
 
 
 def signoff_detail(result: CleanResult) -> str:
@@ -178,13 +181,24 @@ def _choices(raw: object, questions: list[str]) -> list[str]:
     return list(unique.values()) if 2 <= len(unique) <= MAX_CHOICES else []
 
 
-def _read_answer(answer: str) -> tuple[str, list[Change], list[str], list[str]]:
+def _confidence(raw: object) -> float | None:
+    # A missing, odd or out-of-range value is no confidence at all, which adds no attention.
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    try:
+        value = float(raw)
+    except (ValueError, OverflowError):
+        return None
+    return value if 0 <= value <= 1 else None
+
+
+def _read_answer(answer: str) -> tuple[str, list[Change], list[str], list[str], float | None]:
     # Models often wrap JSON in a code fence, so read from the first brace to the last.
     try:
         data = json.loads(answer[answer.find("{") : answer.rfind("}") + 1])
         changes = [Change(*(str(item[key]) for key in ("original", "replacement", "source", "evidence"))) for item in data.get("changes") or []]
         questions = [str(question) for question in data.get("questions") or []]
-        return str(data.get("report") or ""), changes, questions, _choices(data.get("choices"), questions)
+        return str(data.get("report") or ""), changes, questions, _choices(data.get("choices"), questions), _confidence(data.get("confidence"))
     except (ValueError, KeyError, TypeError, AttributeError) as error:
         raise CleanupFailed(f"The model's answer could not be read: {error}") from error
 
