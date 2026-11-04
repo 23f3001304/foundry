@@ -1039,7 +1039,15 @@ class Coordinator:
         if item is None:
             return self._ask_which(heard, [item for item in heard.own if item.state is ItemState.OPEN] or heard.own)
         self._accept(heard, item, heard.reading.value or "")
+        self._accept_the_rest(heard, item, heard.own)
         return True
+
+    def _accept_the_rest(self, heard: _Heard, first: Item, candidates: list[Item], by: str | None = None) -> None:
+        # The other answers in one reply. An item that isn't the sender's to answer stays as it is.
+        for item_id, value in heard.reading.also:
+            item = next((item for item in candidates if item.id == item_id and item.id != first.id), None)
+            if item is not None:
+                self._accept(heard, item, value, by=by)
 
     def _reason(self, heard: _Heard) -> bool:
         pool = [item for item in heard.own if item.state is ItemState.OPEN]
@@ -1080,6 +1088,7 @@ class Coordinator:
         if item is None:
             return self._ask_which(heard, matches)
         self._accept(heard, item, reading.value or "", by=sender)
+        self._accept_the_rest(heard, item, matches, by=sender)
         return True
 
     def _away(self, heard: _Heard) -> bool:
