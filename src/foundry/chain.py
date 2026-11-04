@@ -65,7 +65,7 @@ TIME = rf"\b{HOUR}(?::{MINUTE}(?::{MINUTE})?(?:\s*[ap]m\b)?|\s*[ap]m\b)(?:\s*UTC
 DATE = r"\b\d{4}-\d{2}-\d{2}\b"
 # A date, a time of day, or both, the way job_facts prints them and the ways a maker might write them: 2026-11-04 18:12 UTC, 18:12, 6:12 pm, 6 pm.
 WHEN = re.compile(rf"{DATE}(?:\s+{TIME})?|{TIME}", re.IGNORECASE)
-MENTION_BREAK = "​"
+MENTION_BREAK = "\u200b"
 
 FILE, TEXT, ENTRY = "file", "text", "entry"
 
