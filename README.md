@@ -6,7 +6,7 @@ A business's team asks for work in the chat they already use, by text or voice n
 
 The same setup also turns a messy note from the field into a clean report, and shows the person signing it exactly which words changed and which document backs each change.
 
-Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shilagate Homes and Morpankh Systems are fictional, and so is everything in their folders.
+Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shilagate Homes, Morpankh Systems and Kasauti Capital Partners are fictional, and so is everything in their folders, including every figure.
 
 ## What sets it apart
 
@@ -33,6 +33,7 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shila
 | Other cards in that run: Ask for changes with typed notes, a typed `A19 yes`, a typed `yes` in a card's thread, Already told the asker, Ask again, Ask someone else and its follow-up, a passed-on answer, a stuck card from a maker's `WORK_BLOCKED` | Run live on Mattermost |
 | A flagged number's chain | Run on the real log and the real deck by calling `chain_for` from a script. It holds who answered and who used it, and no review or sign-off, because neither ran. The dashboard's flag button is not part of this run |
 | The IT firm's routine cards at the set times | Run live on Mattermost by hand, not by the scene player, which had stopped at the review: "Show what needs me" and "Approve everything clean" both pressed, a typed `yes` told to use the buttons, and the report posted. Keep and Leave out were not reached, because no note in the run needed attention |
+| The investment firm scene: five Office Heads each owe assets under management, four answer by chat and one by a file, one figure is far from the others, and the deck has charts worked out by code | **Not run live yet.** The firm's kit and pack, the scene, the made-up figures and the tests are in, and the scene's checks of its own figures run in the tests. Nothing here says what Foundry did with them |
 | The number check on finished work | Run by script on six real decks, because no final card could open. No false alarm on a deck made by the same code. It has not caught a wrong number on a real deck |
 | Confidence on a real model, 20 made-up notes, half garbled | Run on Nov 5, 2026, through the desk's own two steps. All 10 garbled notes came back as a question, and none of the clean, so the question is what stops a garbled note. After the one reply tried, "I don't know, put it in as I said it", low confidence on the report caught 7 of 10 garbled and marked 0 of 10 clean, so clean-up keeps its confidence. A reply that sounds surer has not been measured. An earlier 10 of 10 scored the questions, which the desk never reads. The reader of replies caught 3 of 10, so it lost its confidence |
 | One client's fact asked for from another client's job | Run live. Asked plainly, the maker said "not available". Told to open decks already made, it read the other client's deck in the shared folder, and left the fact out by its own choice. Nothing stops it reading, see "The makers share one folder" |
@@ -159,7 +160,7 @@ uv run --env-file .env python tools/register_desk.py
 
 ### 4. Create the rooms
 
-This makes rooms for both fictional clients, one internal department to show the other room tree, and the four rooms of Morpankh Systems, the fictional IT firm. It also writes each maker's `.mcp.json` and saves the room ids in `.env`.
+This makes rooms for both fictional clients, one internal department to show the other room tree, the four rooms of Morpankh Systems, the fictional IT firm, and the six rooms of Kasauti Capital Partners, the fictional investment firm. It also writes each maker's `.mcp.json` and saves the room ids in `.env`.
 
 ```bash
 uv run --env-file .env python scripts/demo_seed.py
@@ -214,6 +215,25 @@ The inputs are due 8 minutes in. The scene needs a reviewer that can run, or it 
 
 To measure whether a model's confidence catches a garbled note once the desk has asked about it and had a reply, run `tools/confidence_test.py` with the same `uv run --env-file .env python`.
 
+### 8. Play the investment firm demo
+
+Kasauti Capital Partners is a fictional global investment firm, and every figure in it is made up. An Analyst Lead asks for a quarterly review deck, and Office Heads A to E each owe their office's assets under management. Four answer by chat and Office Head C sends a file. Office Head E's figure is made to jump, to more than three times its last quarter's and far from the other four, so the desk's check for a figure far from its peers should name it on the final card. The deck's charts are worked out by code from the answers, from the file and from `brands/demo-investment-firm/sources/quarterly_aum.csv`, and each figure shows who gave it. **The offices' messages and file are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models. Its reports are internal summaries of made-up numbers, never advice.**
+
+The rooms come from step 4. Make the scripted people and what they said before the scene, as for the IT firm. The same refusal of any stack that isn't on this machine applies.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py ensure investment_firm
+uv run --env-file .env python scripts/seed_history.py investment_firm
+```
+
+Set `FOUNDRY_QUIET_SECONDS=8` in `.env`. The file Office Head C sends is `scripts/scenes/data/office-c-q2-fy27.csv`. The desk keeps it in `FOUNDRY_INPUTS_DIR`, and the makers' data tools open it from there, so the desk and the tools must mean the same folder. `tools/setup_makers.py` writes that folder into each maker's `.mcp.json` as a full path, so run the desk and the room set-up from this folder with the same `.env`, or give `FOUNDRY_INPUTS_DIR` as a full path. Restart the desk, then play the scene from another terminal.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py play investment_firm
+```
+
+The inputs are due 15 minutes in and the deck 60 minutes in. The scene needs a reviewer that can run, or it stops at the review. See "What has actually been run" for how far it got.
+
 ### Good to know
 
 - **Fonts:** a `.pptx` can't carry its fonts, so a machine without them shows a substitute. Install the files in `brands/<brand>/fonts` where you open the decks.
@@ -235,6 +255,8 @@ uv run pytest
 ## Art and credits
 
 Team sprites, stickers, logos, photos and the banner were generated with Gemini on Vertex AI and then cut to a pixel grid or to size in code, as `tools/gen_assets.py` shows. They are AI-generated, not hand-drawn, and show original characters and fictional businesses. Brand stickers are recoloured from those sprites in code, and the hard hat and cup are drawn in code. The fonts are open fonts, with their licences beside them in each brand's `fonts` folder.
+
+The Kasauti Capital Partners logo is not generated. `tools/draw_kasauti_logo.py` draws it in code, in the two colours of the firm's kit, and its fonts are copies of the open fonts the other brands use.
 
 Speech comes from [Sarvam](https://docs.sarvam.ai/api-reference-docs/speech-to-text/transcribe): [Saaras](https://docs.sarvam.ai/api/getting-started/models/saaras) to read and Bulbul to speak.
 

@@ -2,6 +2,8 @@
 
 uv run --env-file .env python scripts/demo_people.py ensure it_firm
 uv run --env-file .env python scripts/demo_people.py play it_firm [first step]
+
+The scenes are it_firm and investment_firm. A step's file is found beside the scenes, such as data/office-c-q2-fy27.csv.
 """
 
 import os
@@ -36,6 +38,7 @@ MOST_CHARS_SHOWN = 1500
 VOICE_LANGUAGE = "hi-IN"
 NO_VOICE = "Skipped a voice note because SARVAM_API_KEY is not set, so it has not run. Nothing stands in for it."
 TYPED_INSTEAD = "There is no SARVAM_API_KEY, so the voice note has not run. The same words are typed instead."
+NO_FILE = "There is no file at {path}, so nothing was sent. A file in a scene is found beside the scenes, such as data/office-c-q2-fy27.csv."
 
 
 def load_scene(name: str) -> dict:
@@ -275,7 +278,10 @@ def _act(stage: Stage, number: int, step: dict) -> bool:
         stage.post(step, "", stage.upload(step, "voice.wav", speak(words, VOICE_LANGUAGE)))
         stage.say(f"{who} sent a voice note saying: {words}")
     elif "file" in step:
-        path = Path(step["file"])
+        # Beside the scenes, unless it is written as a full path.
+        path = SCENES / step["file"]
+        if not path.is_file():
+            raise SystemExit(f"{who}. {NO_FILE.format(path=path)}")
         words = fill_times(step.get("say", ""), stage.start)
         stage.post(step, words, stage.upload(step, path.name, path.read_bytes()))
         stage.say(f"{who} sent {path.name}")
