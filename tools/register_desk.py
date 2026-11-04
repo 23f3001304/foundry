@@ -25,13 +25,14 @@ def main() -> None:
         desk = httpx.post(
             f"{url}/agents",
             headers={"Authorization": f"Bearer {minted.json()['key']}"},
-            json={"name": "foundry-desk", "description": "Takes requests in, asks for approvals and delivers approved work", "connector_type": "custom", "integration_profile": PROFILE},
+            json={"name": "foundry-desk", "description": "Takes requests in, asks for approvals and delivers approved work", "connector_type": "custom", "integration_profile": PROFILE, "overwrite": True},
             timeout=30,
         )
         desk.raise_for_status()
         # The desk reads everyone in the room. Who may approve is enforced in gates.py.
         gateway.put(f"/agents/{desk.json()['id']}/addressing-policy", json={"policy": None}).raise_for_status()
     save({"SWITCH_URL": url, "FOUNDRY_DESK_ID": desk.json()["id"], "FOUNDRY_DESK_KEY": desk.json()["api_key"]})
+    # Registering again takes a new key, so a desk still running on the old one has to be restarted.
     print(f"Registered foundry-desk as {desk.json()['id']} and saved its key in {ENV_FILE}")
 
 
