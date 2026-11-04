@@ -74,6 +74,10 @@ def _approver(named: object) -> str:
     return approver.replace("{bridge}", bridge) if bridge else approver
 
 
+def _dashboard(named: object) -> tuple[dict, ...]:
+    return tuple({**entry, "acts_as": _approver(entry.get("acts_as"))} for entry in named or ())
+
+
 def load_pack(brand_dir: Path | str) -> Pack:
     folder = Path(brand_dir)
     if not (folder / "pack.md").is_file():

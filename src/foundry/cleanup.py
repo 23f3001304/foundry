@@ -120,7 +120,7 @@ def clean_note(note: str, sent_at: datetime, pack: Pack, llm: Callable[[str], st
 
     draft, changes, questions, choices, confidence = _read_answer(_ask(note, sent_at, pack, llm))
     if questions:
-        return CleanResult("", [], [with_dates(question) for question in questions], [], [], note, [with_dates(choice) for choice in choices])
+        return CleanResult("", [], [with_dates(question) for question in questions], [], [], note, [with_dates(choice) for choice in choices], confidence=confidence)
     if not draft.strip():
         raise CleanupFailed("The model sent neither a report nor a question.")
     kept, unplaced = [], []

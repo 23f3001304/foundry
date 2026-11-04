@@ -117,6 +117,12 @@ ASSETS = {
         "out": "brands/shilagate-homes/logo.png",
         "cut": "logo",
     },
+    "demo-it-firm-logo": {
+        "prompt": LOGO_STYLE + " The emblem shows one stylised peacock feather standing upright, drawn from simple flat shapes, with a round gold #E3B23C "
+        "eye near its tip, in deep teal #0F4C5C. The words 'MORPANKH SYSTEMS' run once around the circle in a clean sans-serif, and no other words appear anywhere.",
+        "out": "brands/demo-it-firm/logo.png",
+        "cut": "logo",
+    },
     "shilagate-homes-hero": {
         "prompt": "An architectural photograph of a modern mid-rise residential building in an Indian city at dusk, warm "
         "windows, landscaped entrance, clear sky. No people, no text, no signage, no logos.",
