@@ -26,7 +26,7 @@ def main() -> None:
     if problems := check_packs(settings):
         raise SystemExit("\n".join(problems))
     client = SwitchClient(os.environ["SWITCH_URL"], os.environ["FOUNDRY_DESK_ID"], os.environ["FOUNDRY_DESK_KEY"])
-    store = JobStore(os.environ.get("FOUNDRY_JOBS_DB", "foundry-jobs.db"))
+    store = JobStore(settings.jobs_path)
     cleanup_llm = default_llm(os.environ.get("FOUNDRY_CLEANUP_MODEL", "claude-sonnet-5-5"))
     desk = Desk(client, store, QueuedCardGate(client), default_llm(), settings, cleanup_llm=cleanup_llm)
     try:

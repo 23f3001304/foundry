@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ chain.flagged.text }}</h1>
+<p class="small">Flagged by {{ chain.flagged.who }}{% if chain.via_dashboard %} on the dashboard{% endif %}, {{ chain.flagged.at }}. This is everyone and every agent behind this one thing, and nothing else.</p>
+<p><a href="/jobs/{{ chain.job_id }}">{{ chain.job_title }}</a></p>
+{% if chain.steps %}
+<ol class="chain">
+  {% for step in chain.steps %}
+  <li>
+    <p><span class="strong">{{ step.who }}</span> {{ step.what }}. <span class="small">{{ step.at|when }}</span></p>
+    {% if step.detail %}<p class="quote">{{ step.detail }}</p>{% endif %}
+    {% if step.label == "matched by value" %}<p class="small">This entry was matched by value only. The same number or words are in it, and that could be a coincidence.</p>{% endif %}
+  </li>
+  {% endfor %}
+</ol>
+{% else %}
+<p class="note">Nothing in this job is behind it.</p>
+{% endif %}
+<p><a href="/log">Back to the action log</a></p>
+{% endblock %}

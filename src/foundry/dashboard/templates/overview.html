@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Overview</h1>
+{% if not figures %}
+<p class="note">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
+{% endif %}
+{% for f in figures %}
+<section id="client-{{ f.bucket }}">
+  <h2>{{ f.client }}</h2>
+  <dl class="figures">
+    <div><dt>Cards waiting</dt><dd>{{ f.waiting }}</dd><p class="small">{{ f.in_chat }} open in chat, {{ f.queued }} queued</p></div>
+    <div><dt>Open items</dt><dd>{{ f.open_items }}</dd><p class="small">Inputs people were asked for and haven't given</p></div>
+    <div><dt>Stuck jobs</dt><dd>{{ f.stuck }}</dd><p class="small">Waiting for someone to restart them</p></div>
+  </dl>
+  <p><a href="/jobs">See the jobs</a></p>
+</section>
+{% endfor %}
+{% endblock %}

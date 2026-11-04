@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Action log</h1>
+<p class="lead">Each job's timeline, and the things the approver flagged. The log is not open for browsing. A chain opens for one flagged thing only.</p>
+
+<section>
+  <h2>Flagged things</h2>
+  {% if flagged %}
+  <ul class="plain">
+    {% for item in flagged %}
+    <li><a href="/log/flagged/{{ item.id }}">{{ item.text }}</a> <span class="small">Flagged by {{ item.who }}, {{ item.at }}{% if user.businesses|length > 1 %}. {{ item.client }}{% endif %}</span></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="note">Nothing has been flagged. The person who approves a job can flag a file, a message, or a number in a file.</p>
+  {% endif %}
+</section>
+
+{% if not jobs %}<p class="note">No jobs yet.</p>{% endif %}
+{% if only %}<p><a href="/log">Back to the newest jobs</a></p>{% endif %}
+{% if more %}<p class="note">These are the newest jobs. To see an older one, open it from the jobs page and choose its timeline.</p>{% endif %}
+{% for job in jobs %}
+<section id="log-{{ job.id }}">
+  <h2>{{ job.title }}</h2>
+  <p class="small">{{ job.stage }}{% if user.businesses|length > 1 %}. {{ job.client }}{% endif %}</p>
+  <table class="list">
+    <thead><tr><th>When</th><th>Who</th><th>What</th><th>Flag</th></tr></thead>
+    <tbody>
+    {% for moment in job.moments %}
+    <tr>
+      <td data-label="When">{{ moment.at }}</td>
+      <td data-label="Who">{{ moment.who }}</td>
+      <td data-label="What"><span class="strong">{{ moment.what }}</span>{% if moment.text %} {{ moment.text }}{% endif %}</td>
+      <td data-label="Flag">
+        {% if moment.target %}
+        <form method="post" action="/log/flag">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="job_id" value="{{ job.id }}">
+          <input type="hidden" name="what" value="{{ moment.target[0] }}">
+          <input type="hidden" name="{{ moment.target[0] }}" value="{{ moment.target[1] }}">
+          <button type="submit">Flag</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if job.can_flag and job.files %}<p class="small">To flag one number or statement in a file, open the job.</p>{% endif %}
+</section>
+{% endfor %}
+{% include "_recent.html" %}
+{% endblock %}

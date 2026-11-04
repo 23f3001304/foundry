@@ -149,4 +149,8 @@ class JobStore:
     def _select(self, clause: str, *values: str) -> list[Job]:
         with closing(sqlite3.connect(self.path)) as db:
             rows = db.execute(f"SELECT {', '.join(COLUMNS)} FROM jobs {clause}", values).fetchall()
-        return [Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16]), row[17], row[18], row[19], json.loads(row[20]), row[21]) for row in rows]
+        return [_job(row) for row in rows]
+
+
+def _job(row: tuple) -> Job:
+    return Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16]), row[17], row[18], row[19], json.loads(row[20]), row[21])

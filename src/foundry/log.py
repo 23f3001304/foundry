@@ -91,7 +91,7 @@ class Log:
         # One pass over the bucket's written entries in time order, so it grows with the log and not with the log times the people in it.
         marks = ", ".join("?" * len(WRITTEN))
         skip = f" AND room_id NOT IN ({', '.join('?' * len(excluding))})" if excluding else ""
-        with closing(sqlite3.connect(self.path)) as db:
+        with closing(self._connect()) as db:
             rows = db.execute(
                 f"SELECT sender, sender_name, room_id, at FROM entries WHERE bucket = ? AND kind IN ({marks}){skip} ORDER BY at, id",
                 (bucket, *WRITTEN, *excluding),
@@ -118,10 +118,14 @@ class Log:
         rows = self._select("WHERE bucket = ? AND sender = ? AND kind = 'item_answer' AND ref = ? ORDER BY at DESC, id DESC LIMIT 1", bucket, sender, measure)
         return rows[0] if rows else None
 
+    def _connect(self) -> sqlite3.Connection:
+        # One place a connection is made, so the dashboard's reader can open the same file read-only.
+        return sqlite3.connect(self.path)
+
     def _insert(self, seeded: bool, at: datetime, bucket: str, room_id: str, sender: str, kind: str, text: str, sender_name: str, job_id: str | None, item_id: str | None, ref: str | None) -> Entry:
         if kind not in KINDS:
             raise ValueError(f"{kind} is not a kind of log entry")
-        with closing(sqlite3.connect(self.path)) as db, db:
+        with closing(self._connect()) as db, db:
             cursor = db.execute(
                 f"INSERT INTO entries ({', '.join(COLUMNS[1:])}) VALUES ({', '.join('?' * (len(COLUMNS) - 1))})",
                 (at.timestamp(), bucket, room_id, sender, sender_name, kind, text, job_id, item_id, ref, int(seeded)),
@@ -130,6 +134,6 @@ class Log:
         return Entry(entry_id, at.astimezone(UTC), bucket, room_id, sender, sender_name, kind, text, job_id, item_id, ref, seeded)
 
     def _select(self, clause: str, *values: str | int | float) -> list[Entry]:
-        with closing(sqlite3.connect(self.path)) as db:
+        with closing(self._connect()) as db:
             rows = db.execute(f"SELECT {', '.join(COLUMNS)} FROM entries {clause}", values).fetchall()
         return [_entry(row) for row in rows]

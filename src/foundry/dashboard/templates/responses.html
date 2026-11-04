@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% macro row(card) %}
+<li class="response">
+  <h3>{{ card.title }}</h3>
+  <p class="small">{{ card.kind }}{% if user.businesses|length > 1 %}. {{ card.client }}{% endif %}</p>
+  <p class="status">{{ card.status }}</p>
+  {% if card.detail %}<pre class="text">{{ card.detail }}</pre>{% endif %}
+  {% if card.offer.buttons %}
+  <form class="stack" method="post" action="/responses/answer">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="request_id" value="{{ card.request_id }}">
+    {% if card.offer.changes %}
+    <label for="notes-{{ card.request_id }}">What should change (needed to ask for changes)</label>
+    <textarea id="notes-{{ card.request_id }}" name="notes" rows="3"></textarea>
+    {% endif %}
+    <div class="buttons">
+      {% for choice, label in card.offer.buttons %}<button class="primary" type="submit" name="choice" value="{{ choice }}">{{ label }}</button>{% endfor %}
+      {% if card.offer.changes %}<button type="submit" name="choice" value="revise">Ask for changes</button>{% endif %}
+    </div>
+  </form>
+  {% endif %}
+  {% if card.offer.notice %}<p class="small">{{ card.offer.notice }}</p>{% endif %}
+</li>
+{% endmacro %}
+{% block main %}
+<h1>Responses</h1>
+<p class="lead">Every card Foundry has opened, and how it was answered. Answering an open card here has the same effect as pressing its button in chat, and the chat card then closes.</p>
+{% set open_cards = cards|selectattr("state", "equalto", "open")|list %}
+{% set queued = cards|selectattr("state", "equalto", "queued")|list %}
+{% set past = cards|rejectattr("state", "in", ["open", "queued"])|list %}
+<section>
+  <h2>Open in chat</h2>
+  {% if open_cards %}<ul class="rows">{% for card in open_cards %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is open.</p>{% endif %}
+</section>
+<section>
+  <h2>Waiting behind another card</h2>
+  <p class="small">A person gets one card at a time for each business. These open when the one in front is answered.</p>
+  {% if queued %}<ul class="rows">{% for card in queued %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is waiting.</p>{% endif %}
+</section>
+<section>
+  <h2>Answered, closed or ran out</h2>
+  {% if past %}<ul class="rows">{% for card in past %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">No card has finished yet.</p>{% endif %}
+  {% if hidden %}<p class="note">{{ hidden }} older finished cards are not shown here.</p>{% endif %}
+</section>
+{% include "_recent.html" %}
+{% endblock %}

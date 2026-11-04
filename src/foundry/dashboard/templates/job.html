@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>{{ job.row.title }}</h1>
+<p class="stage-line"><img class="sprite" src="/static/team/{{ job.row.sprite }}.png" alt="" width="32" height="32"><span class="stage {{ job.row.tone }}">{{ job.row.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.row.client }}</span>{% endif %}</p>
+{% for line in job.row.waiting %}<p class="small">{{ line }}</p>{% endfor %}
+
+{% if job.answer_offer.buttons or job.answer_offer.changes or job.restart.buttons or job.restart.notice or job.due_offer.buttons or job.due_offer.notice %}
+<section>
+  <h2>What you can do</h2>
+  {% if job.answer_offer.buttons or job.answer_offer.changes %}
+  <p>{{ job.answer.title }}</p>
+  <form class="stack" method="post" action="/jobs/{{ job.row.id }}/answer">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="request_id" value="{{ job.answer.request_id }}">
+    {% if job.answer_offer.changes %}
+    <label for="notes">What should change (needed to ask for changes)</label>
+    <textarea id="notes" name="notes" rows="3"></textarea>
+    {% endif %}
+    <div class="buttons">
+      {% for choice, label in job.answer_offer.buttons %}<button class="primary" type="submit" name="choice" value="{{ choice }}">{{ label }}</button>{% endfor %}
+      {% if job.answer_offer.changes %}<button type="submit" name="choice" value="revise">Ask for changes</button>{% endif %}
+    </div>
+  </form>
+  {% endif %}
+  {% if job.restart.buttons %}
+  <form class="buttons" method="post" action="/jobs/{{ job.row.id }}/act">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="primary" type="submit" name="action" value="restart">Restart</button>
+    <span class="small">Foundry tries this job again from the approved brief.</span>
+  </form>
+  {% endif %}
+  {% if job.restart.notice %}<p class="small">{{ job.restart.notice }}</p>{% endif %}
+  {% if job.due_offer.buttons %}
+  <p>{{ job.due.title }}</p>
+  <form class="buttons" method="post" action="/jobs/{{ job.row.id }}/act">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% for action, label in job.due_offer.buttons %}<button type="submit" name="action" value="{{ action }}">{{ label }}</button>{% endfor %}
+  </form>
+  <p class="small">Choosing "Ask someone else" here only presses the button. Whoever asked then names the person in chat.</p>
+  {% endif %}
+  {% if job.due_offer.notice %}<p class="small">{{ job.due.title }}. {{ job.due_offer.notice }}</p>{% endif %}
+</section>
+{% endif %}
+
+{% if job.items %}
+<section>
+  <h2>Who owes what</h2>
+  <p>{{ job.row.owes }}</p>
+  <div class="scroll">
+  <table class="list">
+    <thead><tr><th>Who</th><th>Input</th><th>Exact measure</th><th>Due</th><th>Where it stands</th></tr></thead>
+    <tbody>
+    {% for item in job.items %}
+    <tr>
+      <td data-label="Who">{{ item.owner }}</td>
+      <td data-label="Input">{{ item.input }}</td>
+      <td data-label="Exact measure">{{ item.measure }}</td>
+      <td data-label="Due">{{ item.due }}</td>
+      <td data-label="Where it stands">{{ item.status }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+
+{% if job.attention %}
+<section>
+  <h2>Needs attention</h2>
+  <ul class="plain">{% for line in job.attention %}<li>{{ line }}</li>{% endfor %}</ul>
+</section>
+{% endif %}
+
+{% if job.brief %}
+<section>
+  <h2>What was asked for</h2>
+  <pre class="text">{{ job.brief }}</pre>
+</section>
+{% endif %}
+{% if job.report %}
+<section>
+  <h2>Report</h2>
+  <pre class="text">{{ job.report }}</pre>
+</section>
+{% endif %}
+
+{% if job.files %}
+<section>
+  <h2>Files</h2>
+  <ul class="plain">
+    {% for file in job.files %}<li>{{ file.name }}</li>{% endfor %}
+  </ul>
+  <p class="small"><a href="/work">All versions and downloads</a></p>
+  {% if job.can_flag %}
+  {% for file in job.files %}
+  <form class="stack" method="post" action="/log/flag">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="job_id" value="{{ job.row.id }}">
+    <input type="hidden" name="what" value="text">
+    <input type="hidden" name="file" value="{{ file.entry_id }}">
+    <label for="statement-{{ file.entry_id }}">Flag a number or statement in {{ file.name }}</label>
+    <input id="statement-{{ file.entry_id }}" name="statement" type="text" maxlength="200" required>
+    <div><button type="submit">Flag it</button></div>
+  </form>
+  {% endfor %}
+  {% endif %}
+</section>
+{% endif %}
+
+<p><a href="/log?job={{ job.row.id }}">This job's timeline</a></p>
+{% include "_recent.html" %}
+{% endblock %}

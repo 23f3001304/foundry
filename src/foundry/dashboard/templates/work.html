@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Generated work</h1>
+{% if not jobs %}
+<p class="note">Nothing has been made yet.</p>
+{% endif %}
+{% for job in jobs %}
+<section>
+  <h2><a href="/jobs/{{ job.id }}">{{ job.title }}</a></h2>
+  <p class="small">{{ job.stage }}{% if user.businesses|length > 1 %}. {{ job.client }}{% endif %}</p>
+  {% for file in job.files %}
+  <div class="file">
+    <h3>{{ file.name }}</h3>
+    {% if file.picture and file.versions[0].served %}<a href="/work/files/{{ file.versions[0].entry_id }}"><img src="/work/files/{{ file.versions[0].entry_id }}" class="preview" alt="Preview of {{ file.name }}"></a>{% endif %}
+    <ul class="plain versions">
+      {% for version in file.versions %}
+      <li>
+        <span class="strong">Version {{ version.number }}</span>, made by {{ version.made_by }}, {{ version.made_at }}.
+        {{ version.status }}
+        {% if version.served %}<a class="button" href="/work/files/{{ version.entry_id }}?download=1">Download</a>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+</section>
+{% endfor %}
+{% endblock %}

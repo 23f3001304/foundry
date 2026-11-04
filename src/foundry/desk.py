@@ -17,10 +17,40 @@ import httpx
 
 from foundry.buffer import Burst, MessageBuffer
 from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, ONE_BY_ONE, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
-from foundry.chain import Link, carries, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines
+from foundry.chain import Link, carries, flag, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines
 from foundry.checks import file_text, needs_attention, people_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date
 from foundry.brand import HEX_COLOUR, BrandError
+from foundry.commands import (
+    ANSWERED_HERE,
+    APPROVE,
+    CHANGES_IN_CHAT,
+    COULD_NOT,
+    DUE_CHOICES,
+    JOB_APPROVALS,
+    LABELS,
+    LOG_ANSWERED,
+    LOG_FLAGGED,
+    LOG_RELOADED,
+    LOG_RESTARTED,
+    NO_DUE_CARD,
+    NO_SUCH_CARD,
+    NOT_A_CHOICE,
+    NOT_FOR_YOU,
+    NOT_IN_THIS_JOB,
+    NOT_OPEN,
+    NOT_STUCK,
+    NOT_THE_APPROVER,
+    NOT_YOUR_JOB,
+    NOTES_NEEDED,
+    REVISE,
+    VIA_DASHBOARD,
+    VOICE_IN_CHAT,
+    Command,
+    CommandStore,
+    Refused,
+    outcome_for,
+)
 from foundry.coordinator import Coordinator
 from foundry.daily import REPORT_FIX_TOO_LATE, VOICE_UNCONFIRMED, DailyReports
 from foundry.delivery import DELIVERED, deliver, deliver_report
@@ -29,7 +59,7 @@ from foundry.intake import Kind, classify
 from foundry.items import OWES_FORMAT, ItemStore
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
 from foundry.log import Entry, Log
-from foundry.pack import Pack, load_pack
+from foundry.pack import Pack, PackError, load_pack
 from foundry.stickers import branded_sticker, sticker_for
 from foundry.switch_client import Outcome, SwitchClient
 from foundry.text import headline, quiet
@@ -212,6 +242,13 @@ class Settings:
     brands: dict[str, str] = field(default_factory=dict)
     log_path: Path | str = "foundry-log.db"
     work_path: Path | str = "foundry-work.db"
+    jobs_path: Path | str = "foundry-jobs.db"
+    # What the dashboard asks the desk to do. Left empty, it sits beside the work database.
+    commands_path: Path | str = ""
+
+    def __post_init__(self) -> None:
+        if not self.commands_path:
+            self.commands_path = Path(self.work_path).with_name("foundry-commands.db")
 
     def pack_for(self, room_id: str) -> Pack:
         return self.packs.get(room_id, Pack())
@@ -257,6 +294,8 @@ class Settings:
             utc_offset_minutes=int(os.environ.get("FOUNDRY_UTC_OFFSET_MINUTES", "330")),
             log_path=os.environ.get("FOUNDRY_LOG_DB", "foundry-log.db"),
             work_path=os.environ.get("FOUNDRY_WORK_DB", "foundry-work.db"),
+            jobs_path=os.environ.get("FOUNDRY_JOBS_DB", "foundry-jobs.db"),
+            commands_path=os.environ.get("FOUNDRY_COMMANDS_DB", ""),
         )
 
 
@@ -311,6 +350,7 @@ class Desk:
         if isinstance(gate, QueuedCardGate):
             gate.cards = self.cards
         self.items = ItemStore(settings.work_path)
+        self.commands = CommandStore(settings.commands_path)
         # Asked for the model and the clock each time, so a test that swaps either one reaches the coordinator too.
         self.coordinator = Coordinator(client, store, self.items, self.log, self.cards, settings, lambda prompt: self.llm(prompt), lambda: self.clock(), self._ask_makers)
         # Combines the day's notes with the model that writes reports, and hands an approval to the desk like any other.
@@ -337,6 +377,7 @@ class Desk:
                 except Exception:
                     # Not acknowledged, so Switch hands it over again next tick. The ones behind it still get their turn.
                     logger.exception("Could not handle the outcome for %s, so it comes round again on the next tick.", outcome.request_id)
+            self.apply_commands()
             self._stop_quiet_jobs(now)
             self.coordinator.tick(now)
         finally:
@@ -1368,6 +1409,153 @@ class Desk:
         if job.revision_notes and (last := self.coordinator.draft_for(job)):
             lines.append(f"{LAST_LIST}\n{last}")
         return lines
+
+    # What the dashboard asks for. It only writes commands, so every check that matters is made here.
+
+    def apply_commands(self) -> None:
+        while (command := self.commands.next()) is not None:
+            error = None
+            try:
+                self._apply_command(command)
+            except Refused as refused:
+                error = str(refused)
+            except Exception:
+                # Marked done all the same, or this one would hold up every command behind it on each tick.
+                logger.exception("Could not apply dashboard command %s (%s).", command.id, command.action)
+                error = COULD_NOT
+            self.commands.done(command.id, error)
+
+    def _apply_command(self, command: Command) -> None:
+        if command.action == "answer_card":
+            self._answer_card(command, command.payload.get("request_id", ""), command.payload.get("choice"), command.payload.get("notes"))
+        elif command.action in DUE_CHOICES:
+            self._answer_due_card(command, DUE_CHOICES[command.action])
+        elif command.action == "restart":
+            self._restart(command)
+        elif command.action == "flag":
+            self._flag(command)
+        elif command.action == "reload_pack":
+            self._reload_pack(command)
+
+    def _answer_card(self, command: Command, request_id: str, choice: str | None, notes: str | None) -> None:
+        card = self.cards.get(request_id)
+        if card is None:
+            raise Refused(NO_SUCH_CARD)
+        if card.trigger is Trigger.VOICE:
+            raise Refused(VOICE_IN_CHAT)
+        if card.person != command.acts_as:
+            raise Refused(NOT_FOR_YOU)
+        if card.state != OPEN:
+            raise Refused(NOT_OPEN)
+        if card.trigger in JOB_APPROVALS:
+            self._approve_here(command, card, choice, (notes or "").strip())
+            return
+        if card.choices and choice not in card.choices:
+            raise Refused(NOT_A_CHOICE)
+        if not card.choices and choice != APPROVE:
+            raise Refused(CHANGES_IN_CHAT if choice == REVISE else NOT_A_CHOICE)
+        self._note_dashboard(command, card, choice)
+        outcome = outcome_for(card, choice, self.clock())
+        if card.trigger is Trigger.QUESTION:
+            # A job's own question, answered as a press on it is. It already says in the room that the answer came.
+            self.cards.finish(card.request_id, ANSWERED)
+            self._take_job_answer(outcome)
+        else:
+            self._take_card_answer(card, outcome)
+        self._close_chat_card(card, say=card.trigger is not Trigger.QUESTION)
+        self.cards.pump()
+
+    def _approve_here(self, command: Command, card: Card, choice: str | None, notes: str) -> None:
+        # Typed as the approver in the room the card is in, so the job takes it as it takes a typed yes. The gate closes the chat card itself.
+        job = self._job_of(card)
+        if job is None or job.approval is None or job.approval["request_id"] != card.request_id:
+            raise Refused(NOT_OPEN)
+        if choice == REVISE and not notes:
+            raise Refused(NOTES_NEEDED)
+        if choice not in (APPROVE, REVISE):
+            raise Refused(NOT_A_CHOICE)
+        self._note_dashboard(command, card, choice)
+        word = "yes" if choice == APPROVE else f"revise: {notes}"
+        self._decide(job, {"type": "message", "room_id": card.room_id, "payload": {"sender": card.person, "body": word}})
+        self.cards.pump()
+
+    def _answer_due_card(self, command: Command, choice: str) -> None:
+        job = self._job_named(command)
+        due = [card for card in self.cards.find(job.requester, job.bucket, Trigger.DUE, OPEN) if card.job_id == job.id]
+        if not due:
+            raise Refused(NO_DUE_CARD)
+        self._answer_card(command, due[0].request_id, choice, None)
+
+    def _restart(self, command: Command) -> None:
+        # A stuck job restarts when its approver answers the stuck card, so this answers it the way a press would.
+        job = self._job_named(command)
+        card = self.cards.get(job.approval["request_id"]) if job.approval else None
+        if job.state is not State.BLOCKED or card is None or card.trigger is not Trigger.STUCK:
+            raise Refused(NOT_STUCK)
+        if card.person != command.acts_as:
+            raise Refused(NOT_FOR_YOU)
+        # A card that ran out still takes an answer, as a typed word does.
+        if card.state not in (OPEN, EXPIRED):
+            raise Refused(NOT_OPEN)
+        was_open = card.state == OPEN
+        self._log_dashboard(command, job.bucket, card.room_id, LOG_RESTARTED.format(via=VIA_DASHBOARD), job.id, card.request_id)
+        self.cards.finish(card.request_id, ANSWERED)
+        self._take_job_answer(outcome_for(card, APPROVE, self.clock()))
+        if was_open:
+            self._close_chat_card(card)
+        self.cards.pump()
+
+    def _flag(self, command: Command) -> None:
+        job = self._job_named(command)
+        if job.approver != command.acts_as:
+            raise Refused(NOT_THE_APPROVER)
+        target = str(command.payload.get("target", ""))
+        kind, _, number = target.partition(":")
+        if kind == "entry" and number.isascii() and number.isdigit() and int(number) not in self._entries_of(job):
+            # Any entry of the bucket would let someone walk the log one number at a time.
+            raise Refused(NOT_IN_THIS_JOB)
+        try:
+            flagged = flag(self.log, job.bucket, command.acts_as, target, job.id, job.room_id, self.clock())
+        except ValueError as error:
+            raise Refused(str(error)) from None
+        self._log_dashboard(command, job.bucket, job.room_id, LOG_FLAGGED.format(flagged=flagged.text, via=VIA_DASHBOARD), job.id, str(flagged.id))
+
+    def _entries_of(self, job: Job) -> set[int]:
+        return {entry.id for entry in self.log.for_job(job.bucket, job.id)} | set(self._opening_ids(job))
+
+    def _reload_pack(self, command: Command) -> None:
+        bucket = str(command.payload.get("bucket", ""))
+        rooms = [room for room in self.settings.rooms_in(bucket) if room in self.settings.packs and room in self.settings.brands]
+        try:
+            fresh = {room: load_pack(BRANDS / self.settings.brands[room]) for room in rooms}
+        except PackError as error:
+            raise Refused(str(error)) from None
+        self.settings.packs.update(fresh)
+        self._log_dashboard(command, bucket, self.settings.home_room(bucket), LOG_RELOADED.format(via=VIA_DASHBOARD), None, None)
+
+    def _job_named(self, command: Command) -> Job:
+        try:
+            return self.store.get(command.payload.get("job_id"))
+        except KeyError:
+            raise Refused(NOT_YOUR_JOB) from None
+
+    def _note_dashboard(self, command: Command, card: Card, choice: str | None) -> None:
+        text = LOG_ANSWERED.format(title=card.title, choice=LABELS.get(choice, choice), via=VIA_DASHBOARD)
+        self._log_dashboard(command, card.bucket, card.room_id, text, card.job_id, card.request_id)
+
+    def _log_dashboard(self, command: Command, bucket: str, room_id: str, text: str, job_id: str | None, ref: str | None) -> None:
+        # The person it was done as, and that it was done here, so the chain can say so.
+        self.log.add(self.clock(), bucket, room_id, command.acts_as, "dashboard_action", text, job_id=job_id, ref=ref)
+
+    def _close_chat_card(self, card: Card, say: bool = True) -> None:
+        # The answer is already taken, so a card Switch won't close only costs a stale card, and a press on it changes nothing.
+        try:
+            self.client.close_card(card.request_id)
+            if say:
+                # Switch marks a closed card "Cancelled", so say the answer did arrive.
+                self.client.post_message(card.room_id, ANSWERED_HERE.format(title=card.title))
+        except httpx.HTTPError as error:
+            logger.warning("Could not close card %s after an answer on the dashboard: %s", card.request_id, error)
 
 
 async def run(desk: Desk, rooms: list[str], tick_seconds: float = 3) -> None:

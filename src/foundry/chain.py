@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from foundry.checks import numbers_in
+from foundry.commands import VIA_DASHBOARD
 from foundry.jobs import Job
 from foundry.log import Entry, Log
 from foundry.switch_client import DESK_NAME
@@ -401,6 +402,11 @@ class _Trail:
             if entry.kind == "review" and entry.id > first_made:
                 self._add(entry, PASSED if entry.ref == REVIEW_PASS else SENT_BACK, entry.text, DIRECT)
 
+    def _how_answered(self, answer: Entry) -> str:
+        # The desk logs a dashboard answer beside the card's own answer, under the same card.
+        here = any(entry.kind == "dashboard_action" and entry.ref == answer.ref for entry in self.job)
+        return f"{answer.text} ({VIA_DASHBOARD})" if here else answer.text
+
     def _delivery(self, used: dict[str, Hits]) -> None:
         if self.copies and not used:
             # No file of this job used the flagged thing, so nothing the job delivered is behind it.
@@ -414,7 +420,7 @@ class _Trail:
         # The answer that came just before the delivery is the sign-off that let it go.
         answers = [entry for entry in self.job if entry.kind == "card_answered" and entry.id < last.id]
         if answers:
-            self._add(answers[-1], SIGNED_OFF, answers[-1].text, DIRECT)
+            self._add(answers[-1], SIGNED_OFF, self._how_answered(answers[-1]), DIRECT)
         self._add(last, DELIVERED, f"{last.text or 'the report'} to {last.room_id}", DIRECT)
 
 

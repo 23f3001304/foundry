@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Jobs</h1>
+{% if not rows %}
+<p class="note">No jobs yet.</p>
+{% else %}
+<table class="list">
+  <thead><tr><th>Job</th><th>Stage</th><th>Who owes what</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+  <tr>
+    <td data-label="Job"><a href="/jobs/{{ row.id }}">{{ row.title }}</a>{% if user.businesses|length > 1 %}<span class="small block">{{ row.client }}</span>{% endif %}</td>
+    <td data-label="Stage">
+      <span class="stage-line"><img class="sprite" src="/static/team/{{ row.sprite }}.png" alt="" width="32" height="32"><span class="stage {{ row.tone }}">{{ row.stage }}</span></span>
+      {% for line in row.waiting %}<span class="small block">{{ line }}</span>{% endfor %}
+    </td>
+    <td data-label="Who owes what">{{ row.owes or "No inputs from other people." }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}
