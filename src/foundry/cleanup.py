@@ -120,15 +120,19 @@ def clean_note(note: str, sent_at: datetime, pack: Pack, llm: Callable[[str], st
         return CleanResult("", [], [with_dates(question) for question in questions], [], [], note)
     if not draft.strip():
         raise CleanupFailed("The model sent neither a report nor a question.")
-    kept = []
+    kept, unplaced = [], []
     for change in changes:
         if _supported(change, note, pack):
             kept.append(change)
         elif change.replacement:
             logger.info("Dropped a change with no support: %s", change)
-            draft = draft.replace(change.replacement, f"[unverified: {change.original}]")
+            if change.replacement in draft:
+                draft = draft.replace(change.replacement, f"[unverified: {change.original}]")
+            else:
+                # The report worded it differently, so there is nothing to mark and the approver must be told.
+                unplaced.append(f'"{change.original}" may have become "{with_dates(change.replacement)}", and no document backs that.')
     # Checked before the date tokens become text, because code wrote those numbers.
-    warnings = _check(DATE_TOKEN.sub("", draft), note, kept, pack)
+    warnings = unplaced + _check(DATE_TOKEN.sub("", draft), note, kept, pack)
     text = with_dates(draft)
     shown = [replace(change, replacement=with_dates(change.replacement)) for change in kept]
     return CleanResult(text, shown, [], list(dict.fromkeys(UNVERIFIED.findall(text))), warnings, note)
@@ -187,9 +191,10 @@ def _supported(change: Change, note: str, pack: Pack) -> bool:
     if evidence not in _flat(pack.sources.get(change.source, "")):
         return False
     # True evidence must also back the name it is used for.
-    known = _words(f"{change.evidence} {note}")
+    known = f"{change.evidence} {note}"
     replacement = DATE_TOKEN.sub("", change.replacement)
-    return all(word.casefold() in known for word in [*NAME.findall(replacement), *NUMBER.findall(replacement)])
+    names_known = all(name.casefold() in _words(known) for name in NAME.findall(replacement))
+    return names_known and set(NUMBER.findall(replacement)) <= set(NUMBER.findall(known))
 
 
 def _check(report: str, note: str, kept: list[Change], pack: Pack) -> list[str]:
