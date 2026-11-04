@@ -94,6 +94,7 @@ REVIEW_FAIL = "REVIEW_FAIL"
 MARKER = re.compile(rf"(?:@\S+\s+)*({BRIEF_READY}|{WORK_READY}|{WORK_BLOCKED}|{REVIEW_PASS}|{REVIEW_FAIL})(?:\s+#(\w+))?(?:\s+(.*))?", re.DOTALL)
 FILE_KINDS = {".pptx", ".png", ".jpg", ".jpeg", ".pdf"}
 SIGNOFF = "Approve to deliver this work, or ask for changes."
+REVIEWER_SAID = "The reviewer passed it and said: {words}"
 NO_SOURCE = "No source found for {numbers} in {name}."
 UNREADABLE = "Could not read {name}, so its numbers were not checked."
 IGNORED_LINK = "Ignored the source link for {values} in {name}, because no entry for this job matches it."
@@ -486,7 +487,7 @@ class Desk:
         elif marker == REVIEW_PASS:
             advance(job, "review_passed")
             job.asked_at = None
-            self._ask_for_signoff(job)
+            self._ask_for_signoff(job, text)
             self.store.save(job)
         else:
             self._fail_round(job, text or "The reviewer gave no notes.")
@@ -616,14 +617,16 @@ class Desk:
             f"Brief:\n{quiet(job.brief)}\n\n{last_round}Files:\n{files}{self._inputs_for(job)}",
         )
 
-    def _ask_for_signoff(self, job: Job) -> None:
+    def _ask_for_signoff(self, job: Job, reviewer_said: str) -> None:
         room = self._approval_room(job)
         for path in job.artifacts:
             self.client.post_file(room, path, f"For your sign-off: {Path(path).name}")
         # Last round's lines from this check go, because that work has changed. Lines other checks wrote stay.
         job.attention = [line for line in job.attention if not WORK_CHECK_LINE.fullmatch(line)] + self._attention_for_work(job)
         lines = "\n".join(quiet(line) for line in job.attention)
-        self.gate.ask(job, f"Final work: {self._title(job)}", f"{lines}\n\n{SIGNOFF}" if lines else SIGNOFF, room)
+        # A reviewer can pass work and still ask the approver to check something, so the person signing off reads it here.
+        said = REVIEWER_SAID.format(words=quiet(reviewer_said)) if reviewer_said else ""
+        self.gate.ask(job, f"Final work: {self._title(job)}", "\n\n".join(part for part in (lines, said, SIGNOFF) if part), room)
         self._sticker(room, "needs_input")
 
     def _attention_for_work(self, job: Job) -> list[str]:
