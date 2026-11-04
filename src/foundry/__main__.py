@@ -5,6 +5,7 @@ import logging
 import os
 
 import httpx
+from foundry.daily import check_packs
 from foundry.desk import Desk, Settings, run
 from foundry.gates import QueuedCardGate
 from foundry.intake import default_llm
@@ -22,6 +23,8 @@ def main() -> None:
         raise SystemExit(str(error)) from None
     if not settings.workrooms:
         raise SystemExit("Set FOUNDRY_ROOMS first. tools/create_rooms.py writes it for you.")
+    if problems := check_packs(settings):
+        raise SystemExit("\n".join(problems))
     client = SwitchClient(os.environ["SWITCH_URL"], os.environ["FOUNDRY_DESK_ID"], os.environ["FOUNDRY_DESK_KEY"])
     store = JobStore(os.environ.get("FOUNDRY_JOBS_DB", "foundry-jobs.db"))
     cleanup_llm = default_llm(os.environ.get("FOUNDRY_CLEANUP_MODEL", "claude-sonnet-5-5"))

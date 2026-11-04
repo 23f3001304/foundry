@@ -52,6 +52,13 @@ class Pack:
                 raise PackError(f"I can't read the set time {time!r}. Write it as HH:MM on a 24-hour clock, like 18:00, in FOUNDRY_SET_TIMES or the pack's set_times.") from None
 
 
+def _approver(named: object) -> str:
+    # A Switch sender id holds the bridge's id, which differs on every install, so a pack writes {bridge} and the environment fills it in.
+    approver = str(named or "").strip()
+    bridge = os.environ.get("FOUNDRY_MATTERMOST_BRIDGE", "").strip()
+    return approver.replace("{bridge}", bridge) if bridge else approver
+
+
 def load_pack(brand_dir: Path | str) -> Pack:
     folder = Path(brand_dir)
     if not (folder / "pack.md").is_file():
@@ -64,7 +71,7 @@ def load_pack(brand_dir: Path | str) -> Pack:
         report_format=data.get("report_format", "").strip(),
         report_room=data.get("report_room", "").strip(),
         sources=sources,
-        approver=str(data.get("approver") or "").strip(),
+        approver=_approver(data.get("approver")),
         set_times=_set_times(data.get("set_times")),
         jump_share=float(data.get("jump_share", Pack.jump_share)),
         working_hours=_clock_times(data.get("working_hours") or Pack.working_hours),

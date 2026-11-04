@@ -1,6 +1,7 @@
 ---
 update_rule: A note from the site team saying what has happened or will happen on a site, such as work finished, work starting, people called or materials delivered.
 report_room: studio
+approver: '@switch-mattermost-{bridge}-site-manager-a:localhost'
 glossary: |
   bhijli wala, bijli wala: electrician
   mistri: mason

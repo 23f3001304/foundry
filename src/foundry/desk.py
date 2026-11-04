@@ -19,9 +19,10 @@ from foundry.buffer import Burst, MessageBuffer
 from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
 from foundry.chain import Link, carries, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines
 from foundry.checks import file_text, needs_attention, people_words, unsourced_numbers
-from foundry.cleanup import CleanupFailed, clean_note, format_date, signoff_detail
+from foundry.cleanup import CleanupFailed, clean_note, format_date
 from foundry.brand import HEX_COLOUR, BrandError
 from foundry.coordinator import Coordinator
+from foundry.daily import REPORT_FIX_TOO_LATE, VOICE_UNCONFIRMED, DailyReports
 from foundry.delivery import DELIVERED, deliver, deliver_report
 from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, parse_reply, resolve_approver, revise_notes
 from foundry.intake import Kind, classify
@@ -59,7 +60,6 @@ IGNORED_LINK = "Ignored the source link for {values} in {name}, because no entry
 WORK_CHECK_LINE = re.compile("|".join(".+".join(map(re.escape, re.split(r"\{\w+\}", line))) for line in (NO_SOURCE, UNREADABLE, IGNORED_LINK)))
 # The card only holds so much, so a file with many unsourced numbers shows the first few.
 MOST_NUMBERS_LISTED = 8
-REPORT_CARD_TITLE = "Report for sign-off"
 HOW_TO_RESTART = "Approve to try again, or ask for changes to give new notes."
 STUCK = f"This job has been through {MAX_REVISION_ROUNDS} rounds of changes, so it has stopped. {HOW_TO_RESTART}"
 MAKER_STUCK = "The team cannot finish this as asked."
@@ -120,7 +120,7 @@ FIX_TOO_LATE = "That work is already signed off, so I have only noted the fix."
 FIX_CARD_RAN_OUT = "The card about the fix ran out, so the work goes on as it is."
 VOICE_RAN_OUT_OPENED_AGAIN = "More than one voice note ran out without an answer, so I have asked about them again, one at a time. Please answer each on its card."
 # Lines on a job's attention list that this feature writes. None may start like WORK_CHECK_LINE's, or the next round of that check would drop them.
-VOICE_UNCONFIRMED = "The sender has not confirmed what the voice note said."
+# VOICE_UNCONFIRMED is one of them, written in daily.py because a daily report shows it too.
 FIX_NOT_MADE = 'The sender says the voice note was heard wrong. This work went on without their fix: "{fix}"'
 FIX_AFTER_SIGN_OFF = 'The sender says the voice note was heard wrong, after this work was signed off. Their fix: "{fix}"'
 # How far back an approved report still counts as evidence for a new note.
@@ -313,6 +313,8 @@ class Desk:
         self.items = ItemStore(settings.work_path)
         # Asked for the model and the clock each time, so a test that swaps either one reaches the coordinator too.
         self.coordinator = Coordinator(client, store, self.items, self.log, self.cards, settings, lambda prompt: self.llm(prompt), lambda: self.clock(), self._ask_makers)
+        # Combines the day's notes with the model that writes reports, and hands an approval to the desk like any other.
+        self.daily = DailyReports(client, store, self.log, self.cards, settings, lambda prompt: (self.cleanup_llm or self.llm)(prompt), lambda: self.clock(), gate, self._apply)
 
     def handle(self, event: dict | Outcome) -> None:
         if isinstance(event, Outcome):
@@ -340,6 +342,8 @@ class Desk:
         finally:
             # One job's trouble must not stop everyone else's cards and set times.
             self.cards.pump()
+            # Before the set times, so a report built at one is on its card in that same run.
+            self.daily.tick(now)
             # Every bucket every time, even with nothing waiting, so a set time that passes empty isn't taken for one still to come.
             for bucket in dict.fromkeys([*map(self.settings.bucket_for, self.settings.all_rooms()), *self.cards.known_buckets()]):
                 pack = self.settings.pack_for(self.settings.home_room(bucket))
@@ -482,8 +486,8 @@ class Desk:
         if job.state is State.BLOCKED:
             self.gate.ask(job, f"Stuck: {self._title(job)}", STUCK, self._approval_room(job))
             self._sticker(self._approval_room(job), "blocked")
-        elif job.kind == "report":
-            self._clean_report(job)
+        elif job.kind == "daily":
+            self.daily.redo(job)
         else:
             self._ask_makers(job)
 
@@ -608,10 +612,9 @@ class Desk:
     def _deliver(self, job: Job) -> None:
         clean_run = job.revision_rounds == 0
         self._sticker(job.room_id, "approved")
-        if job.kind == "report":
+        if job.kind == "daily":
             deliver_report(job, self.client, self._report_rooms(job))
             self.log.add(self.clock(), job.bucket, job.room_id, DESK, "report_approved", job.report, job_id=job.id)
-            self._reply_aloud(job, job.report)
         else:
             deliver(job, self.client, job.room_id)
             self._reply_aloud(job, DELIVERED)
@@ -624,7 +627,8 @@ class Desk:
         rooms = self.settings.workrooms_for(job.room_id)
         named = self.settings.pack_for(job.room_id).report_room
         other = {"studio": rooms.studio, "review": rooms.review}.get(named, named)
-        return list(dict.fromkeys(room for room in (job.room_id, other) if room))
+        # A day's report goes to the report room only, and not back to the room its notes came from. With no report room named, it has nowhere else to go.
+        return [other or job.room_id]
 
     def _reply_aloud(self, job: Job, text: str) -> None:
         if job.language:
@@ -710,8 +714,8 @@ class Desk:
     def _hear_voice(self, job: Job, burst: Burst) -> None:
         # A voice note that became a request or a report. Only its sender knows what they said, so they approve what was heard.
         words, entries = self._voice_in(job.bucket, burst.entry_ids)
-        if job.requester == job.approver:
-            # The card that asks them to approve the work shows what was heard and does both jobs.
+        if job.requester == job.approver and job.kind != "report":
+            # The card that asks them to approve the work shows what was heard and does both jobs. A note has no such card, because it goes into the day's report.
             job.heard = UNCONFIRMED
         else:
             self._ask_voice_approval(job, words or burst.text, entries)
@@ -744,8 +748,7 @@ class Desk:
         return f"{detail}\n\n{HEARD_LINE.format(text=quiet(words))}" if words else detail
 
     def _confirm_if_it_showed_what_was_heard(self, job: Job, event: str | None) -> None:
-        shown = event == "brief_approved" or (event == "signoff_approved" and job.kind == "report")
-        if shown and job.heard == UNCONFIRMED and job.requester == job.approver:
+        if event == "brief_approved" and job.heard == UNCONFIRMED and job.requester == job.approver:
             words, entries = self._voice_in(job.bucket, self._opening_ids(job))
             self._mark_confirmed(job, job.approver, job.room_id, self.clock(), words, entries)
 
@@ -756,6 +759,7 @@ class Desk:
         job.heard = CONFIRMED
         job.attention = [line for line in job.attention if line != VOICE_UNCONFIRMED]
         self.log.add(at, job.bucket, room_id, person, "voice_confirmed", words, job_id=job.id, ref=_ids(entries))
+        self.daily.heard_confirmed(job)
 
     def _open_voice_card(self, person: str, room_id: str) -> Card | None:
         card = self.cards.open_for(person, self.settings.bucket_for(room_id))
@@ -853,7 +857,10 @@ class Desk:
 
     def _apply_voice_fix(self, job: Job, fix: str, spoken: bool = False) -> None:
         # Where the job has got to decides what a fix can do. Foundry never restarts work by itself.
-        if job.state in (State.APPROVED, State.DELIVERED):
+        if self.daily.takes_a_fix(job):
+            # A note is signed off the moment it is filed, but the day's report it is filed in is not built yet.
+            self._fix_report(job, fix, spoken)
+        elif job.state in (State.APPROVED, State.DELIVERED):
             self._note_fix_after_sign_off(job, fix, job.room_id)
         elif job.kind == "report":
             self._fix_report(job, fix, spoken)
@@ -883,14 +890,10 @@ class Desk:
 
     def _fix_report(self, job: Job, fix: str, spoken: bool) -> None:
         job.brief = self._corrected_note(job, fix, spoken)
-        if job.state is State.BLOCKED:
-            # It starts again from the note when someone restarts it, so the fix waits there.
-            return
         if job.question:
             self._close_question(job)
-        if job.state is State.SIGNOFF_PENDING:
-            self._withdraw_approval(job)
-            advance(job, "report_corrected")
+        if job.state is State.DELIVERED:
+            advance(job, "note_reopened")
         self._clean_report(job)
 
     def _withdraw_approval(self, job: Job) -> None:
@@ -912,7 +915,7 @@ class Desk:
     def _note_fix_after_sign_off(self, job: Job, fix: str, room_id: str) -> None:
         # Signed off is true of a job that is still being delivered as well as one that has been.
         job.attention.append(FIX_AFTER_SIGN_OFF.format(fix=fix))
-        self.client.post_message(room_id, FIX_TOO_LATE)
+        self.client.post_message(room_id, REPORT_FIX_TOO_LATE if job.kind == "report" else FIX_TOO_LATE)
 
     def _ask_about_late_fix(self, job: Job, fix: str) -> None:
         title = quiet(LATE_FIX_TITLE.format(title=self._title(job)))
@@ -1103,7 +1106,7 @@ class Desk:
             self._card_ran_out(card)
         elif outcome.answered_by != card.person:
             self._ask_card_again(card)
-        # One branch per trigger from here down, so each one knows the right person answered. Who-owes-what cards and the daily report add theirs here.
+        # One branch per trigger from here down, so each one knows the right person answered. Who-owes-what cards add theirs here.
         # Until then, a card with no branch is only marked answered, and nothing acts on the answer.
         elif card.trigger is Trigger.VOICE:
             self._take_voice_answer(card, outcome.chosen_from(card.choices), outcome.answered_at or self.clock())
@@ -1113,6 +1116,8 @@ class Desk:
             self._take_routine_answer(card, outcome)
         elif card.trigger in ITEM_CARDS:
             self.coordinator.take_card_answer(card, outcome)
+        elif card.trigger in (Trigger.DAILY_REPORT, Trigger.ATTENTION_NOTE):
+            self.daily.take_card_answer(card, outcome)
         else:
             self.cards.finish(card.request_id, ANSWERED)
 
@@ -1179,8 +1184,8 @@ class Desk:
         if event == "brief_revised":
             self._sticker(self._approval_room(job), "revise")
             self._ask_for_brief(job)
-        elif event == "unblock" and job.kind == "report":
-            self._clean_report(job)
+        elif event == "unblock" and job.kind == "daily":
+            self.daily.redo(job)
         elif event == "brief_approved" and self.coordinator.start(job):
             # Each owner has been asked. Makers start once every item is closed.
             advance(job, "collect")
@@ -1239,8 +1244,10 @@ class Desk:
         # A question that is only on a card still in the queue hasn't reached anyone, so nothing they say answers it yet.
         return not job.question or bool(job.language) or self.cards.is_open(job.question["request_id"])
 
-    def _open_job(self, burst: Burst) -> Job:
+    def _open_job(self, burst: Burst, kind: str = "work") -> Job:
         job = self.store.create(burst.room_id, burst.sender, self._approver_for(burst), self.settings.bucket_for(burst.room_id))
+        # Before anyone is asked about a voice note, because a note is asked about differently.
+        job.kind = kind
         opened_by = ",".join(str(entry_id) for entry_id in burst.entry_ids) or None
         self.log.add(self.clock(), job.bucket, burst.room_id, burst.sender, "job_opened", headline(burst.text), job_id=job.id, ref=opened_by)
         if burst.language:
@@ -1248,8 +1255,8 @@ class Desk:
         return job
 
     def _start_report(self, burst: Burst) -> None:
-        job = self._open_job(burst)
-        job.kind, job.brief, job.sent_at, job.language = "report", burst.text, burst.first_at.astimezone(self._business_zone()).isoformat(), burst.language
+        job = self._open_job(burst, "report")
+        job.brief, job.sent_at, job.language = burst.text, burst.first_at.astimezone(self._business_zone()).isoformat(), burst.language
         self.store.save(job)
         self._sticker(burst.room_id, "brief_received")
         self._clean_report(job)
@@ -1288,9 +1295,6 @@ class Desk:
         self.client.post_message(job.room_id, HEARD_THE_ANSWER)
 
     def _clean_report(self, job: Job) -> None:
-        if job.revision_notes:
-            job.brief += f"\n\nThe approver asked for these changes:\n{job.revision_notes}"
-            job.revision_notes = None
         pack = self.settings.pack_for(job.room_id)
         earlier = "\n".join(filter(None, [pack.sources.get("reports", ""), self._earlier_reports(job.bucket, self.clock())]))
         try:
@@ -1313,10 +1317,12 @@ class Desk:
         unconfirmed = [VOICE_UNCONFIRMED] if VOICE_UNCONFIRMED in job.attention else []
         result = replace(result, warnings=[*needs_attention(result), *unconfirmed])
         job.report, job.asked_at = quiet(result.text), None
-        advance(job, "report_drafted")
-        room = self._approval_room(job)
-        self.gate.ask(job, REPORT_CARD_TITLE, self._with_what_was_heard(job, quiet(signoff_detail(result))), room)
-        self._sticker(room, "needs_input")
+        # A clean note opens no card. It goes into the day's report, and its writer hears so.
+        told = self.daily.note_ready(job, result)
+        # Saved before anyone is told, so a message that can't be sent doesn't leave the note looking unfiled.
+        self.store.save(job)
+        if told:
+            self._reply(job, told)
 
     def _ask_for_brief(self, job: Job) -> None:
         job.asked_at = self.clock().isoformat()
