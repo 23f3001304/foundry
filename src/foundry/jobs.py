@@ -64,6 +64,10 @@ class Job:
     report: str | None = None
     language: str | None = None
     question: dict | None = None
+    bucket: str = ""
+    token: str = ""
+    heard: str | None = None
+    attention: list[str] = field(default_factory=list)
 
     @property
     def approval_room(self) -> str:
@@ -84,7 +88,7 @@ def advance(job: Job, event: str) -> Job:
     return job
 
 
-COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report", "language", "question")
+COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report", "language", "question", "bucket", "token", "heard", "attention")
 
 
 class JobStore:
@@ -96,11 +100,13 @@ class JobStore:
                     id TEXT PRIMARY KEY, room_id TEXT NOT NULL, requester TEXT NOT NULL, approver TEXT NOT NULL,
                     state TEXT NOT NULL, revision_rounds INTEGER NOT NULL, brief TEXT, artifacts TEXT NOT NULL,
                     approval TEXT, revision_notes TEXT, waiting_on TEXT NOT NULL, asked_at TEXT,
-                    kind TEXT NOT NULL, sent_at TEXT, report TEXT, language TEXT, question TEXT)"""
+                    kind TEXT NOT NULL, sent_at TEXT, report TEXT, language TEXT, question TEXT,
+                    bucket TEXT NOT NULL, token TEXT NOT NULL, heard TEXT, attention TEXT NOT NULL)"""
             )
 
-    def create(self, room_id: str, requester: str, approver: str) -> Job:
-        job = Job(id=uuid.uuid4().hex, room_id=room_id, requester=requester, approver=approver)
+    def create(self, room_id: str, requester: str, approver: str, bucket: str = "") -> Job:
+        # A room with no client of its own is its own bucket.
+        job = Job(id=uuid.uuid4().hex, room_id=room_id, requester=requester, approver=approver, bucket=bucket or room_id, token=uuid.uuid4().hex)
         self.save(job)
         return job
 
@@ -113,19 +119,24 @@ class JobStore:
     def all(self) -> list[Job]:
         return self._select("ORDER BY rowid")
 
+    def by_token(self, token: str) -> Job | None:
+        rows = self._select("WHERE token = ?", token) if token else []
+        return rows[0] if rows else None
+
     def in_room(self, room_id: str) -> list[Job]:
         return self._select("WHERE room_id = ? ORDER BY rowid", room_id)
 
     def save(self, job: Job) -> None:
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute(
-                f"""INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                f"""INSERT INTO jobs VALUES ({", ".join("?" * len(COLUMNS))})
                     ON CONFLICT(id) DO UPDATE SET {", ".join(f"{name} = excluded.{name}" for name in COLUMNS[1:])}""",
                 (job.id, job.room_id, job.requester, job.approver, job.state.value,
-                 job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes, json.dumps(job.waiting_on), job.asked_at, job.kind, job.sent_at, job.report, job.language, json.dumps(job.question)),
+                 job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes, json.dumps(job.waiting_on), job.asked_at, job.kind, job.sent_at, job.report, job.language, json.dumps(job.question),
+                 job.bucket, job.token, job.heard, json.dumps(job.attention)),
             )
 
     def _select(self, clause: str, *values: str) -> list[Job]:
         with closing(sqlite3.connect(self.path)) as db:
             rows = db.execute(f"SELECT {', '.join(COLUMNS)} FROM jobs {clause}", values).fetchall()
-        return [Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16])) for row in rows]
+        return [Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16]), row[17], row[18], row[19], json.loads(row[20])) for row in rows]

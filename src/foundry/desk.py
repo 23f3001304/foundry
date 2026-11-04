@@ -21,6 +21,7 @@ from foundry.delivery import DELIVERED, deliver, deliver_report
 from foundry.gates import Decision, Gate, parse_reply, resolve_approver
 from foundry.intake import Kind, classify
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
+from foundry.log import Entry, Log
 from foundry.pack import Pack, load_pack
 from foundry.stickers import branded_sticker, sticker_for
 from foundry.switch_client import Outcome, SwitchClient
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 BRANDS = Path(__file__).resolve().parents[2] / "brands"
 AGENT_SENDER_PREFIX = "@switch-agent-"
+DESK = "foundry-desk"
 BRIEF_AGENT = "foundry-brief"
 MAKERS = ("foundry-deck", "foundry-visual")
 REVIEWER = "foundry-reviewer"
@@ -126,6 +128,8 @@ class Settings:
     reports_path: Path | str = "foundry-reports.db"
     utc_offset_minutes: int = 330
     brands: dict[str, str] = field(default_factory=dict)
+    log_path: Path | str = "foundry-log.db"
+    work_path: Path | str = "foundry-work.db"
 
     def pack_for(self, room_id: str) -> Pack:
         return self.packs.get(room_id, Pack())
@@ -138,6 +142,21 @@ class Settings:
 
     def all_rooms(self) -> list[str]:
         return list(dict.fromkeys([*self.workrooms, *self.inside_rooms()]))
+
+    def bucket_for(self, room_id: str) -> str:
+        # A room with no brand is its own bucket.
+        return self.brands.get(room_id, room_id)
+
+    def is_internal(self, room_id: str) -> bool:
+        rooms = self.workrooms.get(room_id)
+        return rooms is not None and rooms.studio == rooms.review
+
+    def rooms_in(self, bucket: str) -> list[str]:
+        return [room for room, brand in self.brands.items() if brand == bucket] or [bucket]
+
+    def home_room(self, bucket: str) -> str:
+        rooms = self.rooms_in(bucket)
+        return next((room for room in rooms if room not in self.inside_rooms()), rooms[0])
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -153,6 +172,8 @@ class Settings:
             brands=_brands_from(os.environ.get("FOUNDRY_PACKS", ""), workrooms),
             reports_path=os.environ.get("FOUNDRY_REPORTS_DB", "foundry-reports.db"),
             utc_offset_minutes=int(os.environ.get("FOUNDRY_UTC_OFFSET_MINUTES", "330")),
+            log_path=os.environ.get("FOUNDRY_LOG_DB", "foundry-log.db"),
+            work_path=os.environ.get("FOUNDRY_WORK_DB", "foundry-work.db"),
         )
 
 
@@ -202,6 +223,7 @@ class Desk:
         self.translator = translator
         self.buffer = MessageBuffer(settings.buffer_path, settings.quiet_seconds)
         self.reports = ReportStore(settings.reports_path)
+        self.log = Log(settings.log_path)
 
     def handle(self, event: dict | Outcome) -> None:
         if isinstance(event, Outcome):
@@ -256,10 +278,12 @@ class Desk:
         job = self._job_waiting(event["room_id"], state, room_kind, tag)
         if job is None:
             logger.warning("Ignored %s from %s: no job is waiting for it in room %s", marker, agent, event["room_id"])
-        elif marker == BRIEF_READY:
+            return
+        self._log_marker(job, event, marker, text)
+        if marker == BRIEF_READY:
             self._take_brief(job, text)
         elif marker == WORK_READY:
-            self._take_work(job, agent, text)
+            self._take_work(job, payload, text)
         elif marker == WORK_BLOCKED:
             if agent in job.waiting_on:
                 self._stop(job, text or MAKER_STUCK)
@@ -271,6 +295,12 @@ class Desk:
         else:
             self._fail_round(job, text or "The reviewer gave no notes.")
             self.store.save(job)
+
+    def _log_marker(self, job: Job, event: dict, marker: str, text: str) -> None:
+        payload = event["payload"]
+        kinds = ["agent_marker", "review"] if marker in (REVIEW_PASS, REVIEW_FAIL) else ["agent_marker"]
+        for kind in kinds:
+            self.log.add(self._sent_at(payload), job.bucket, event["room_id"], payload["sender"], kind, text, sender_name=payload["sender_name"], job_id=job.id, ref=marker)
 
     def _job_waiting(self, room_id: str, state: State, room_kind: str, tag: str | None) -> Job | None:
         for job in self.store.all():
@@ -289,7 +319,8 @@ class Desk:
         self._sticker(self._approval_room(job), "needs_input")
         self.store.save(job)
 
-    def _take_work(self, job: Job, maker: str, text: str) -> None:
+    def _take_work(self, job: Job, payload: dict, text: str) -> None:
+        maker = payload["sender_name"]
         if maker not in job.waiting_on:
             return
         paths = file_paths(text)
@@ -301,6 +332,8 @@ class Desk:
                 f"@{maker} I can't use {', '.join(refused)}. Give the absolute path of each file, ending in {kinds}. Start your reply with {WORK_READY} #{job.id[:6]}.",
             )
             return
+        for path in paths:
+            self.log.add(self._sent_at(payload), job.bucket, self.settings.workrooms_for(job.room_id).studio, payload["sender"], "file_made", Path(path).name, sender_name=maker, job_id=job.id, ref=path)
         job.artifacts += paths
         job.waiting_on.remove(maker)
         if not job.waiting_on:
@@ -384,6 +417,7 @@ class Desk:
         else:
             deliver(job, self.client, job.room_id)
             self._reply_aloud(job, DELIVERED)
+        self.log.add(self.clock(), job.bucket, job.room_id, DESK, "delivered", ", ".join(Path(path).name for path in job.artifacts), job_id=job.id)
         self._sticker(job.room_id, "shipped")
         if clean_run:
             self._sticker(job.room_id, "celebrate")
@@ -439,6 +473,14 @@ class Desk:
         except httpx.HTTPError as error:
             logger.warning("Could not send the %s sticker: %s", event, error)
 
+    def _sent_at(self, payload: dict) -> datetime:
+        stamp = payload.get("timestamp")
+        return datetime.fromtimestamp(stamp / 1000, UTC) if stamp is not None else self.clock()
+
+    def _log_person(self, event: dict, kind: str, text: str, ref: str | None = None) -> Entry:
+        payload, room_id = event["payload"], event["room_id"]
+        return self.log.add(self._sent_at(payload), self.settings.bucket_for(room_id), room_id, payload["sender"], kind, text, sender_name=payload.get("sender_name") or "", ref=ref)
+
     def _with_voice_as_text(self, event: dict) -> dict | None:
         payload = event["payload"]
         notes = [a for a in payload.get("attachments") or [] if a["mimetype"].startswith("audio/") or a["msgtype"] == "m.audio"]
@@ -446,28 +488,32 @@ class Desk:
             return event
         caption = payload["body"].strip()
         heard = [caption] if caption and caption not in {note["filename"] for note in notes} else []
-        language = None
+        language, heard_entries = None, []
         try:
             for note in notes:
                 transcript = self.transcriber(self.client.download(event["room_id"], note), note["mimetype"])
                 heard.append(transcript.text)
                 language = transcript.language
+                heard_entries.append(self._log_person(event, "voice_heard", transcript.text).id)
         except (VoiceError, httpx.HTTPError) as error:
             logger.warning("Could not read a voice note: %s", error)
             self.client.post_message(event["room_id"], RESEND_VOICE)
             return None
-        return {**event, "payload": {**payload, "body": "\n".join(heard), "spoken_language": language}}
+        return {**event, "payload": {**payload, "body": "\n".join(heard), "spoken_language": language, "heard_entries": heard_entries}}
 
-    def _handle_person(self, event: dict) -> None:
-        event = self._with_voice_as_text(event)
+    def _handle_person(self, sent: dict) -> None:
+        event = self._with_voice_as_text(sent)
+        # Everything a person wrote is logged first, whatever the desk does with it. A note that could not be read is logged as it arrived.
+        payload = (event or sent)["payload"]
+        text = payload["body"].strip()
+        heard = ",".join(str(entry_id) for entry_id in payload.get("heard_entries", [])) or None
+        entry = self._log_person(event or sent, "message", text, heard)
         if event is None:
             return
-        payload = event["payload"]
-        text = payload["body"].strip()
         if not text or CARD_ANSWER.fullmatch(text) or self._answers_an_approval(event, text) or event["room_id"] in self.settings.inside_rooms():
             return
-        at = datetime.fromtimestamp(payload["timestamp"] / 1000, UTC)
-        self.buffer.add(event["room_id"], payload["sender"], text, at, payload.get("spoken_language"))
+        at = self._sent_at(payload)
+        self.buffer.add(event["room_id"], payload["sender"], text, at, payload.get("spoken_language"), entry.id)
         if self.settings.quiet_seconds == 0:
             self.tick(at)
 
@@ -554,7 +600,7 @@ class Desk:
         if kind is Kind.REPORT:
             self._start_report(burst)
         elif kind is Kind.REQUEST:
-            job = self.store.create(burst.room_id, burst.sender, self._approver_for(burst))
+            job = self._open_job(burst)
             job.brief, job.language = burst.text, burst.language
             self.store.save(job)
             self._sticker(burst.room_id, "brief_received")
@@ -572,8 +618,14 @@ class Desk:
                 return job
         return None
 
+    def _open_job(self, burst: Burst) -> Job:
+        job = self.store.create(burst.room_id, burst.sender, self._approver_for(burst), self.settings.bucket_for(burst.room_id))
+        opened_by = ",".join(str(entry_id) for entry_id in burst.entry_ids) or None
+        self.log.add(self.clock(), job.bucket, burst.room_id, burst.sender, "job_opened", headline(burst.text), job_id=job.id, ref=opened_by)
+        return job
+
     def _start_report(self, burst: Burst) -> None:
-        job = self.store.create(burst.room_id, burst.sender, self._approver_for(burst))
+        job = self._open_job(burst)
         local = timezone(timedelta(minutes=self.settings.utc_offset_minutes))
         job.kind, job.brief, job.sent_at, job.language = "report", burst.text, burst.first_at.astimezone(local).isoformat(), burst.language
         self.store.save(job)
