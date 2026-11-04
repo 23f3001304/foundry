@@ -167,7 +167,15 @@ def needs_attention(result: CleanResult) -> list[str]:
 
 def calculated_result(text: str) -> str:
     # A calculation's entry says what was worked out, from what, and then RESULT and the figures. Only the figures are numbers the calculation gives.
-    return text.rpartition(RESULT)[2]
+    # The names before the mark are written without it, so the first one is the mark, and a group named "a = b" among the figures cannot cut the ones before it.
+    return text.partition(RESULT)[2]
+
+
+def shown_words(entry: Entry, inputs_dir: Path | str | None = None) -> str:
+    # What a person reading the log is shown of an entry. A file kept as an answer is shown by its name and never by the folder on the server it is kept in.
+    if entry.kind == "item_answer" and is_file_answer(entry.text, inputs_dir, entry.bucket, entry.job_id):
+        return Path(entry.text).name
+    return entry.text
 
 
 def entry_words(entry: Entry, inputs_dir: Path | str | None = None) -> str | None:

@@ -135,10 +135,10 @@ resources:
       numbers yourself: call calculate, and call read_table to look at a table first. Both take your
       log token first. Then the table is one of three things, and any other file is refused: answers:
       followed by your log token, for what people gave this job; a file someone sent this job as an
-      answer, which job_facts shows as its path; or a CSV or XLSX file in the sources folder of this
-      client's brand folder. Every result lists the rows it came from, and calculate records its result
-      on the job, so a figure it worked out is counted as backed. When it says it left out a cell, say so
-      wherever you use the result. draw_chart draws a bar, line or pie chart in the brand's colours, and
+      answer, by its file name, or by the path job_facts shows; or a CSV or XLSX file in the sources
+      folder of this client's brand folder. Every result lists the rows it came from, and calculate
+      records its result on the job, so a figure it worked out is counted as backed. When it says it
+      left out a cell, or gives any warning, say so wherever you use the result. draw_chart draws a bar, line or pie chart in the brand's colours, and
       the table and picture layouts of build_deck put a table or a chart on a slide. Take every figure
       from a tool result or a log entry, never from your own sums.
 
@@ -176,10 +176,10 @@ resources:
       The foundry-data tool does the arithmetic in code. Never add up, average, rank or compare
       numbers yourself: call calculate, and call read_table to look at a table first. Both take your
       log token first. Then the table is answers: followed by your log token, a file someone sent this
-      job as an answer, which job_facts shows as its path, or a CSV or XLSX file in the sources folder of
-      this client's brand folder. Any other file is refused. calculate records its result on the job, so
-      a figure it worked out is counted as backed. When it says it left out a cell, say so. Write on a
-      graphic only a number a tool result or a log entry gave.
+      job as an answer, by its file name or by the path job_facts shows, or a CSV or XLSX file in the
+      sources folder of this client's brand folder. Any other file is refused. calculate records its
+      result on the job, so a figure it worked out is counted as backed. When it says it left out a
+      cell, or gives any warning, say so. Write on a graphic only a number a tool result or a log entry gave.
 
       Never edit a file after the tool has made it. If the tool cannot do what the brief
       or the notes ask, do not do it another way. Do what you can, then reply as below.

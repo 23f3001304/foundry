@@ -19,7 +19,7 @@ import httpx
 from foundry.buffer import Burst, MessageBuffer
 from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, IN_ROUTINE, ITEMS, ONE_BY_ONE, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
 from foundry.chain import Link, carries, flag, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines
-from foundry.checks import calculations, entry_words, file_text, needs_attention, people_words, unsourced_numbers
+from foundry.checks import calculations, entry_words, file_text, needs_attention, people_words, shown_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date
 from foundry.brand import HEX_COLOUR, BrandError
 from foundry.commands import (
@@ -644,7 +644,7 @@ class Desk:
 
     def _inputs_for(self, job: Job) -> str:
         given = [entry for entry in self.log.for_job(job.bucket, job.id) if entry.kind in INPUT_KINDS]
-        lines = [f"- {quiet(_flat(entry.sender_name or entry.sender))}: {quiet(_flat(entry.text))}" for entry in given]
+        lines = [f"- {quiet(_flat(entry.sender_name or entry.sender))}: {quiet(_flat(shown_words(entry, self.settings.inputs_dir)))}" for entry in given]
         # What code worked out from them, so a total no person gave is not failed for having no source.
         worked = [f"- {quiet(_flat(entry.text))}" for entry in self.log.for_job(job.bucket, job.id) if entry.kind == "calculation"]
         return ("\n\n" + "\n".join([GIVEN_INPUTS, *lines]) if lines else "") + ("\n\n" + "\n".join([GIVEN_CALCULATIONS, *worked]) if worked else "")

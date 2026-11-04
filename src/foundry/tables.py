@@ -4,6 +4,7 @@ import codecs
 import csv
 import io
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
@@ -85,13 +86,31 @@ def job_folder(inputs_dir: Path | str, bucket: str, job_id: str) -> Path:
     return Path(inputs_dir) / safe_name(bucket, "client") / safe_name(job_id, "job")
 
 
+def is_under(text: str, folder: Path | str) -> bool:
+    """Whether a path, written as it is, is inside a folder. It goes by the characters alone, and never asks the disk or the network anything.
+
+    A path on another machine, written \\\\server\\share or //server/share, is never under a folder here. Asking the system to resolve one contacts the server it names,
+    which stalls the desk, and gives a server somebody else controls a sign-in handshake. So every check that goes on to resolve a path asks this first.
+    """
+    if text.startswith(("\\\\", "//")):
+        return False
+    try:
+        path, root = os.path.normcase(os.path.normpath(text)), os.path.normcase(os.path.abspath(folder))
+        return os.path.isabs(text) and path.startswith(root + os.sep)
+    except ValueError:
+        return False
+
+
 def is_file_answer(text: str, inputs_dir: Path | str | None, bucket: str, job_id: str | None) -> bool:
     # A file answer is one the desk kept in this job's own folder. A path anyone typed as an answer, to anywhere else, is only the words they typed, and is never opened.
     if inputs_dir is None or not job_id or Path(text).suffix.lower() not in TABLE_KINDS:
         return False
+    folder = job_folder(inputs_dir, bucket, job_id)
+    if not is_under(text, folder):
+        return False
     try:
-        path = Path(text)
-        return path.is_absolute() and path.resolve().is_relative_to(job_folder(inputs_dir, bucket, job_id).resolve())
+        # It looks to be in the folder, and a link or a junction in the folder could still lead out of it, so now the real place is checked.
+        return Path(text).resolve().is_relative_to(folder.resolve())
     except (OSError, ValueError):
         return False
 
@@ -118,7 +137,7 @@ def table_text(source: Path | str) -> str | None:
     # Every cell as words, for a number check that has to know what a file said. None when the file can't be read.
     try:
         table = read_file(source)
-    except (MakerError, OSError) as error:
+    except MakerError as error:
         logger.warning("Could not read the answer file %s: %s", source, error)
         return None
     lines = [" ".join(table.columns), *(" ".join(words(cell) for cell in row.cells if cell is not None) for row in table.rows)]

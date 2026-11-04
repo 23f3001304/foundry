@@ -9,6 +9,7 @@ from pathlib import Path
 
 from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, ONE_BY_ONE, OPEN, QUEUED, Card, Trigger, _card
 from foundry.cards import COLUMNS as CARD_COLUMNS
+from foundry.checks import shown_words
 from foundry.chain import LINK_MARK, SAID, NotFlagged, Step, chain_for, name_of, names
 from foundry.commands import CLAIMED, DUE_ACTIONS, JOB_APPROVALS, LABELS, Command, CommandStore, still_waits_on
 from foundry.dashboard.auth import User
@@ -588,7 +589,7 @@ class Reader:
             target = ("file", entry.id)
         elif can_flag and entry.kind in SAID:
             target = ("entry", entry.id)
-        return Moment(self.when(entry.at), name_of(entry, known), EVENTS.get(entry.kind, entry.kind.replace("_", " ")), squeeze(entry.text), target)
+        return Moment(self.when(entry.at), name_of(entry, known), EVENTS.get(entry.kind, entry.kind.replace("_", " ")), squeeze(shown_words(entry, self.settings.inputs_dir)), target)
 
     def flagged(self, user: User) -> list[Flagged]:
         known = self._names(user)
@@ -600,7 +601,7 @@ class Reader:
         if entry is None or entry.bucket not in user.businesses or entry.kind != "flag":
             return None
         try:
-            steps = chain_for(self.log, entry.bucket, flag_id)
+            steps = chain_for(self.log, entry.bucket, flag_id, self.settings.inputs_dir)
         except (NotFlagged, ValueError, KeyError):
             return None
         known = self._names(user)[entry.bucket]

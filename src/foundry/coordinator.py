@@ -145,7 +145,11 @@ MOST_NAME_CHARS = 80
 FILE_NOTED = "Got it. {input}: I saved {name} as the answer."
 FILE_NOT_USED = f"I can only use {READABLE} files as an answer, so I haven't used {{name}}. What you owe is still open. Save it as {SAVE_AS}, or type the figure."
 FILE_UNREADABLE = "{reason} Nothing is changed, and what you owe is still open."
-FILE_NO_FIGURES = "{name} has no figures in it, so I haven't used it. What you owe is still open. Please send the file that has the figures."
+# Said of a file that holds no figure and of one that holds one written in a way the desk does not read, so it is true of both.
+FILE_NO_FIGURES = (
+    "I couldn't read a figure in {name}, so I haven't used it, and what you owe is still open. "
+    "Please send it again with each number written plainly, like 1200 or 4.1, with no units, words or brackets in the cell."
+)
 FILE_NOT_GOT = "I couldn't get {name} from the chat just now, so nothing is changed. Please send it again."
 FILE_NOT_SAVED = "I couldn't save {name} just now, so nothing is changed. Please send it again in a little while."
 FILE_TOO_BIG = f"{{name}} is too big for me to use (over {MOST_FILE_BYTES // 1024 // 1024} MB), so nothing is changed. Please send a smaller file."
@@ -704,7 +708,7 @@ class Coordinator:
             how = (PASSED_ON_HOW if item.state is ItemState.PASSED_ON else "") + ("" if item.confirmed else UNSURE_HOW)
             lines.append(
                 INPUT_LINE.format(
-                    input=quiet(_one_line(item.input)), measure=quiet(_one_line(item.measure)), value=quiet(_one_line(item.answer)), owner=quiet(_one_line(self._owner_name(item))) or NOBODY, how=how,
+                    input=quiet(_one_line(item.input)), measure=quiet(_one_line(item.measure)), value=quiet(_one_line(self._said_as(item, item.answer))), owner=quiet(_one_line(self._owner_name(item))) or NOBODY, how=how,
                 )
             )
         if lines:
@@ -1231,7 +1235,7 @@ class Coordinator:
             )
         elif item.state in IN:
             # An answer already in stays in use. The newer one is only noted.
-            self._flag(item.job_id, [NEWER_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value, old=item.answer)])
+            self._flag(item.job_id, [NEWER_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value, old=self._said_as(item, item.answer))])
 
     def _record(
         self, item: Item, value: str, at: datetime, room_id: str, *, confidence: float | None, said: str, typed: bool, by: str | None = None, confirmed: bool = True, file: bool = False,
@@ -1262,7 +1266,7 @@ class Coordinator:
             # Once it is confirmed, or replaced, the lines saying it was not no longer hold.
             stale = []
             if confirmed and replaced is not None:
-                stale.append(NEWER_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value, old=replaced))
+                stale.append(NEWER_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value, old=self._said_as(item, replaced)))
             if confirmed and was_unconfirmed:
                 stale.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=replaced))
             # The far-from-peers lines are judged afresh each time, over every answer now in, so one that no longer holds is taken back.

@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from foundry.checks import entry_words, numbers_in
+from foundry.checks import entry_words, numbers_in, shown_words
 from foundry.commands import VIA_DASHBOARD
 from foundry.jobs import Job
 from foundry.log import Entry, Log
@@ -365,7 +365,7 @@ class _Trail:
             return
         notes = self._heard(entry)
         if not notes:
-            self._add(entry, WHAT.get(entry.kind, entry.kind.replace("_", " ")), self._how(entry) if entry.kind == "revision_notes" else entry.text, label)
+            self._add(entry, WHAT.get(entry.kind, entry.kind.replace("_", " ")), self._how(entry) if entry.kind == "revision_notes" else shown_words(entry, self.inputs_dir), label)
         for note in notes:
             self._add(note, RECORDED, "", label)
             self._add(note, HEARD, note.text, label, who=DESK_NAME)
