@@ -11,7 +11,7 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe and Sh
 ## What sets it apart
 
 - **One setup across chat platforms.** A single Switch template creates the rooms, agents and documents, and names the chat platform as a setting. Foundry's code talks to Switch, not to a platform.
-- **Agents from different vendors check each other.** Claude writes and makes. The reviewer defaults to a different vendor's model through OpenCode, and Claude isn't among the template's defaults for that seat.
+- **Agents from different vendors check each other.** Claude writes and makes. Codex, on an OpenAI model, checks the work, and Claude isn't among the template's defaults for that seat.
 - **Voice notes in Indian languages.** Sarvam's Saaras model reads Hinglish as spoken, a plain "haan" counts as approval, and whoever sends a voice note hears questions, the report and the final reply in their language. Cards stay in English.
 - **Code holds the gates, not prompts.** Makers aren't called until a brief is approved, only the approver's answer counts, and nothing is delivered before sign-off. A named approver signs off inside, so the client sees nothing until then. Someone approving their own job sees the brief and the files on the way.
 - **A report can't quietly invent things.** The model proposes each change with its evidence. Code drops any change whose evidence isn't really in the named document, does all the date maths itself, and flags numbers it can't trace. It flags names too, unless one opens a sentence, where a capital says nothing.
@@ -27,7 +27,7 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe and Sh
 | The builder's example note and three harder ones | Run on a real model, correct on Sonnet in two runs |
 | Stuck job, 30-minute timeout, restart with a person's go-ahead | Run live on Mattermost |
 | These steps from a fresh clone on a wiped Switch stack | Run by the author up to the makers and through the note clean-up. Not yet run by a teammate |
-| Reviewer on another vendor | Partly. A real OpenCode review with notes worked, then Switch-hosted OpenCode hit its free usage limit. The run through to delivery used Claude as the stand-in reviewer |
+| Reviewer on another vendor | Run live on Mattermost through delivery with Codex on `gpt-5.6-terra`. It sent one slide back with a note, passed the fix, and was shown the images. This used the Codex copy from the desktop app, version 0.146.0-alpha.9.2, not an `npm` install. An earlier OpenCode review also worked, until its free usage limit ran out |
 | Voice notes and voice replies | Tested against a fake Sarvam only, no key yet |
 | Telegram, and an outside person answering there | Not run, needs a bot token |
 | Slack, Discord, Teams | Not run, so not claimed |
@@ -62,7 +62,7 @@ A report skips the brief and the makers. The desk writes it from the note, asks 
 | `foundry-brief` | Claude | Turns a request into a one-page brief |
 | `foundry-deck` | Claude, with the `build_deck` tool | Makes on-brand slides |
 | `foundry-visual` | Claude, with the `render_graphic` tool | Makes on-brand graphics |
-| `foundry-reviewer` | OpenCode or Codex | Checks the work against the brief and the brand kit |
+| `foundry-reviewer` | Codex, or OpenCode if you change the setting | Checks the work against the brief and the brand kit |
 
 ## Features and the Switch pieces behind them
 
@@ -84,7 +84,7 @@ A report skips the brief and the makers. The desk writes it from the note, asks 
 
 ## Run it
 
-You need Docker, [uv](https://docs.astral.sh/uv/), Node 22.13 or newer with pnpm, a signed-in [Claude Code](https://claude.com/claude-code), and [OpenCode](https://opencode.ai). Commands use a POSIX shell, such as Git Bash on Windows.
+You need Docker, [uv](https://docs.astral.sh/uv/), Node 22.13 or newer with pnpm, a signed-in [Claude Code](https://claude.com/claude-code), and a signed-in [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`, then `codex login`). Commands use a POSIX shell, such as Git Bash on Windows.
 
 ### 1. Start Switch
 
@@ -129,7 +129,7 @@ curl -s -c /tmp/switch -H 'Content-Type: application/json' -d '{"email":"<admin 
 node packages/agent-controller/dist/cli.mjs enroll --server http://127.0.0.1:8000 --code <code> --data-dir ../controller-data
 ```
 
-Leave this running in its own terminal:
+Leave this running in its own terminal, one where the `codex` command works:
 
 ```bash
 node packages/agent-controller/dist/cli.mjs run --data-dir ../controller-data --no-self-update
@@ -188,7 +188,7 @@ The contact sheet lists two electricians at Palm Court, so the desk asks which o
 ### Good to know
 
 - **Fonts:** a `.pptx` can't carry its fonts, so a machine without them shows a substitute. Install the files in `brands/<brand>/fonts` where you open the decks.
-- **Reviewer:** OpenCode's free tier has a usage limit, and the terminal can keep working after Switch-hosted OpenCode is refused. When that happens the room shows no error. The reviewer sits on "Working" until the 30-minute timeout, then a stuck card asks a person, so unchecked work never passes. OpenCode's own log says `Free usage limit reached`. To change the reviewer, set `FOUNDRY_REVIEWER_PROVIDER` and `FOUNDRY_REVIEWER_MODEL` in `.env` before creating the rooms. Codex needs an empty model. Claude works too, but then a vendor is checking its own work.
+- **Reviewer:** Codex uses your machine's login, and Switch copies that login into its session folder under `~/.local/state/switch`. It also takes the reasoning effort from your own `~/.codex/config.toml`. At `xhigh`, the first review took 13 minutes and the second took 4. The agent controller looks for `codex` on PATH, and the desktop app's copy isn't on it, so install the CLI or add the app's folder to PATH before starting the controller. To change the reviewer, set `FOUNDRY_REVIEWER_PROVIDER` and `FOUNDRY_REVIEWER_MODEL` in `.env` before creating the rooms, because an existing `foundry-reviewer` is reused as it is. Codex needs an empty model. Leaving the provider empty uses OpenCode's free model. That free tier has a usage limit, and the terminal can keep working after Switch-hosted OpenCode is refused. When that happens the room shows no error. The reviewer sits on "Working" until the 30-minute timeout, then a stuck card asks a person, so unchecked work never passes. OpenCode's own log says `Free usage limit reached`. Claude works too, but then a vendor is checking its own work.
 - **Approver:** whoever asks approves their own job. To name someone for one business, set `approver` in quotes in `brands/<brand>/pack.md`, or use `FOUNDRY_APPROVER` for every business that doesn't set its own. The value is a Switch sender id, `@switch-mattermost-<bridge id>-<username>:localhost`. Once that person has sent a request, it's in the `requester` column of `foundry-jobs.db`. With a wrong id, nobody can answer the card.
 - **Voice:** set `SARVAM_API_KEY`. Voice notes over 30 seconds get a request to resend or type, which is the limit of Sarvam's REST route. Sarvam charges per call.
 - **Classifier:** with no `ANTHROPIC_API_KEY`, Foundry uses this machine's Claude Code login.
