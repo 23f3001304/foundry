@@ -478,7 +478,11 @@ class DailyReports:
         silent = self._silent_rooms(job.bucket, entries)
         if silent:
             where = self._room_names(job.bucket)
-            parts.append(NO_NOTE.format(rooms=", ".join(ROOM_OF.format(people=" and ".join(where[room])) if where.get(room) else room for room in silent)))
+            named = [ROOM_OF.format(people=" and ".join(where[room])) for room in silent if where.get(room)]
+            # A room's id means nothing to a person, so a room with no name is only counted.
+            others = len(silent) - len(named)
+            rooms = [*named, *([f"{others} other {'room' if others == 1 else 'rooms'}" if named else _count(others, "room")] if others else [])]
+            parts.append(NO_NOTE.format(rooms=", ".join(rooms)))
         if job.attention:
             parts.append("Please check:\n" + "\n".join(f"- {line}" for line in job.attention))
         return "\n\n".join(parts)
