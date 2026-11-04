@@ -1501,18 +1501,29 @@ class Desk:
         self._answered_here(card)
         outcome = outcome_for(card, choice, self.clock())
         self._note_choice(card, outcome)
-        # The items inside a routine card, as they stand now, to tell which of them this answer approved.
-        waiting = [item for item in map(self.cards.get, card.data.get(ITEMS, ())) if item is not None and item.state == IN_ROUTINE]
-        if card.trigger is Trigger.QUESTION:
-            # A job's own question, answered as a press on it is. It already says in the room that the answer came.
-            self.cards.finish(card.request_id, ANSWERED)
-            self._take_job_answer(outcome)
-        else:
-            self._take_card_answer(card, outcome)
+        approving = self._approved_by(card)
+        try:
+            if card.trigger is Trigger.QUESTION:
+                # A job's own question, answered as a press on it is. It already says in the room that the answer came.
+                self.cards.finish(card.request_id, ANSWERED)
+                self._take_job_answer(outcome)
+            else:
+                self._take_card_answer(card, outcome)
+        finally:
+            # Whichever items were handed on are logged even if a later one failed, so a retry that only sees the rest doesn't leave them to be read as approved in chat.
+            self._note_routine_items(command, approving)
         self._note_dashboard(command, card, choice)
-        self._note_routine_items(command, waiting)
         self._close_chat_card(card, say=card.trigger is not Trigger.QUESTION)
         self.cards.pump()
+
+    def _approved_by(self, card: Card) -> list[Card]:
+        # The items of a routine card that an answer to it will approve. A report that has moved on is only closed by it, as _take_report_answer does, and nothing is approved.
+        items = [item for item in map(self.cards.get, card.data.get(ITEMS, ())) if item is not None and item.state == IN_ROUTINE]
+        return [item for item in items if item.trigger is not Trigger.DAILY_REPORT or self._report_awaits(item)]
+
+    def _report_awaits(self, item: Card) -> bool:
+        job = self._job_of(item) if item.job_id else None
+        return job is not None and job.state is State.SIGNOFF_PENDING and job.approval is None
 
     def _note_routine_items(self, command: Command, waiting: list[Card]) -> None:
         # A routine card has no job, but each thing in it has, and a report approved through it is signed off on each one's card. So each is logged against its own job.
@@ -1613,7 +1624,8 @@ class Desk:
 
     def _not_answered_yet(self, card: Card) -> bool:
         # A press on a card that was dealt with already, such as a chat card Switch couldn't close after an answer on the dashboard, changes nothing. It mustn't change what the card says it was answered with either.
-        return card.state in (OPEN, QUEUED, EXPIRED) or "answer" not in card.data
+        # But a card an answer on the dashboard ended and then failed on is still waiting for its job, and the job takes a press in chat.
+        return card.state in (OPEN, QUEUED, EXPIRED) or "answer" not in card.data or self._job_still_waits_on(card)
 
     def _note_choice(self, card: Card, outcome: Outcome) -> None:
         # What the person chose, kept on the card so the dashboard can say how it was answered.

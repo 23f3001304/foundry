@@ -4,10 +4,10 @@ import sqlite3
 from collections.abc import Collection
 from contextlib import closing
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
-from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, ONE_BY_ONE, OPEN, QUEUED, Card, Trigger, _card
+from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, ONE_BY_ONE, OPEN, QUEUED, Card, Trigger, _card, _latest_slot, _waiting_since
 from foundry.cards import COLUMNS as CARD_COLUMNS
 from foundry.checks import shown_words
 from foundry.chain import LINK_MARK, SAID, NotFlagged, Step, chain_for, name_of, names
@@ -305,11 +305,6 @@ def squeeze(text: str) -> str:
     return text if len(text) <= MOST_TEXT else f"{text[:MOST_TEXT].rstrip()}..."
 
 
-def waits_for_a_set_time(card: Card) -> bool:
-    # A routine item opens at its person's next set time. One brought on its own, or a card in front of which another is open, waits behind that other card instead.
-    return card.state == QUEUED and card.is_routine and not card.is_merged and not card.data.get(ONE_BY_ONE)
-
-
 def is_made_file(entry: Entry) -> bool:
     return entry.kind == "file_made" and bool(entry.ref) and LINK_MARK not in entry.ref
 
@@ -319,6 +314,7 @@ class Reader:
         self.settings = settings
         self.log = ReadOnlyLog(settings.log_path)
         self.zone = timezone(timedelta(minutes=settings.utc_offset_minutes))
+        self.clock = lambda: datetime.now(UTC)
 
     # What is in the files
 
@@ -357,6 +353,15 @@ class Reader:
 
     # How things are said
 
+    def waits_for_a_set_time(self, card: Card) -> bool:
+        # A routine item opens at its person's next set time. Once a set time has come since it began waiting, it is due, and what holds it up is the card in front.
+        # One brought on its own, and a routine card that is already made, wait behind another card and not for a set time.
+        if not (card.state == QUEUED and card.is_routine and not card.is_merged and not card.data.get(ONE_BY_ONE)):
+            return False
+        pack = self.settings.pack_for(self.settings.home_room(card.bucket))
+        latest = _latest_slot(pack.set_times, self.settings.utc_offset_minutes, self.clock())
+        return latest is None or _waiting_since(card) > latest
+
     def when(self, moment: datetime) -> str:
         local = moment.astimezone(self.zone)
         return f"{local.day} {local:%b}, {local.hour % 12 or 12}:{local:%M} {'am' if local.hour < 12 else 'pm'}"
@@ -390,7 +395,7 @@ class Reader:
         for card in cards:
             if card.job_id == job.id and card.state in (OPEN, QUEUED):
                 line = f"Waiting for an answer to {card.title}, from {known.get(card.person, card.person)}."
-                lines.append(line + (WAITS_FOR_SET_TIME if waits_for_a_set_time(card) else QUEUED_BEHIND if card.state == QUEUED else ""))
+                lines.append(line + (WAITS_FOR_SET_TIME if self.waits_for_a_set_time(card) else QUEUED_BEHIND if card.state == QUEUED else ""))
         return lines
 
     def _row(self, job: Job, cards: list[Card], known: dict[str, str]) -> JobRow:
@@ -498,7 +503,7 @@ class Reader:
                 with_ = f" with {LABELS.get(chosen, chosen)}," if chosen else ""
                 status = f"Answered{with_} {where} {who}" + (f", {self.when(answer.at)}" if answer else "")
             else:
-                status = {OPEN: "Open in chat", QUEUED: AWAITS_SET_TIME if waits_for_a_set_time(card) else "Waiting behind another card", CLOSED: "Closed by Foundry", EXPIRED: "Ran out. Nobody answered it."}[card.state]
+                status = {OPEN: "Open in chat", QUEUED: AWAITS_SET_TIME if self.waits_for_a_set_time(card) else "Waiting behind another card", CLOSED: "Closed by Foundry", EXPIRED: "Ran out. Nobody answered it."}[card.state]
             # What a card says matters while someone still has to answer it.
             detail = card.detail if waits or card.state in (OPEN, QUEUED) else ""
             # An answer that didn't go through is still waiting for one, so it sits with the open cards.
