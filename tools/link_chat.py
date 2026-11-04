@@ -1,6 +1,6 @@
 """Links a chat that opened its own room, such as someone writing to a WhatsApp number, to a client's rooms, and saves it in .env.
 
-uv run --env-file .env python tools/link_chat.py "WhatsApp: Site Engineer A" green-valley
+uv run --env-file .env python tools/link_chat.py "SiteEngineerA_15550001111" green-valley
 """
 
 import os

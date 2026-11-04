@@ -42,6 +42,7 @@ REVIEW_FAIL = "REVIEW_FAIL"
 MARKER = re.compile(rf"(?:@\S+\s+)*({BRIEF_READY}|{WORK_READY}|{WORK_BLOCKED}|{REVIEW_PASS}|{REVIEW_FAIL})(?:\s+#(\w+))?(?:\s+(.*))?", re.DOTALL)
 FILE_KINDS = {".pptx", ".png", ".jpg", ".jpeg", ".pdf"}
 SIGNOFF = "Approve to deliver this work, or ask for changes."
+REPORT_CARD_TITLE = "Report for sign-off"
 HOW_TO_RESTART = "Approve to try again, or ask for changes to give new notes."
 STUCK = f"This job has been through {MAX_REVISION_ROUNDS} rounds of changes, so it has stopped. {HOW_TO_RESTART}"
 MAKER_STUCK = "The team cannot finish this as asked."
@@ -611,7 +612,7 @@ class Desk:
         job.report, job.asked_at = quiet(result.text), None
         advance(job, "report_drafted")
         room = self._approval_room(job)
-        self.gate.ask(job, f"Report: {headline(result.text)}", quiet(signoff_detail(result)), room)
+        self.gate.ask(job, REPORT_CARD_TITLE, quiet(signoff_detail(result)), room)
         self._sticker(room, "needs_input")
 
     def _ask_for_brief(self, job: Job) -> None:
