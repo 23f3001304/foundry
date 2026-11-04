@@ -359,7 +359,7 @@ def _print_sources(slide, brand: Brand, links: list[Link], layout: str) -> None:
 
 
 @mcp.tool()
-def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, highlight: str = "") -> str:
+def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, highlight: str = "", sources: list[dict] | None = None) -> str:
     """Build an on-brand .pptx and return its absolute path. The title slide comes first, from title.
 
     Each slide is one of:
@@ -374,22 +374,25 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     Only when foundry-desk's message asks for sources, a slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 UTC"}],
     one for each number or fact on that slide that came from a log entry. value is the words on the slide. entry is the number job_facts gave that entry.
     label is the name job_facts shows for that entry, a comma, and the date and time it shows, written as in the example. The slide prints them as a small line, and the links are saved beside the deck.
+    sources does the same for the title slide, which is all a one-slide deck has.
     """
     brand = load_brand_dir(brand_dir)
     deck = Presentation()
     deck.slide_width, deck.slide_height = Pt(WIDTH), Pt(HEIGHT)
     _apply_theme(deck, brand)
     _title_slide(deck, brand, title, "", highlight)
-    links: list[Link] = []
+    links = _sources_of({"title": title, "sources": sources}, 1)
+    if links:
+        _print_sources(deck.slides[-1], brand, links, "title")
     for number, spec in enumerate(slides, start=2):
         layout = LAYOUTS.get(spec.get("layout"))
         if layout is None:
             raise MakerError(f"Unknown layout {spec.get('layout')!r}. Use one of: {', '.join(LAYOUTS)}.")
-        sources = _sources_of(spec, number)
+        given = _sources_of(spec, number)
         layout(deck, brand, spec)
-        if sources:
-            _print_sources(deck.slides[-1], brand, sources, spec["layout"])
-            links += sources
+        if given:
+            _print_sources(deck.slides[-1], brand, given, spec["layout"])
+            links += given
     path = Path(out_path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     deck.save(str(path))
