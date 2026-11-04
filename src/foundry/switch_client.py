@@ -22,6 +22,8 @@ CARD_OPTIONS = [
     {"id": "revise", "label": "Ask for changes", "decision": "decline"},
 ]
 
+DESK_NAME = "foundry-desk"
+
 
 @dataclass
 class Outcome:
@@ -66,7 +68,7 @@ class SwitchClient:
         timeline = self._call("POST", f"/agents/{self.agent_id}/ops/read_context", headers=self._session_headers(),
                               json={"room_id": room_id, "limit": limit}).json()["result"]
         entries = [entry for thread in timeline["threads"] for entry in [thread["root"], *thread["replies"]]]
-        return "\n".join(f"{entry['sender_name']}: {entry['body']}" for entry in entries if entry["kind"] == "message")
+        return "\n".join(f"{entry['sender_name']}: {entry['body']}" for entry in entries if entry["kind"] == "message" and entry["sender_name"] != DESK_NAME)
 
     def _session_headers(self) -> dict[str, str]:
         return {"X-Switch-Connection-Id": self.connection_id, "X-Switch-Session-Id": self.session_id}

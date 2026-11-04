@@ -22,6 +22,8 @@ REVISE_PATTERN = re.compile(r"\s*revise\s*:(.*)", re.IGNORECASE | re.DOTALL)
 HOW_TO_ANSWER = "Reply yes to approve, or revise: <what to change>."
 ASK_FOR_NOTES = "What should change? Reply with your notes."
 ONLY_APPROVER = "Only the approver can answer this, so it is still waiting."
+CARD_LIMIT = 700
+READ_ABOVE = "The full text is just above this card."
 
 
 def _clean(text: str) -> str:
@@ -129,7 +131,12 @@ class Gate:
 
 class CardGate(Gate):
     def _show(self, job: Job) -> None:
-        self.client.open_card(job.approval_room, job.approval["request_id"], job.approval["title"], job.approval["detail"])
+        detail = job.approval["detail"]
+        if len(detail) > CARD_LIMIT:
+            # Switch takes the buttons off a card it cannot show in full.
+            self.client.post_message(job.approval_room, detail)
+            detail = READ_ABOVE
+        self.client.open_card(job.approval_room, job.approval["request_id"], job.approval["title"], detail)
 
     def _close(self, job: Job) -> None:
         # Switch marks a closed card "Cancelled", so say the answer did arrive.

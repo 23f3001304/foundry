@@ -6,15 +6,17 @@ import os
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
 
 from foundry.buffer import Burst, MessageBuffer
+from foundry.delivery import deliver
 from foundry.gates import Decision, Gate, parse_reply, resolve_approver
 from foundry.intake import Kind, classify
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
+from foundry.stickers import sticker_for
 from foundry.switch_client import Outcome, SwitchClient
 from foundry.voice import Transcript, VoiceError, transcribe
 
@@ -26,13 +28,19 @@ MAKERS = ("foundry-deck", "foundry-visual")
 REVIEWER = "foundry-reviewer"
 BRIEF_READY = "BRIEF_READY"
 WORK_READY = "WORK_READY"
+WORK_BLOCKED = "WORK_BLOCKED"
 REVIEW_PASS = "REVIEW_PASS"
 REVIEW_FAIL = "REVIEW_FAIL"
 # A marker must start the message. The optional #tag names the job when a room has more than one.
-MARKER = re.compile(rf"({BRIEF_READY}|{WORK_READY}|{REVIEW_PASS}|{REVIEW_FAIL})(?:\s+#(\w+))?(?:\s+(.*))?", re.DOTALL)
+# Agents sometimes address the desk before the marker, so a leading mention is allowed.
+MARKER = re.compile(rf"(?:@\S+\s+)*({BRIEF_READY}|{WORK_READY}|{WORK_BLOCKED}|{REVIEW_PASS}|{REVIEW_FAIL})(?:\s+#(\w+))?(?:\s+(.*))?", re.DOTALL)
 FILE_KINDS = {".pptx", ".png", ".jpg", ".jpeg", ".pdf"}
 SIGNOFF = "Approve to deliver this work, or ask for changes."
-STUCK = f"This job has been through {MAX_REVISION_ROUNDS} rounds of changes, so it has stopped. Approve to try again, or ask for changes to give new notes."
+HOW_TO_RESTART = "Approve to try again, or ask for changes to give new notes."
+STUCK = f"This job has been through {MAX_REVISION_ROUNDS} rounds of changes, so it has stopped. {HOW_TO_RESTART}"
+MAKER_STUCK = "The team cannot finish this as asked."
+NO_BRIEF = "I could not get this request drafted into a brief. Please send it again."
+RETRY = "A person asked to try this job again. If your file is still right, reply with the same path."
 NOTHING_MADE = "Nobody made a file for this job. Make what the brief asks for."
 ASK_WHAT_THEY_NEED = "Do you want something made from this? If so, tell me what you need."
 USE_THE_BUTTONS = "More than one approval is waiting on you here. Please use the buttons on the card you mean."
@@ -59,6 +67,11 @@ def quiet(text: str | None) -> str:
     return (text or "").replace("@", "@\u200b")
 
 
+def headline(text: str) -> str:
+    line = re.sub(r"[*_`#]", "", text.strip().splitlines()[0]).strip()
+    return line.removeprefix("What is being made:").strip()[:80]
+
+
 def deliverable(path: str) -> bool:
     file = Path(path)
     return file.is_absolute() and file.suffix.lower() in FILE_KINDS and file.is_file()
@@ -80,6 +93,8 @@ class Settings:
     quiet_seconds: int = 60
     approver: str | None = None
     workrooms: dict[str, Workrooms] = field(default_factory=dict)
+    sticker_mode: str = "subtle"
+    work_timeout_minutes: int = 30
 
     def workrooms_for(self, room_id: str) -> Workrooms:
         return self.workrooms.get(room_id, Workrooms(room_id, room_id))
@@ -97,6 +112,8 @@ class Settings:
             quiet_seconds=int(os.environ.get("FOUNDRY_QUIET_SECONDS", "60")),
             approver=os.environ.get("FOUNDRY_APPROVER") or None,
             workrooms=_rooms_from(os.environ.get("FOUNDRY_ROOMS", "")),
+            sticker_mode=os.environ.get("FOUNDRY_STICKER_MODE", "subtle"),
+            work_timeout_minutes=int(os.environ.get("FOUNDRY_WORK_TIMEOUT_MINUTES", "30")),
         )
 
 
@@ -116,6 +133,7 @@ class Desk:
         settings: Settings,
         transcriber: Callable[[bytes, str], Transcript] = transcribe,
     ) -> None:
+        self.clock = lambda: datetime.now(UTC)
         self.client = client
         self.store = store
         self.gate = gate
@@ -139,6 +157,20 @@ class Desk:
             self._take_burst(burst)
         for outcome in self.client.outcomes():
             self._handle_outcome(outcome)
+        self._stop_quiet_jobs(now)
+
+    def _stop_quiet_jobs(self, now: datetime) -> None:
+        limit = timedelta(minutes=self.settings.work_timeout_minutes)
+        for job in self.store.all():
+            if not job.asked_at or now - datetime.fromisoformat(job.asked_at) <= limit:
+                continue
+            if job.state is State.RECEIVED:
+                # No brief has been approved, so there is nothing a person could restart yet.
+                job.asked_at = None
+                self.client.post_message(job.room_id, NO_BRIEF)
+                self.store.save(job)
+            elif job.state in (State.MAKING, State.REVIEWING):
+                self._stop(job, f"Nobody on the team has answered for {self.settings.work_timeout_minutes} minutes.")
 
     def on_agent_message(self, event: dict) -> None:
         payload = event["payload"]
@@ -149,6 +181,7 @@ class Desk:
         owners, state, room_kind = {
             BRIEF_READY: ((BRIEF_AGENT,), State.RECEIVED, "studio"),
             WORK_READY: (MAKERS, State.MAKING, "studio"),
+            WORK_BLOCKED: (MAKERS, State.MAKING, "studio"),
             REVIEW_PASS: ((REVIEWER,), State.REVIEWING, "review"),
             REVIEW_FAIL: ((REVIEWER,), State.REVIEWING, "review"),
         }[marker]
@@ -162,8 +195,12 @@ class Desk:
             self._take_brief(job, text)
         elif marker == WORK_READY:
             self._take_work(job, agent, text)
+        elif marker == WORK_BLOCKED:
+            if agent in job.waiting_on:
+                self._stop(job, text or MAKER_STUCK)
         elif marker == REVIEW_PASS:
             advance(job, "review_passed")
+            job.asked_at = None
             self._ask_for_signoff(job)
             self.store.save(job)
         else:
@@ -183,7 +220,8 @@ class Desk:
             return
         job.brief = brief
         advance(job, "brief_drafted")
-        self.gate.ask(job, f"Brief: {brief.splitlines()[0][:80]}", brief, self._approval_room(job))
+        self.gate.ask(job, f"Brief: {headline(brief)}", brief, self._approval_room(job))
+        self._sticker(self._approval_room(job), "needs_input")
         self.store.save(job)
 
     def _take_work(self, job: Job, maker: str, text: str) -> None:
@@ -208,6 +246,14 @@ class Desk:
                 self._fail_round(job, NOTHING_MADE)
         self.store.save(job)
 
+    def _stop(self, job: Job, reason: str) -> None:
+        advance(job, "stopped")
+        job.waiting_on, job.asked_at = [], None
+        room = self._approval_room(job)
+        self.gate.ask(job, f"Stuck: {self._title(job)}", f"{quiet(reason)} {HOW_TO_RESTART}", room)
+        self._sticker(room, "blocked")
+        self.store.save(job)
+
     def _fail_round(self, job: Job, notes: str) -> None:
         job.revision_notes = notes
         advance(job, "review_failed")
@@ -216,18 +262,20 @@ class Desk:
     def _after_changes(self, job: Job) -> None:
         if job.state is State.BLOCKED:
             self.gate.ask(job, f"Stuck: {self._title(job)}", STUCK, self._approval_room(job))
+            self._sticker(self._approval_room(job), "blocked")
         else:
             self._ask_makers(job)
 
     def _title(self, job: Job) -> str:
-        return (job.brief or "this job").splitlines()[0][:80]
+        return headline(job.brief or "this job")
 
     def _approval_room(self, job: Job) -> str:
         # A named approver works inside, so a client never sees what they haven't been asked about.
         return job.room_id if job.approver == job.requester else self.settings.workrooms_for(job.room_id).studio
 
-    def _ask_makers(self, job: Job) -> None:
+    def _ask_makers(self, job: Job, retry: bool = False) -> None:
         job.artifacts, job.waiting_on = [], list(MAKERS)
+        job.asked_at = self.clock().isoformat()
         tag = job.id[:6]
         lines = [
             f"{' '.join(f'@{maker}' for maker in MAKERS)} Job #{tag}. Make your part of what this approved brief asks for.",
@@ -236,16 +284,20 @@ class Desk:
         ]
         if job.revision_notes:
             lines.append(f"Changes to make:\n{quiet(job.revision_notes)}")
+        elif retry:
+            lines.append(RETRY)
         self.client.post_message(self.settings.workrooms_for(job.room_id).studio, "\n\n".join(lines))
 
     def _ask_reviewer(self, job: Job) -> None:
+        job.asked_at = self.clock().isoformat()
         tag = job.id[:6]
         files = "\n".join(job.artifacts)
+        last_round = f"Changes asked for last round:\n{quiet(job.revision_notes)}\n\n" if job.revision_notes else ""
         self.client.post_message(
             self.settings.workrooms_for(job.room_id).review,
             f"@{REVIEWER} Job #{tag}. Check this work against the approved brief and the brand kit.\n\n"
             f"Start your reply with {REVIEW_PASS} #{tag} if it meets both, or with {REVIEW_FAIL} #{tag}, then notes a maker can act on.\n\n"
-            f"Brief:\n{quiet(job.brief)}\n\nFiles:\n{files}",
+            f"Brief:\n{quiet(job.brief)}\n\n{last_round}Files:\n{files}",
         )
 
     def _ask_for_signoff(self, job: Job) -> None:
@@ -253,6 +305,24 @@ class Desk:
         for path in job.artifacts:
             self.client.post_file(room, path, f"For your sign-off: {Path(path).name}")
         self.gate.ask(job, f"Final work: {self._title(job)}", SIGNOFF, room)
+        self._sticker(room, "needs_input")
+
+    def _deliver(self, job: Job) -> None:
+        clean_run = job.revision_rounds == 0
+        self._sticker(job.room_id, "approved")
+        deliver(job, self.client, job.room_id)
+        self._sticker(job.room_id, "shipped")
+        if clean_run:
+            self._sticker(job.room_id, "celebrate")
+
+    def _sticker(self, room_id: str, event: str) -> None:
+        path = sticker_for(event, self.settings.sticker_mode)
+        if path is None:
+            return
+        try:
+            self.client.post_file(room_id, path, "")
+        except httpx.HTTPError as error:
+            logger.warning("Could not send the %s sticker: %s", event, error)
 
     def _with_voice_as_text(self, event: dict) -> dict | None:
         payload = event["payload"]
@@ -314,11 +384,16 @@ class Desk:
         if event:
             advance(job, event)
         if event == "brief_revised":
+            self._sticker(self._approval_room(job), "revise")
             self._ask_for_brief(job)
         elif event in ("brief_approved", "unblock"):
-            self._ask_makers(job)
+            self._sticker(self._approval_room(job), "working")
+            self._ask_makers(job, retry=event == "unblock")
         elif event == "signoff_revised":
+            self._sticker(self._approval_room(job), "revise")
             self._after_changes(job)
+        elif event == "signoff_approved":
+            self._deliver(job)
         self.store.save(job)
 
     def _take_burst(self, burst: Burst) -> None:
@@ -327,11 +402,14 @@ class Desk:
             job = self.store.create(burst.room_id, burst.sender, resolve_approver(burst.sender, self.settings.approver))
             job.brief = burst.text
             self.store.save(job)
+            self._sticker(burst.room_id, "brief_received")
             self._ask_for_brief(job)
+            self.store.save(job)
         elif kind is Kind.UNSURE:
             self.client.post_message(burst.room_id, ASK_WHAT_THEY_NEED)
 
     def _ask_for_brief(self, job: Job) -> None:
+        job.asked_at = self.clock().isoformat()
         lines = [
             f"@{BRIEF_AGENT} Job #{job.id[:6]}. Draft a brief for this request. Start your reply with {BRIEF_READY} #{job.id[:6]}, then the brief.",
             f"Request:\n{quiet(job.brief)}",

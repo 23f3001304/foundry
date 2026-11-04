@@ -9,6 +9,8 @@ fonts:
   heading: Source Serif Pro
   body: Source Sans Pro
 style: band
+business_type: Neighbourhood cafe
+audience: Regulars and people who live nearby
 voice: Warm and plain, like the person behind the counter. Short sentences. A little playful, never cute.
 ---
 Lalten Cafe is a fictional neighbourhood cafe. Lalten is Hindi for lantern. Regulars come for the morning coffee and stay for the weekend menu.

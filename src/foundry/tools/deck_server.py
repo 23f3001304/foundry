@@ -1,5 +1,6 @@
 """MCP tool for maker agents: builds a slide deck whose colours, fonts, logo and layout come from the brand kit."""
 
+import re
 from pathlib import Path
 
 from lxml import etree
@@ -58,7 +59,15 @@ def _block(slide, brand: Brand, colour: str, left: int, top: int, width: int, he
     tree.insert(2, shape._element)
 
 
-def _write(shape, brand: Brand, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, middle: bool = False) -> None:
+def _mark(run, brand: Brand) -> None:
+    run.font.color.rgb = _colour(brand, "ink")
+    fill = run._r.find(f"{DRAWING}rPr/{DRAWING}solidFill")
+    marker = etree.Element(f"{DRAWING}highlight")
+    etree.SubElement(marker, f"{DRAWING}srgbClr", val=brand.colors["accent"].removeprefix("#"))
+    fill.addnext(marker)
+
+
+def _write(shape, brand: Brand, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, middle: bool = False, highlight: str = "") -> None:
     left, top, width, height = box
     shape.left, shape.top, shape.width, shape.height = Pt(left), Pt(top), Pt(width), Pt(height)
     frame = shape.text_frame
@@ -71,16 +80,21 @@ def _write(shape, brand: Brand, role: str, colour: str, box: tuple[int, int, int
         paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
         paragraph.alignment = PP_ALIGN.LEFT
         paragraph.space_after = Pt(gap)
-        run = paragraph.add_run()
-        run.text = text
-        run.font.size = Pt(size)
-        run.font.name = brand.fonts[role]
-        run.font.color.rgb = _colour(brand, colour)
+        for piece in re.split(f"({re.escape(highlight)})", text, maxsplit=1) if highlight else [text]:
+            if not piece:
+                continue
+            run = paragraph.add_run()
+            run.text = piece
+            run.font.size = Pt(size)
+            run.font.name = brand.fonts[role]
+            run.font.color.rgb = _colour(brand, colour)
+            if piece == highlight:
+                _mark(run, brand)
 
 
-def _text_box(slide, brand: Brand, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0) -> None:
+def _text_box(slide, brand: Brand, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, highlight: str = "") -> None:
     shape = slide.shapes.add_textbox(*(Pt(value) for value in box))
-    _write(shape, brand, role, colour, box, paragraphs, largest, smallest, gap)
+    _write(shape, brand, role, colour, box, paragraphs, largest, smallest, gap, highlight=highlight)
 
 
 def _corner_logo(slide, brand: Brand, on_paper: bool) -> None:
@@ -89,21 +103,24 @@ def _corner_logo(slide, brand: Brand, on_paper: bool) -> None:
     slide.shapes.add_picture(str(brand.logo_path), Pt(872), Pt(452), width=Pt(76))
 
 
-def _title_slide(deck: Presentation, brand: Brand, title: str, subtitle: str) -> None:
+def _title_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, highlight: str = "") -> None:
+    _check_highlight(highlight, title)
     if brand.style == "solid":
         slide = _new_slide(deck, brand, "primary")
         _block(slide, brand, "paper", 680, 0, 280, HEIGHT)
-        _block(slide, brand, "accent", 56, 130, 96, 6)
+        if not highlight:
+            _block(slide, brand, "accent", 56, 130, 96, 6)
         slide.shapes.add_picture(str(brand.logo_path), Pt(730), Pt(180), width=Pt(180))
-        _write(slide.shapes.title, brand, "heading", "paper", (56, 150, 580, 230), [title], 54, 22)
+        _write(slide.shapes.title, brand, "heading", "paper", (56, 150, 580, 230), [title], 54, 22, highlight=highlight)
         ink = "paper"
         subtitle_box = (56, 400, 580, 60)
     else:
         slide = _new_slide(deck, brand, "paper")
         _block(slide, brand, "primary", 0, 0, 48, HEIGHT)
-        _block(slide, brand, "accent", 96, 130, 96, 6)
+        if not highlight:
+            _block(slide, brand, "accent", 96, 130, 96, 6)
         slide.shapes.add_picture(str(brand.logo_path), Pt(770), Pt(36), width=Pt(150))
-        _write(slide.shapes.title, brand, "heading", "primary", (96, 150, 640, 230), [title], 54, 22)
+        _write(slide.shapes.title, brand, "heading", "primary", (96, 150, 640, 230), [title], 54, 22, highlight=highlight)
         ink = "ink"
         subtitle_box = (96, 400, 640, 60)
     if subtitle:
@@ -116,31 +133,41 @@ def _required(spec: dict, field: str, layout: str) -> str | list:
     return spec[field]
 
 
+def _check_highlight(highlight: str, *texts: str) -> None:
+    if highlight and not any(highlight in text for text in texts):
+        raise ValueError(f"The highlight must be words on the slide. {highlight!r} is not on it.")
+
+
 def _make_title(deck: Presentation, brand: Brand, spec: dict) -> None:
-    _title_slide(deck, brand, _required(spec, "title", "title"), spec.get("subtitle", ""))
+    _title_slide(deck, brand, _required(spec, "title", "title"), spec.get("subtitle", ""), spec.get("highlight", ""))
 
 
 def _make_content(deck: Presentation, brand: Brand, spec: dict) -> None:
     title = _required(spec, "title", "content")
     points = [f"• {point}" for point in _required(spec, "bullets", "content")]
+    highlight = spec.get("highlight", "")
+    _check_highlight(highlight, title, *points)
     slide = _new_slide(deck, brand, "paper")
     if brand.style == "solid":
         _block(slide, brand, "primary", 0, 0, WIDTH, 110)
-        _write(slide.shapes.title, brand, "heading", "paper", (56, 22, 848, 70), [title], 34, 16, middle=True)
-        _text_box(slide, brand, "body", "ink", (56, 140, 790, 350), points, 32, 13, BULLET_GAP)
+        _write(slide.shapes.title, brand, "heading", "paper", (56, 22, 848, 70), [title], 34, 16, middle=True, highlight=highlight)
+        _text_box(slide, brand, "body", "ink", (56, 140, 790, 350), points, 32, 13, BULLET_GAP, highlight)
     else:
         _block(slide, brand, "primary", 0, 0, 24, HEIGHT)
-        _write(slide.shapes.title, brand, "heading", "primary", (72, 44, 780, 90), [title], 36, 16)
-        _text_box(slide, brand, "body", "ink", (72, 150, 780, 340), points, 32, 13, BULLET_GAP)
+        _write(slide.shapes.title, brand, "heading", "primary", (72, 44, 780, 90), [title], 36, 16, highlight=highlight)
+        _text_box(slide, brand, "body", "ink", (72, 150, 780, 340), points, 32, 13, BULLET_GAP, highlight)
     _corner_logo(slide, brand, on_paper=True)
 
 
 def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
     text = _required(spec, "text", "statement")
+    highlight = spec.get("highlight", "")
+    _check_highlight(highlight, text)
     solid = brand.style == "solid"
     slide = _new_slide(deck, brand, "primary" if solid else "paper")
-    _block(slide, brand, "accent", 96, 110, 96, 6)
-    _write(slide.shapes.title, brand, "heading", "paper" if solid else "primary", (96, 130, 740, 290), [text], 60, 22, middle=True)
+    if not highlight:
+        _block(slide, brand, "accent", 96, 110, 96, 6)
+    _write(slide.shapes.title, brand, "heading", "paper" if solid else "primary", (96, 130, 740, 290), [text], 60, 22, middle=True, highlight=highlight)
     _corner_logo(slide, brand, on_paper=not solid)
 
 
@@ -148,20 +175,21 @@ LAYOUTS = {"title": _make_title, "content": _make_content, "statement": _make_st
 
 
 @mcp.tool()
-def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str) -> str:
+def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, highlight: str = "") -> str:
     """Build an on-brand .pptx and return its absolute path. The title slide comes first, from title.
 
     Each slide is one of:
     {"layout": "content", "title": "...", "bullets": ["...", "..."]}
     {"layout": "statement", "text": "One big sentence."}
     {"layout": "title", "title": "...", "subtitle": "..."}
-    Text that cannot fit raises an error. Shorten it or split the slide.
+    Any slide can also have "highlight": words on that slide to put on the brand's accent colour, for the one thing that matters most.
+    highlight does the same for the title slide. Text that cannot fit raises an error. Shorten it or split the slide.
     """
     brand = load_brand_dir(brand_dir)
     deck = Presentation()
     deck.slide_width, deck.slide_height = Pt(WIDTH), Pt(HEIGHT)
     _apply_theme(deck, brand)
-    _title_slide(deck, brand, title, "")
+    _title_slide(deck, brand, title, "", highlight)
     for spec in slides:
         layout = LAYOUTS.get(spec.get("layout"))
         if layout is None:
