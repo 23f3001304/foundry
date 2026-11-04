@@ -14,14 +14,14 @@ import httpx
 
 from foundry.buffer import Burst
 from foundry.cards import ALREADY_THERE, ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, RIGHT, ROOM_GONE, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
-from foundry.checks import LOW_CONFIDENCE, jumped, numbers_in, outliers
+from foundry.checks import LOW_CONFIDENCE, cell_number, jumped, numbers_in, outliers
 from foundry.cleanup import format_date
 from foundry.items import IN, Item, ItemState, ItemStore, Owed, going_without, parse_owes, status_line
 from foundry.jobs import Job, JobStore, State, advance
 from foundry.log import Entry, Log, Writer
 from foundry.reading import Reading, asks_for_status, is_short_ask, might_be_status, read_message
 from foundry.switch_client import DESK_NAME, Outcome, SwitchClient
-from foundry.tables import TABLE_KINDS, is_file_answer, read_file
+from foundry.tables import TABLE_KINDS, is_file_answer, job_folder, read_file, safe_name
 from foundry.text import headline, quiet
 from foundry.tools.layout import MakerError
 
@@ -135,6 +135,8 @@ DISAGREE = "{owner} and {other} gave different answers for {input}: {value} and 
 UNSEEN_NUMBER = "Foundry read {value} from {owner}'s answer for {input}, but that number is not in what they wrote."
 CHANGED_AFTER_START = "{owner} changed {input} from {old} to {new} after the makers started."
 FAR_FROM_PEERS = "{owner}'s answer for {input} is {value}, far from the others given for this measure."
+# Those lines with their blanks left open, so a later answer can tell which attention lines this check wrote, and take back the ones that no longer hold.
+PEER_LINE = re.compile(".+".join(map(re.escape, re.split(r"\{\w+\}", FAR_FROM_PEERS))))
 # A file sent as an answer. Its name comes from the person, so it is quieted where it is filled in.
 READABLE, SAVE_AS = " and ".join(TABLE_KINDS), " or ".join(TABLE_KINDS)
 MOST_FILE_BYTES = 20 * 1024 * 1024
@@ -142,6 +144,7 @@ MOST_NAME_CHARS = 80
 FILE_NOTED = "Got it. {input}: I saved {name} as the answer."
 FILE_NOT_USED = f"I can only use {READABLE} files as an answer, so I haven't used {{name}}. What you owe is still open. Save it as {SAVE_AS}, or type the figure."
 FILE_UNREADABLE = "{reason} Nothing is changed, and what you owe is still open."
+FILE_NO_FIGURES = "{name} has no figures in it, so I haven't used it. What you owe is still open. Please send the file that has the figures."
 FILE_NOT_GOT = "I couldn't get {name} from the chat just now, so nothing is changed. Please send it again."
 FILE_NOT_SAVED = "I couldn't save {name} just now, so nothing is changed. Please send it again in a little while."
 FILE_TOO_BIG = f"{{name}} is too big for me to use (over {MOST_FILE_BYTES // 1024 // 1024} MB), so nothing is changed. Please send a smaller file."
@@ -279,18 +282,13 @@ def _pick(reading: Reading, candidates: list[Item]) -> Item | None:
     return pool[0] if len(pool) == 1 else None
 
 
-def _safe(text: str, fallback: str) -> str:
-    # Letters, digits, dots, dashes and underscores only, so a name can't be a folder or reach one.
-    return re.sub(r"[^\w.-]+", "_", text).strip("._-") or fallback
-
-
 def input_path(root: Path | str, bucket: str, job_id: str, owner: str, name: str) -> Path:
     """Where a file sent as an answer goes: a folder for the client and one for the job, then the sender's name before the file's own. A name already taken gets a number."""
     base = re.split(r"[\\/]", name)[-1]
     kind = re.search(r"\.\w{1,8}$", base)
     suffix = kind.group().lower() if kind else ""
-    stem = _safe(base[:kind.start()] if kind else base, "file")[:MOST_NAME_CHARS]
-    folder, sender = Path(root) / _safe(bucket, "client") / _safe(job_id, "job"), _safe(owner, "owner")[:MOST_NAME_CHARS]
+    stem = safe_name(base[:kind.start()] if kind else base, "file")[:MOST_NAME_CHARS]
+    folder, sender = job_folder(root, bucket, job_id), safe_name(owner, "owner")[:MOST_NAME_CHARS]
     path, taken = folder / f"{sender}-{stem}{suffix}", 2
     while path.exists():
         path, taken = folder / f"{sender}-{stem}-{taken}{suffix}", taken + 1
@@ -874,10 +872,8 @@ class Coordinator:
             return False
         earlier = self._earlier_unclear(burst, bucket)
         listed = [*own, *(item for item in open_here if item.id not in {mine.id for mine in own})][:MOST_ITEMS_LISTED]
-        names = [_name(writer) for writer in self._writers(bucket)[:MOST_PEOPLE_LISTED]]
         text = f"{earlier}\n{burst.text}" if earlier else burst.text
-        titles = {job.id: self._headline(job) for job in map(self._job_of, listed) if job is not None}
-        reading = read_message(text, listed, names, self._name_of(burst.sender, bucket), self.llm, self.clock().astimezone(self._zone()).date(), titles)
+        reading = self._read(text, listed, bucket, burst.sender)
         handlers = {"answer": self._answer, "reason": self._reason, "passed_on": self._passed_on, "unavailable": self._away, "replace": self._replace, "status": self._status}
         handler = handlers.get(reading.kind)
         return handler is not None and handler(_Heard(burst, bucket, reading, own, open_here, bool(earlier), text))
@@ -901,29 +897,50 @@ class Coordinator:
         if not files or not self.settings.is_internal(room_id):
             return False
         sender, bucket = payload["sender"], self.settings.bucket_for(room_id)
-        owed = self.items.open_for(sender, bucket)
-        if not owed:
+        # What they owe still, and what they have answered on work that has not finished, so a corrected file can replace the first. Work that is finished is never changed.
+        own = self._own_items(sender, bucket)
+        if not own:
             return False
         caption = payload["body"].strip()
         caption = "" if caption in {attachment.get("filename") for attachment in files} else caption
+        # A file with no words is an answer. With words, the table is an answer only when they read as one, because they may ask for something new and the table be what it is made from.
+        reading = self._answer_in(caption, own, sender, bucket) if caption and any(Path(a.get("filename") or "").suffix.lower() in TABLE_KINDS for a in files) else None
         taken = False
         for attachment in files:
             name = attachment.get("filename") or "file"
             if Path(name).suffix.lower() not in TABLE_KINDS:
-                self.client.post_message(room_id, FILE_NOT_USED.format(name=quiet(name)))
-                # With words beside it, the words still go on to be read.
-                taken = taken or not caption
+                # Only someone with something still open is told a file is no use for it. A file from someone who has answered everything is left to be what it was.
+                if any(item.state is ItemState.OPEN for item in own):
+                    self.client.post_message(room_id, FILE_NOT_USED.format(name=quiet(name)))
+                    # With words beside it, the words still go on to be read.
+                    taken = taken or not caption
+                continue
+            if caption and reading is None:
                 continue
             taken = True
-            if not owed:
+            if not own:
                 break
-            item = _file_item(owed, name, caption)
+            # The input still open is the one meant, and failing that the one they answered, unless the words name which.
+            pool = [item for item in own if item.state is ItemState.OPEN] or own
+            named = next((other for other in own if reading is not None and other.id == reading.item_id), None)
+            item = named or _file_item(pool, name, caption)
             if item is None:
-                self.client.post_message(room_id, WHICH_FILE.format(owner=quiet(self._name_of(sender, bucket)), name=quiet(name), options=_join(self._labels(owed))))
+                self.client.post_message(room_id, WHICH_FILE.format(owner=quiet(self._name_of(sender, bucket)), name=quiet(name), options=_join(self._labels(pool))))
                 continue
             if self._save_file(item, attachment, name, room_id, at):
-                owed = [other for other in owed if other.id != item.id]
+                own = [other for other in own if other.id != item.id]
         return taken
+
+    def _answer_in(self, words: str, own: list[Item], sender: str, bucket: str) -> Reading | None:
+        # The reading of the words when the reader says they answer one of the sender's own items. Words that name someone else's item, or that the reader cannot place, do not.
+        listed = [*own, *(item for item in self.items.open_in(bucket) if item.id not in {mine.id for mine in own})][:MOST_ITEMS_LISTED]
+        reading = self._read(words, listed, bucket, sender)
+        return reading if reading.kind == "answer" and not _names_another(reading, own) else None
+
+    def _read(self, text: str, listed: list[Item], bucket: str, sender: str) -> Reading:
+        names = [_name(writer) for writer in self._writers(bucket)[:MOST_PEOPLE_LISTED]]
+        titles = {job.id: self._headline(job) for job in map(self._job_of, listed) if job is not None}
+        return read_message(text, listed, names, self._name_of(sender, bucket), self.llm, self.clock().astimezone(self._zone()).date(), titles)
 
     def _save_file(self, item: Item, attachment: dict, name: str, room_id: str, at: datetime) -> bool:
         # The file is kept where the data tools can open it, and the item closes only once it is known to be a table.
@@ -949,10 +966,15 @@ class Coordinator:
             self.client.post_message(room_id, FILE_NOT_SAVED.format(name=shown))
             return False
         try:
-            read_file(path)
+            table = read_file(path)
         except MakerError as error:
             path.unlink(missing_ok=True)
             self.client.post_message(room_id, FILE_UNREADABLE.format(reason=quiet(str(error).replace(path.name, name))))
+            return False
+        if not any(cell_number(cell) is not None for row in table.rows for cell in row.cells):
+            # Headings with nothing under them, a note, an error page or a table of words is a file, and no answer to a question that asks for figures.
+            path.unlink(missing_ok=True)
+            self.client.post_message(room_id, FILE_NO_FIGURES.format(name=shown))
             return False
         self._record(item, str(path), at, room_id, confidence=None, said="", typed=False, file=True)
         self._close_voice_cards(item)
@@ -1201,26 +1223,40 @@ class Coordinator:
             lines = [] if file else self._checks(job, item, value, previous, confidence, said if typed else None, key)
             if not confirmed:
                 lines.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value))
-            if replaced is not None and _differ(replaced, value) and job.state in STARTED:
-                lines.append(CHANGED_AFTER_START.format(owner=self._owner_name(item), input=item.input, old=replaced, new=value))
-                self._tell_asker(job, item, replaced, value)
+            if replaced is not None and self._changed(item, replaced, value) and job.state in STARTED:
+                old, new = self._said_as(item, replaced), self._said_as(item, value)
+                lines.append(CHANGED_AFTER_START.format(owner=self._owner_name(item), input=item.input, old=old, new=new))
+                self._tell_asker(job, item, old, new)
             # Once it is confirmed, or replaced, the lines saying it was not no longer hold.
             stale = []
             if confirmed and replaced is not None:
                 stale.append(NEWER_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value, old=replaced))
             if confirmed and was_unconfirmed:
                 stale.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=replaced))
-            self._flag(item.job_id, lines, stale)
+            # The far-from-peers lines are judged afresh each time, over every answer now in, so one that no longer holds is taken back.
+            self._flag(item.job_id, lines + self._far_from_peers(job), stale, redo=PEER_LINE)
         # Last, because it may start the makers, and asking them can fail. The answer and its checks are kept either way.
         self._close(item)
 
-    def _flag(self, job_id: str, lines: list[str], drop: Iterable[str] = ()) -> None:
+    def _is_file(self, text: str, item: Item) -> bool:
+        return is_file_answer(text, self.settings.inputs_dir, item.bucket, item.job_id)
+
+    def _changed(self, item: Item, old: str, new: str) -> bool:
+        # A file is a different answer from any other file, or from a figure, whatever their names hold. Two figures are the same when they read the same.
+        return old != new if self._is_file(old, item) or self._is_file(new, item) else _differ(old, new)
+
+    def _said_as(self, item: Item, answer: str) -> str:
+        # What the asker is shown: a file by its name, and never by the folder it is kept in.
+        return Path(answer).name if self._is_file(answer, item) else answer
+
+    def _flag(self, job_id: str, lines: list[str], drop: Iterable[str] = (), redo: re.Pattern | None = None) -> None:
         # The job is read afresh, because closing the item may have started the makers and saved the job since the caller read it.
+        # Lines of the redo shape are all of that kind there should be now, so those not among the lines given are taken back.
         try:
             job = self.store.get(job_id)
         except KeyError:
             return
-        kept = [line for line in job.attention if line not in drop]
+        kept = [line for line in job.attention if line not in drop and not (redo is not None and redo.fullmatch(line) and line not in lines)]
         fresh = [line for line in dict.fromkeys(lines) if line not in kept]
         if fresh or len(kept) != len(job.attention):
             job.attention = kept + fresh
@@ -1247,18 +1283,21 @@ class Coordinator:
             lines.append(JUMPED.format(owner=owner, input=item.input, value=value, share=f"{share:.0%}", old=previous.text))
         for other in self.items.for_job(job.id):
             same_ask = (_key(other.input), self._measure_key(other, job)) == (_key(item.input), key)
-            if other.id != item.id and same_ask and other.state in IN and other.confirmed and other.answer is not None and not is_file_answer(other.answer) and _differ(other.answer, value):
+            if other.id != item.id and same_ask and other.state in IN and other.confirmed and other.answer is not None and not self._is_file(other.answer, other) and _differ(other.answer, value):
                 lines.append(DISAGREE.format(owner=owner, other=self._owner_name(other), input=item.input, value=value, other_value=other.answer))
                 break
-        return lines + self._far_from_peers(job, key)
+        return lines
 
-    def _far_from_peers(self, job: Job, key: str) -> list[str]:
-        # Every answer on this measure in this job is judged together, so a far figure that came first is judged once its peers have answered.
-        answered = [
-            other for other in self.items.for_job(job.id)
-            if other.state in IN and other.confirmed and other.answer is not None and _key(self._measure_key(other, job)) == _key(key)
+    def _far_from_peers(self, job: Job) -> list[str]:
+        # Every answer on a measure in this job is judged together, so a far figure that came first is judged once its peers have answered, and one that is no longer far is not.
+        by_measure: dict[str, list[Item]] = {}
+        for other in self.items.for_job(job.id):
+            if other.state in IN and other.confirmed and other.answer is not None:
+                by_measure.setdefault(_key(self._measure_key(other, job)), []).append(other)
+        return [
+            FAR_FROM_PEERS.format(owner=self._owner_name(answered[at]), input=answered[at].input, value=answered[at].answer)
+            for answered in by_measure.values() for at in outliers([other.answer for other in answered])
         ]
-        return [FAR_FROM_PEERS.format(owner=self._owner_name(answered[at]), input=answered[at].input, value=answered[at].answer) for at in outliers([other.answer for other in answered])]
 
     def _measure_key(self, item: Item, job: Job | None) -> str:
         # The pack's name for a measure when the item's wording holds it, so this quarter's figure meets last quarter's however the brief agent wrote it.

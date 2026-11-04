@@ -110,7 +110,8 @@ def flagged_chain(token: str, flag_id: int) -> str:
     flagged = log.get(job.bucket, flag_id)
     if flagged is None or flagged.kind != "flag" or flagged.job_id != job.id:
         raise ToolError(NOT_FLAGGED)
-    steps = chain_for(log, job.bucket, flag_id)
+    # With no inputs folder named, no path is a file, which is the careful way for it to fail.
+    steps = chain_for(log, job.bucket, flag_id, os.environ.get("FOUNDRY_INPUTS_DIR") or None)
     return "\n".join([AS_DATA, *map(_step_line, steps)] if steps else [AS_DATA, NO_STEPS])
 
 

@@ -104,6 +104,11 @@ def going_without(items: list[Item]) -> list[Item]:
     return [item for item in items if item.state is ItemState.SKIPPED and not _handed_over(item)]
 
 
+def owed_items(items: list[Item]) -> list[Item]:
+    # What people were asked for: not a draft nobody has been asked about yet, and not an input handed to someone else, who owes it now.
+    return [item for item in items if item.asked_at is not None and not _handed_over(item)]
+
+
 def status_line(items: list[Item]) -> str:
     # Built by code from the list, and everything people wrote in it is quieted here.
     items = [item for item in items if not _handed_over(item)]

@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from foundry.checks import numbers_in
+from foundry.checks import entry_words, numbers_in
 from foundry.commands import VIA_DASHBOARD
 from foundry.jobs import Job
 from foundry.log import Entry, Log
@@ -31,6 +31,9 @@ MOST_MESSAGES = 100
 
 # What people said that a number can come from. voice_heard is left out, because the message it became carries the same words.
 SAID = ("message", "voice_corrected", "item_answer", "item_passed_on", "revision_notes")
+# What code worked out for a job, and the places it says it worked it out from: the rows of a file, or the log entries of a job's answers.
+CALCULATION = "calculation"
+ROWS, ENTRIES = "rows", "entries"
 # The markers the desk logs for agents.
 BRIEF_READY = "BRIEF_READY"
 REVIEW_PASS = "REVIEW_PASS"
@@ -42,7 +45,9 @@ WHAT = {
     "item_passed_on": "passed on an answer",
     "revision_notes": "asked for changes",
     "report_approved": "is in the approved report",
+    CALCULATION: "worked out by code",
 }
+WORKED_FROM = "worked out from"
 RECORDED = "sent a voice note"
 HEARD = "heard"
 CONFIRMED = "confirmed what was heard"
@@ -286,8 +291,8 @@ def _copies(job: list[Entry]) -> dict[str, Copy]:
 
 
 class _Trail:
-    def __init__(self, log: Log, bucket: str, job: list[Entry]) -> None:
-        self.log, self.bucket, self.job = log, bucket, job
+    def __init__(self, log: Log, bucket: str, job: list[Entry], inputs_dir: Path | str | None = None) -> None:
+        self.log, self.bucket, self.job, self.inputs_dir = log, bucket, job, inputs_dir
         self.known = names(log, bucket)
         self.copies = _copies(job)
         self.steps: list[Step] = []
@@ -325,7 +330,7 @@ class _Trail:
         if hits:
             return self._named(hits), {target.path: hits}
         # With no link, every entry of this job that gives the value is shown, and labelled as a guess.
-        return [(entry, BY_VALUE) for entry in self._candidates() if carries(entry.text, target.needle)], {target.path: []}
+        return [(entry, BY_VALUE) for entry in self._candidates() if carries(entry_words(entry, self.inputs_dir) or "", target.needle)], {target.path: []}
 
     def _named(self, links: Hits) -> list[tuple[Entry, str]]:
         named = (self.log.get(self.bucket, entry_id) for entry_id in dict.fromkeys(entry_id for _, entry_id in links))
@@ -334,7 +339,7 @@ class _Trail:
     def _candidates(self) -> list[Entry]:
         # This job's own words and the messages that opened it, never the rest of the log.
         opening = [self.log.get(self.bucket, entry_id) for entry in self.job if entry.kind == "job_opened" for entry_id in _ids(entry.ref)]
-        chosen = {entry.id: entry for entry in [*opening, *self.job] if entry is not None and entry.kind in SAID}
+        chosen = {entry.id: entry for entry in [*opening, *self.job] if entry is not None and entry.kind in (*SAID, CALCULATION)}
         return sorted(chosen.values(), key=lambda entry: entry.id)
 
     def _add(self, entry: Entry, what: str, detail: str, label: str, who: str | None = None) -> None:
@@ -342,7 +347,22 @@ class _Trail:
             self._seen.add((entry.id, what))
             self.steps.append(Step(entry.at, who or name_of(entry, self.known), what, detail, label))
 
+    def _calculated(self, entry: Entry, label: str) -> None:
+        # What code worked out, and what it worked it out from: the people whose answers it used, or the rows of the file.
+        self._add(entry, WHAT[CALCULATION], entry.text, label)
+        kind, _, places = (entry.ref or "").partition(" ")
+        if kind == ENTRIES:
+            for entry_id in _ids(places):
+                found = self.log.get(self.bucket, entry_id)
+                if found is not None:
+                    self._said(found, DIRECT)
+        elif kind == ROWS and places:
+            self._add(entry, WORKED_FROM, f"{ROWS} {places}", DIRECT)
+
     def _said(self, entry: Entry, label: str) -> None:
+        if entry.kind == CALCULATION:
+            self._calculated(entry, label)
+            return
         notes = self._heard(entry)
         if not notes:
             self._add(entry, WHAT.get(entry.kind, entry.kind.replace("_", " ")), self._how(entry) if entry.kind == "revision_notes" else entry.text, label)
@@ -429,10 +449,10 @@ class _Trail:
         self._add(last, DELIVERED, f"{last.text or 'the report'} to {last.room_id}", DIRECT)
 
 
-def chain_for(log: Log, bucket: str, flag_id: int) -> list[Step]:
+def chain_for(log: Log, bucket: str, flag_id: int, inputs_dir: Path | str | None = None) -> list[Step]:
     flagged = log.get(bucket, flag_id)
     if flagged is None or flagged.kind != "flag":
         raise NotFlagged(NOT_FLAGGED.format(entry_id=flag_id))
     job = log.for_job(bucket, flagged.job_id) if flagged.job_id else []
-    trail = _Trail(log, bucket, job)
+    trail = _Trail(log, bucket, job, inputs_dir)
     return trail.follow(_parse(flagged.ref or "", trail.copies))

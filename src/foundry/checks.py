@@ -21,6 +21,8 @@ LOW_CONFIDENCE = 0.6
 PEER_SHARE = 0.5
 # Fewer figures than this have no peers: with two, each is as far from the middle as the other.
 FEWEST_PEERS = 3
+# In a calculation's entry, what comes before it says what was worked out and what comes after it is the result.
+RESULT = " = "
 NOT_SURE = "The model said it was not sure this report is right."
 # Only what people said. A reviewer's note, an agent's marker or a card must not make a number look sourced.
 PEOPLE_WORDS = ("message", "voice_heard", "voice_corrected", "item_answer", "item_passed_on", "revision_notes")
@@ -33,8 +35,8 @@ WRITTEN_DATE = re.compile(rf"\b{DAY}\s+(?:of\s+)?{MONTH}(?:,?\s+{YEAR})?|\b{MONT
 # A year is four plain digits. With a comma, as in 2,026, or after a currency mark or before a %, as in ₹1999 and 2000%, it is a quantity.
 YEAR_ONLY = re.compile(YEAR)
 CURRENCY_BEFORE = re.compile(r"(?:₹|(?<![A-Za-z])Rs\.?|[$€£])\s*$")
-# Commas that group thousands, as in 1,200,000 and the Indian 12,34,567.
-GROUPED = re.compile(r"\d{1,3}(?:(?:,\d{3})+|(?:,\d{2})*,\d{3})(?:\.\d+)?")
+# Commas that group thousands, as in 1,200,000 and the Indian 12,34,567. The first group never starts with a zero, because 0,125 is not a hundred and twenty-five thousand.
+GROUPED = re.compile(r"[1-9]\d{0,2}(?:(?:,\d{3})+|(?:,\d{2})*,\d{3})(?:\.\d+)?")
 DECIMAL = re.compile(r"\d+\.\d+")
 FIGURE = re.compile(rf"(-?)\s*[₹$€£]?\s*({NUMBER.pattern})\s*%?")
 
@@ -73,6 +75,19 @@ def figure(text: str) -> Decimal | None:
         return Decimal(match.group(1) + _normal(match.group(2)))
     except InvalidOperation:
         return None
+
+
+def cell_number(cell: object) -> Decimal | None:
+    # What a cell of a table holds as a number, or None for a blank, words, a date, a true or false, or a figure no spreadsheet could add.
+    # A float is read to the 15 digits it is good for, so the 17 a spreadsheet saves for a sum does not put noise in a total.
+    if cell is None or isinstance(cell, bool):
+        return None
+    if isinstance(cell, int):
+        return Decimal(cell)
+    if isinstance(cell, float):
+        number = Decimal(format(cell, ".15g"))
+        return number if number.is_finite() else None
+    return figure(cell) if isinstance(cell, str) else None
 
 
 def jumped(previous: str, new: str, share: float) -> bool:
@@ -150,16 +165,33 @@ def needs_attention(result: CleanResult) -> list[str]:
     return lines
 
 
-def _said(entry: Entry) -> str | None:
-    # A file sent as an answer is logged by its path. What the person gave is what is in the file, and the digits in a folder name are not figures anyone gave.
-    if entry.kind == "item_answer" and is_file_answer(entry.text):
+def calculated_result(text: str) -> str:
+    # A calculation's entry says what was worked out, from what, and then RESULT and the figures. Only the figures are numbers the calculation gives.
+    return text.rpartition(RESULT)[2]
+
+
+def entry_words(entry: Entry, inputs_dir: Path | str | None = None) -> str | None:
+    """The words of an entry that a number can be matched to, which are not always the entry's own text.
+
+    A file the desk kept as an answer, in its job's own folder under inputs_dir, is logged by its path, and what the person gave is what is in the file.
+    The digits in a folder name are not figures anyone gave. A path typed as an answer is only the words typed, and with no inputs_dir no path is a file.
+    A calculation is logged as a sentence, and its figures are what follows the result mark. None when a file answer's file cannot be read.
+    """
+    if entry.kind == "calculation":
+        return calculated_result(entry.text)
+    if entry.kind == "item_answer" and is_file_answer(entry.text, inputs_dir, entry.bucket, entry.job_id):
         return table_text(entry.text)
     return entry.text
 
 
-def people_words(log: Log, bucket: str, job_id: str) -> list[str]:
+def people_words(log: Log, bucket: str, job_id: str, inputs_dir: Path | str | None = None) -> list[str]:
     entries = log.for_job(bucket, job_id)
     # The messages that opened a job were logged before it had an id, so its opening entry names them.
     opening = [log.get(bucket, int(part)) for entry in entries if entry.kind == "job_opened" for part in (entry.ref or "").split(",") if part.strip().isdigit()]
-    said = [_said(entry) for entry in [*opening, *entries] if entry is not None and entry.kind in PEOPLE_WORDS]
+    said = [entry_words(entry, inputs_dir) for entry in [*opening, *entries] if entry is not None and entry.kind in PEOPLE_WORDS]
     return [text for text in said if text is not None]
+
+
+def calculations(log: Log, bucket: str, job_id: str) -> list[str]:
+    # What code worked out for this job. Another job's calculation never counts, because the log is asked for this job's entries only.
+    return [calculated_result(entry.text) for entry in log.for_job(bucket, job_id) if entry.kind == "calculation"]

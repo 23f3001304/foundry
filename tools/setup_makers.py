@@ -15,14 +15,14 @@ SERVERS = {
     "foundry-deck": ["foundry.tools.deck_server", DATA_TOOL, LOG_TOOL],
     "foundry-visual": ["foundry.tools.graphic_server", DATA_TOOL, LOG_TOOL],
 }
-# The databases the desk writes, with the names it uses when the environment names none.
-DATABASES = {"FOUNDRY_LOG_DB": "foundry-log.db", "FOUNDRY_JOBS_DB": "foundry-jobs.db", "FOUNDRY_WORK_DB": "foundry-work.db"}
+# The places the desk writes, with the names it uses when the environment names none: its databases, and the folder it keeps files sent as answers in.
+DATABASES = {"FOUNDRY_LOG_DB": "foundry-log.db", "FOUNDRY_JOBS_DB": "foundry-jobs.db", "FOUNDRY_WORK_DB": "foundry-work.db", "FOUNDRY_INPUTS_DIR": "foundry-inputs"}
 
 
 def _server(module: str) -> dict:
     server = {"command": "uv", "args": ["--directory", str(REPO), "run", "python", "-m", module]}
     if module in SHARED:
-        # Both read the desk's databases, and start from the repository folder, so a path relative to wherever this ran would point at nothing.
+        # Both read what the desk writes, and start from the repository folder, so a path relative to wherever this ran would point at nothing.
         server["env"] = {name: str(Path(os.environ.get(name) or default).resolve()) for name, default in DATABASES.items()}
     return server
 

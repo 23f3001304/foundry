@@ -10,7 +10,7 @@ from pathlib import Path
 KINDS = (
     "message", "voice_heard", "voice_confirmed", "voice_corrected", "job_opened", "card_opened", "card_answered", "agent_marker",
     "file_made", "review", "delivered", "note_cleaned", "report_approved", "item_asked", "item_reminded", "item_answer",
-    "item_reason", "item_passed_on", "availability", "flag", "dashboard_action", "revision_notes",
+    "item_reason", "item_passed_on", "availability", "flag", "dashboard_action", "revision_notes", "calculation",
 )
 # What a person wrote or said in a room. Only these show that Foundry can reach them there.
 WRITTEN = ("message", "voice_heard")
