@@ -82,6 +82,10 @@ ITEMS = "items"
 ONE_BY_ONE = "one_by_one"
 WAITING_SINCE = "waiting_since"
 DETAIL_POSTED = "detail_posted"
+# An item that must be seen to be answered, such as a report, is brought by "Show what needs me" even when it is clean.
+ALWAYS_SHOW = "always_show"
+# A clean item is only clean until this time. One that comes round after it is no longer clean, so one press never approves a stale item.
+CLEAN_UNTIL = "clean_until"
 # Stands in for a person in set_time_runs, to record that a bucket has reached a set time at all.
 EVERYONE = ""
 COLUMNS = ("request_id", "trigger", "person", "bucket", "room_id", "title", "detail", "choices", "job_id", "item_id", "state", "created_at", "opened_at", "data")
@@ -299,7 +303,7 @@ class CardQueue:
             if choice == APPROVE_CLEAN and _is_clean(item):
                 hand_off(item)
                 self.finish(item.request_id, ANSWERED)
-            elif choice == SHOW_NEEDS and not _is_clean(item):
+            elif choice == SHOW_NEEDS and (not _is_clean(item) or item.data.get(ALWAYS_SHOW)):
                 item.state, item.data[ONE_BY_ONE] = QUEUED, True
                 self._save(item)
         self.finish(request_id, ANSWERED)
@@ -412,6 +416,8 @@ class CardQueue:
         # The room that has waited longest goes first. An item that comes back is stamped afresh, so it can't keep another room waiting for good.
         first = min(items, key=_waiting_since)
         same_room = [item for item in items if item.room_id == first.room_id]
+        for item in same_room:
+            self._stop_being_clean_if_stale(item)
         lines = [f"- {item.title}{'' if _is_clean(item) else NEEDS_YOU}" for item in same_room]
         # A merged card takes its first item's trigger, so it still comes from the list and still reads as routine.
         card = Card(_new_id(), first.trigger, person, bucket, first.room_id, ROUTINE_TITLE, "\n".join(lines), [APPROVE_CLEAN, SHOW_NEEDS], None, None, QUEUED, self.clock(), None, {ITEMS: [item.request_id for item in same_room]})
@@ -421,6 +427,12 @@ class CardQueue:
             item.state = IN_ROUTINE
             self._save(item)
         self._try_to_open(card)
+
+    def _stop_being_clean_if_stale(self, item: Card) -> None:
+        until = item.data.get(CLEAN_UNTIL)
+        if _is_clean(item) and until and self.clock() > datetime.fromisoformat(until):
+            item.data["clean"] = False
+            self._save(item)
 
     def _routine_card_is_waiting(self, person: str, bucket: str) -> bool:
         return any(card.is_merged and card.person == person for card in self.waiting(bucket))

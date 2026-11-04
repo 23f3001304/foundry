@@ -49,6 +49,8 @@ NOT_CONFIRMED = "not confirmed"
 NOBODY_CONFIRMED = "Nobody has said these words are right."
 BRIEF_WRITTEN = "wrote the brief"
 CLEANED = "cleaned up the note"
+NOTE_CLEANED = "note_cleaned"
+WROTE = "wrote a note"
 MADE = "made the file"
 USED = "used it in the file"
 PASSED = "passed the review"
@@ -292,6 +294,7 @@ class _Trail:
         since = min((step.at for step in self.steps), default=None)
         if since is not None:
             self._upstream(since, bool(used))
+        self._notes_behind()
         for path, hits in used.items():
             self._file(path, hits)
         if target.kind == TEXT and not sources:
@@ -362,9 +365,30 @@ class _Trail:
             if entry.at < since:
                 continue
             if entry.kind == "note_cleaned":
-                self._add(entry, CLEANED, entry.text, DIRECT)
+                # The desk cleans a note up, whoever wrote it.
+                self._add(entry, CLEANED, entry.text, DIRECT, who=DESK_NAME)
             elif has_files and entry.kind == "agent_marker" and entry.ref == BRIEF_READY:
                 self._add(entry, BRIEF_WRITTEN, entry.text, DIRECT)
+
+    def _notes_behind(self) -> None:
+        # A day's report has no words of its own. Behind it are the notes it was made from: the ones the approved report lists, or failing that the ones that opened it.
+        listed = [entry for kind in ("report_approved", "job_opened") for entry in self.job if entry.kind == kind and entry.ref]
+        approved = [entry for entry in listed if entry.kind == "report_approved"]
+        source = (approved or listed)[-1] if listed else None
+        notes = (self.log.get(self.bucket, entry_id) for entry_id in _ids(source.ref)) if source else ()
+        for note in notes:
+            if note is not None and note.kind == NOTE_CLEANED:
+                self._note(note)
+
+    def _note(self, note: Entry) -> None:
+        # What the writer said, as they said it, and then what clean-up made of it and why.
+        opening = [self.log.get(self.bucket, entry_id) for entry in self.log.for_job(self.bucket, note.job_id) if entry.kind == "job_opened" for entry_id in _ids(entry.ref)] if note.job_id else []
+        said = [entry for entry in opening if entry is not None and entry.kind == "message"]
+        for entry in said:
+            self._said(entry, DIRECT)
+        if not said:
+            self._add(note, WROTE, "", DIRECT)
+        self._add(note, CLEANED, note.text, DIRECT, who=DESK_NAME)
 
     def _file(self, path: str, hits: Hits) -> None:
         name = Path(path).name

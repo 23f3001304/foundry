@@ -9,14 +9,14 @@ import uuid
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
 import httpx
 
 from foundry.buffer import Burst, MessageBuffer
-from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
+from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, ONE_BY_ONE, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
 from foundry.chain import Link, carries, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines
 from foundry.checks import file_text, needs_attention, people_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date
@@ -610,18 +610,25 @@ class Desk:
             return ""
 
     def _deliver(self, job: Job) -> None:
+        if job.kind == "daily":
+            self._deliver_report(job)
+            return
         clean_run = job.revision_rounds == 0
         self._sticker(job.room_id, "approved")
-        if job.kind == "daily":
-            deliver_report(job, self.client, self._report_rooms(job))
-            self.log.add(self.clock(), job.bucket, job.room_id, DESK, "report_approved", job.report, job_id=job.id)
-        else:
-            deliver(job, self.client, job.room_id)
-            self._reply_aloud(job, DELIVERED)
+        deliver(job, self.client, job.room_id)
+        self._reply_aloud(job, DELIVERED)
         self.log.add(self.clock(), job.bucket, job.room_id, DESK, "delivered", ", ".join(Path(path).name for path in job.artifacts), job_id=job.id)
         self._sticker(job.room_id, "shipped")
         if clean_run:
             self._sticker(job.room_id, "celebrate")
+
+    def _deliver_report(self, job: Job) -> None:
+        # Logged in the room the report went to, with the notes it was made from, which is what the chain follows. No stickers: nothing was delivered to the room its notes came from.
+        rooms = self._report_rooms(job)
+        notes = self.daily.notes_in(job)
+        deliver_report(job, self.client, rooms, heading=job.brief.splitlines()[0])
+        self.log.add(self.clock(), job.bucket, rooms[0], DESK, "report_approved", job.report, job_id=job.id, ref=",".join(str(note.id) for note in notes) or None)
+        self.log.add(self.clock(), job.bucket, rooms[0], DESK, "delivered", "", job_id=job.id)
 
     def _report_rooms(self, job: Job) -> list[str]:
         rooms = self.settings.workrooms_for(job.room_id)
@@ -1159,8 +1166,12 @@ class Desk:
         left = len(card.data["items"]) - len(approved)
         if choice == APPROVE_CLEAN and left:
             self.client.post_message(card.room_id, ROUTINE_STILL_WAITING.format(count=left))
-        elif choice == SHOW_NEEDS and self.cards.open_for(card.person, card.bucket) is None:
+        elif choice == SHOW_NEEDS and self.cards.open_for(card.person, card.bucket) is None and not self._shown_next(card):
             self.client.post_message(card.room_id, ROUTINE_NOTHING_NEEDS_YOU)
+
+    def _shown_next(self, card: Card) -> bool:
+        # Something was brought one by one, such as a report, and only hasn't opened yet. Saying that nothing needs the person would be untrue.
+        return any(waiting.person == card.person and waiting.data.get(ONE_BY_ONE) for waiting in self.cards.waiting(card.bucket))
 
     def _take_pressed_answer(self, job: Job, outcome: Outcome) -> None:
         asked, choices = job.question["text"], job.question["choices"]
@@ -1266,10 +1277,19 @@ class Desk:
         return timezone(timedelta(minutes=self.settings.utc_offset_minutes))
 
     def _earlier_reports(self, bucket: str, now: datetime) -> str:
-        # Only approved reports count, and each line says which business day it was approved on.
+        # Only approved reports count, and each line says which business day it is for.
         approved = self.log.between(bucket, now - REPORT_MEMORY, now, kinds=["report_approved"])
-        zone = self._business_zone()
-        return "\n".join(f"{format_date(entry.at.astimezone(zone).date())}: {line}" for entry in approved for line in entry.text.splitlines() if line.strip())
+        return "\n".join(f"{format_date(self._day_of(entry))}: {line}" for entry in approved for line in entry.text.splitlines() if line.strip())
+
+    def _day_of(self, entry: Entry) -> date:
+        # A day's report is for the day it names, even if it was approved the next morning. Any other is dated by when it was approved.
+        try:
+            job = self.store.get(entry.job_id) if entry.job_id else None
+        except KeyError:
+            job = None
+        if job is not None and job.kind == "daily" and job.sent_at:
+            return datetime.fromisoformat(job.sent_at).date()
+        return entry.at.astimezone(self._business_zone()).date()
 
     def _offer_choices(self, job: Job, question: str, choices: list[str]) -> None:
         request_id = f"{job.id}-{uuid.uuid4().hex[:8]}"

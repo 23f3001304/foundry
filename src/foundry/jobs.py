@@ -43,6 +43,8 @@ TRANSITIONS = {
     (State.REVIEWING, "review_failed"): State.MAKING,
     (State.SIGNOFF_PENDING, "signoff_approved"): State.APPROVED,
     (State.SIGNOFF_PENDING, "signoff_revised"): State.MAKING,
+    # A note in a day's report was corrected, so the report is made again. That is no round of changes.
+    (State.SIGNOFF_PENDING, "note_corrected"): State.MAKING,
     (State.APPROVED, "delivered"): State.DELIVERED,
     # A note filed in a day's report that isn't built yet is cleaned again when its sender corrects it.
     (State.DELIVERED, "note_reopened"): State.RECEIVED,
