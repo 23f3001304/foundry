@@ -9,7 +9,7 @@ measures:
   - defects open
   - UAT test cases passed
 dashboard:
-  - login: admin@switch.local
+  - login: '{switch_email}'
     acts_as: '@switch-mattermost-{bridge}-delivery-manager:localhost'
 glossary: |
   QA: quality assurance, the people who test a build before the client sees it
@@ -21,4 +21,4 @@ report_format: |
   One short paragraph for each team. Start with the team's name. Say what finished, what is blocked and what comes next, with dates and numbers, as far as the notes say. Plain English, no greeting.
 ---
 
-Morpankh Systems is a fictional IT services firm, and everything in this folder is made up for the demo.
+Morpankh Systems is a fictional IT services firm, and everything in this folder is made up for the demo. So is Harsingar Stores, the client its scene names.

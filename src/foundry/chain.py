@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from foundry.checks import entry_words, numbers_in, shown_words
+from foundry.checks import carries, entry_words, shown_words
 from foundry.commands import VIA_DASHBOARD
 from foundry.jobs import Job
 from foundry.log import Entry, Log
@@ -130,20 +130,6 @@ def _number(text: str) -> int | None:
 
 def _ids(ref: str | None) -> list[int]:
     return [number for part in (ref or "").split(",") if (number := _number(part.strip())) is not None]
-
-
-def _squash(text: str) -> str:
-    return " ".join(text.casefold().split())
-
-
-def carries(text: str, value: str) -> bool:
-    # A number is there when every number in the value is in the text, however each is written. Words are there when they appear as written.
-    if not value.strip():
-        return False
-    wanted = numbers_in(value)
-    if wanted:
-        return set(wanted) <= set(numbers_in(text))
-    return _squash(value) in _squash(text)
 
 
 def _same_value(first: str, second: str) -> bool:

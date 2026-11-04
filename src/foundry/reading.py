@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 
+from foundry.checks import carries
 from foundry.items import IN, Item
 from foundry.text import quiet
 
@@ -119,7 +120,7 @@ def read_message(
         # Whatever stops the model, the message is then sorted like any other.
         logger.warning("Could not read a reply against the list: %s", error)
         return NONE
-    return _reading(_object(answer), items)
+    return _reading(_object(answer), items, text)
 
 
 def _object(answer: str) -> dict | None:
@@ -133,7 +134,7 @@ def _object(answer: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _reading(data: dict | None, items: list[Item]) -> Reading:
+def _reading(data: dict | None, items: list[Item], text: str) -> Reading:
     if data is None:
         return NONE
     kind = str(data.get("kind", "")).strip().lower()
@@ -145,17 +146,24 @@ def _reading(data: dict | None, items: list[Item]) -> Reading:
     needed = {"answer": value, "passed_on": value, "reason": reason, "replace": person}
     if kind in needed and not needed[kind]:
         return NONE
-    return Reading(kind, item_id, value, reason, person, _day(data.get("until")), _also(data.get("also"), items))
+    return Reading(kind, item_id, value, reason, person, _day(data.get("until")), _also(data.get("also"), items, text, item_id, value))
 
 
-def _also(value: object, items: list[Item]) -> tuple[tuple[str, str], ...]:
-    found = []
+def _also(value: object, items: list[Item], reply: str, first_item: str | None, first_value: str | None) -> tuple[tuple[str, str], ...]:
+    # A model can add an answer nobody gave, and it would close an item. So each one must be in the reply, an item takes the first it is given, and one figure in a reply answers one item.
+    # "41 and 41" leaves the second open, and its owner is asked again.
+    found: dict[str, str] = {}
+    given = [first_value] if first_value else []
     for entry in value if isinstance(value, list) else []:
         if isinstance(entry, dict):
-            number, text = _number(entry.get("item")), _text(entry.get("value"))
-            if number is not None and 1 <= number <= len(items) and text:
-                found.append((items[number - 1].id, text))
-    return tuple(found)
+            number, said = _number(entry.get("item")), _text(entry.get("value"))
+            if number is None or not 1 <= number <= len(items) or not said:
+                continue
+            item_id = items[number - 1].id
+            if item_id != first_item and item_id not in found and carries(reply, said) and not any(carries(earlier, said) for earlier in given):
+                found[item_id] = said
+                given.append(said)
+    return tuple(found.items())
 
 
 def _text(value: object) -> str | None:

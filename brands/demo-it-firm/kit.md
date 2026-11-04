@@ -13,7 +13,7 @@ business_type: IT services firm
 audience: The client's project sponsor and the firm's own delivery team
 voice: Exact and calm. Says what shipped, what is blocked and by when. No sales talk and no blame.
 ---
-Morpankh Systems is a fictional IT services firm, made up for this demo along with everything in this folder. It is not a real company. Morpankh is Hindi for peacock feather.
+Morpankh Systems is a fictional IT services firm, made up for this demo along with everything in this folder. It is not a real company. Morpankh is Hindi for peacock feather. Harsingar Stores, the client its scene names, is made up too.
 
 Use the paper colour for backgrounds and the ink colour for text. Keep the peacock teal for headings and large shapes, and use the gold once on a page, for the one thing that matters most.
 

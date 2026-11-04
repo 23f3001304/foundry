@@ -55,6 +55,20 @@ def numbers_in(text: str) -> list[str]:
     return list(dict.fromkeys(_normal(match.group()) for match in NUMBER.finditer(text) if not _is_year(text, match)))
 
 
+def _squash(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+def carries(text: str, value: str) -> bool:
+    # A number is there when every number in the value is in the text, however each is written. Words are there when they appear as written.
+    if not value.strip():
+        return False
+    wanted = numbers_in(value)
+    if wanted:
+        return set(wanted) <= set(numbers_in(text))
+    return _squash(value) in _squash(text)
+
+
 def _is_year(text: str, number: re.Match) -> bool:
     if not YEAR_ONLY.fullmatch(number.group()):
         return False

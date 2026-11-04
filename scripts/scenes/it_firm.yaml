@@ -25,7 +25,7 @@ steps:
   # The request, and the brief's card with who owes what.
   - as: Delivery Manager
     room: delivery
-    say: "I need the release status deck for the client by {in:60}. Team Leads A, B and C each owe me their team's stories closed this sprint and defects open by {in:8}."
+    say: "I need the release status deck for our client Harsingar Stores by {in:60}. Team Leads A, B and C each owe me their team's stories closed this sprint and defects open by {in:8}."
     wait_for: {button: Approve, timeout: 300}
   - as: Delivery Manager
     room: delivery

@@ -13,7 +13,7 @@ from foundry.log import Entry, Log
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from demo_people import load_scene, sender_id, username
+from demo_people import load_scene, local_only, sender_id, switch_url, username
 
 
 def seed(scene: dict, log: Log, rooms: dict[str, str], bridge: str, now: datetime) -> list[Entry]:
@@ -36,12 +36,13 @@ def _already_seeded(log: Log, bucket: str, history: list[dict], now: datetime) -
 
 
 def _rooms() -> dict[str, str]:
-    with httpx.Client(base_url=f"{os.environ.get('SWITCH_URL', 'http://127.0.0.1:8000')}/gateway", timeout=60) as gateway:
+    with httpx.Client(base_url=f"{switch_url()}/gateway", timeout=60) as gateway:
         gateway.post("/auth/login", json={"email": os.environ["SWITCH_EMAIL"], "password": os.environ["SWITCH_PASSWORD"]}).raise_for_status()
         return {room["name"]: room["id"] for room in gateway.get("/rooms").raise_for_status().json()}
 
 
 def main(name: str) -> None:
+    local_only()
     log = Log(os.environ.get("FOUNDRY_LOG_DB", "foundry-log.db"))
     made = seed(load_scene(name), log, _rooms(), os.environ["FOUNDRY_MATTERMOST_BRIDGE"], datetime.now(UTC))
     print(f"Wrote {len(made)} seeded entries to {log.path}.")

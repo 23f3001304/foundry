@@ -11,6 +11,7 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import yaml
@@ -21,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 from register_desk import save
 
 SCENES = Path(__file__).resolve().parent / "scenes"
+THIS_MACHINE = ("localhost", "127.0.0.1", "::1")
 ON_THE_BUSINESS_CLOCK = re.compile(r"\{in:(\d+)\}")
 LOG_TOKEN = re.compile(r"(Log token for this job: )[^\s.]+")
 NUMBERED = re.compile(r"\s*\d+[.)]\s*")
@@ -63,8 +65,26 @@ def masked(text: str) -> str:
     return LOG_TOKEN.sub(r"\1<hidden>", text)
 
 
+def _local(name: str, default: str) -> str:
+    # These scripts sign in as the admin and reset the password of anyone with a scripted person's name, so they only ever talk to a stack on this machine.
+    url = os.environ.get(name, default)
+    host = urlsplit(url).hostname or ""
+    if host not in THIS_MACHINE and not host.endswith(".localhost"):
+        raise SystemExit(f"{name} points at {host or url}, which is not this machine. The demo scripts only run against a local stack, so nothing was done.")
+    return url
+
+
+def switch_url() -> str:
+    return _local("SWITCH_URL", "http://127.0.0.1:8000")
+
+
 def _chat_url() -> str:
-    return f"{os.environ.get('MATTERMOST_URL', 'http://127.0.0.1:8065')}/api/v4"
+    return f"{_local('MATTERMOST_URL', 'http://127.0.0.1:8065')}/api/v4"
+
+
+def local_only() -> None:
+    switch_url()
+    _chat_url()
 
 
 def _signed_in(login: str, password: str) -> httpx.Client:
@@ -88,12 +108,16 @@ def _channel_id(admin: httpx.Client, team: dict, room: str) -> str:
     return answer.raise_for_status().json()["id"]
 
 
-def bridge_id() -> str:
+def find_bridge() -> str | None:
     # Whatever the stack's Mattermost bridge is called, every sender id on it holds this.
-    with httpx.Client(base_url=f"{os.environ.get('SWITCH_URL', 'http://127.0.0.1:8000')}/gateway", timeout=60) as gateway:
+    with httpx.Client(base_url=f"{switch_url()}/gateway", timeout=60) as gateway:
         gateway.post("/auth/login", json={"email": os.environ["SWITCH_EMAIL"], "password": os.environ["SWITCH_PASSWORD"]}).raise_for_status()
         bridges = gateway.get("/collaborations").raise_for_status().json()
-    found = next((bridge["bridge_id"] for bridge in bridges if bridge["bridge_type"] == "mattermost"), None)
+    return next((bridge["bridge_id"] for bridge in bridges if bridge["bridge_type"] == "mattermost"), None)
+
+
+def bridge_id() -> str:
+    found = find_bridge()
     if found is None:
         raise SystemExit("This Switch stack has no Mattermost bridge, so nobody can be scripted on it.")
     return found
@@ -278,6 +302,7 @@ def play(scene: dict, start: datetime | None = None, first_step: int = 1) -> Non
 
 
 def main(arguments: list[str]) -> None:
+    local_only()
     what, name, *rest = arguments
     scene = load_scene(name)
     if what == "ensure":

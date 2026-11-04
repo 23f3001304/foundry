@@ -28,13 +28,13 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shila
 | Stuck job, 30-minute timeout, restart with a person's go-ahead | Run live on Mattermost |
 | These steps from a fresh clone on a wiped Switch stack | Run by the author up to the makers and through the note clean-up. Not yet run by a teammate |
 | Reviewer on another vendor | Run live on Mattermost through delivery with Codex on `gpt-5.6-terra`. It sent one slide back with a note, passed the fix, and was shown the images. This used the Codex copy from the desktop app, version 0.146.0-alpha.9.2, not an `npm` install. An earlier OpenCode review also worked, until its free usage limit ran out |
-| The IT firm scene with scripted people, on Nov 5, 2026: request, brief card with who owes what, each Team Lead asked in their own room, answers, a reason, a status question, one reminder, one due card with the reason and the silence, Go without, and a deck with the figures and their printed sources | Run live on Mattermost with real agents and real models, from a git worktree against a running stack, not a fresh clone. The team's messages are scripted. What Foundry said back and the deck are real |
+| The IT firm scene with scripted people, on Nov 5, 2026: request, brief card with who owes what, each Team Lead asked in their own room, answers, a reason, a status question, one reminder, one due card with the reason and the silence, Go without, and a deck with the figures and their printed sources | Run live on Mattermost with real agents and real models, from a git worktree against a running stack, not a fresh clone. The team's messages are scripted. What Foundry said back and the deck are real. In that run the request said "the client", so the deck left the name to be supplied. The scene now names Harsingar Stores, which is made up, and that wording has not been played live |
 | The IT firm's final card, sign-off and delivery | **Not run.** Codex's usage limit ran out in this run, so the reviewer posted the limit's message and never passed anything. The job stayed in review until the stuck card, and trying again failed the same way. No review was faked, so the deck was never delivered |
 | Other cards in that run: Ask for changes with typed notes, a typed `A19 yes`, a typed `yes` in a card's thread, Already told the asker, Ask again, Ask someone else and its follow-up, a passed-on answer, a stuck card from a maker's `WORK_BLOCKED` | Run live on Mattermost |
 | A flagged number's chain | Run on the real log and the real deck by calling `chain_for` from a script. It holds who answered and who used it, and no review or sign-off, because neither ran. The dashboard's flag button is not part of this run |
-| The IT firm's routine cards at the set times | Run live on Mattermost: "Show what needs me" and "Approve everything clean" both pressed, a typed `yes` told to use the buttons, and the report posted. Keep and Leave out were not reached, because no note in the run needed attention |
+| The IT firm's routine cards at the set times | Run live on Mattermost by hand, not by the scene player, which had stopped at the review: "Show what needs me" and "Approve everything clean" both pressed, a typed `yes` told to use the buttons, and the report posted. Keep and Leave out were not reached, because no note in the run needed attention |
 | The number check on finished work | Run by script on six real decks, because no final card could open. No false alarm on a deck made by the same code. It has not caught a wrong number on a real deck |
-| Confidence on a real model, 20 made-up notes, half garbled | Run on Nov 5, 2026. Clean-up caught 10 of 10 garbled and marked 0 of 10 clean, so it keeps its confidence. The reader of replies caught 3 of 10, so it lost its confidence |
+| Confidence on a real model, 20 made-up notes, half garbled | Run on Nov 5, 2026, through the desk's own two steps. All 10 garbled notes came back as a question, and none of the clean, so the question is what stops a garbled note. After the one reply tried, "I don't know, put it in as I said it", low confidence on the report caught 7 of 10 garbled and marked 0 of 10 clean, so clean-up keeps its confidence. A reply that sounds surer has not been measured. An earlier 10 of 10 scored the questions, which the desk never reads. The reader of replies caught 3 of 10, so it lost its confidence |
 | One client's fact asked for from another client's job | Run live. Asked plainly, the maker said "not available". Told to open decks already made, it read the other client's deck in the shared folder, and left the fact out by its own choice. Nothing stops it reading, see "The makers share one folder" |
 | Voice notes and voice replies | Tested against a fake Sarvam only, no key yet. In the IT firm scene the voice note's words were typed instead, and the scene says so |
 | Telegram, and an outside person answering there | Not run, needs a bot token |
@@ -195,9 +195,9 @@ The contact sheet lists two electricians at Palm Court, so the desk asks which o
 
 ### 7. Play the IT firm demo
 
-Morpankh Systems is a fictional IT firm. A Delivery Manager asks for a release status deck, and three Team Leads each owe the figures for it. Team Lead A answers, Team Lead B says "blocked on QA", and Team Lead C says nothing. **The team's messages are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models.**
+Morpankh Systems is a fictional IT firm, and its client Harsingar Stores is made up too. A Delivery Manager asks for a release status deck, and three Team Leads each owe the figures for it. Team Lead A answers, Team Lead B says "blocked on QA", and Team Lead C says nothing. **The team's messages are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models.**
 
-Put Mattermost's admin sign-in and team name in `.env`. They are in Switch's own `.env`. Then make the scripted people and what they said before the scene. The history is marked as seeded in the log.
+Put Mattermost's admin sign-in and team name in `.env`. They are in Switch's own `.env`. Then make the scripted people and what they said before the scene. The history is marked as seeded in the log. These scripts sign in as the admin and reset the password of anyone with a scripted person's name, so they refuse any `MATTERMOST_URL` or `SWITCH_URL` that isn't on this machine.
 
 ```bash
 uv run --env-file .env python scripts/demo_people.py ensure it_firm
@@ -212,7 +212,7 @@ uv run --env-file .env python scripts/demo_people.py play it_firm
 
 The inputs are due 8 minutes in. The scene needs a reviewer that can run, or it stops at the review. See "What has actually been run" for how far it got.
 
-To measure whether a model's confidence catches a garbled note, run `tools/confidence_test.py` with the same `uv run --env-file .env python`.
+To measure whether a model's confidence catches a garbled note once the desk has asked about it and had a reply, run `tools/confidence_test.py` with the same `uv run --env-file .env python`.
 
 ### Good to know
 

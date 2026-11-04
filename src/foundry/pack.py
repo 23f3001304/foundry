@@ -40,7 +40,7 @@ def _dashboard(named: object = None) -> tuple[dict, ...]:
     for number, listed in enumerate(named, start=1):
         if not isinstance(listed, dict) or not all(isinstance(listed.get(key), str) and listed[key].strip() for key in ("login", "acts_as")):
             raise PackError(f"I can't read entry {number} of dashboard in the pack: {listed!r}. Each needs a login and an acts_as, like {DASHBOARD_LINE}.")
-    return tuple({**listed, "acts_as": _approver(listed["acts_as"])} for listed in named)
+    return tuple({**listed, "login": _login(listed["login"]), "acts_as": _approver(listed["acts_as"])} for listed in named)
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,12 @@ def _approver(named: object) -> str:
     approver = str(named or "").strip()
     bridge = os.environ.get("FOUNDRY_MATTERMOST_BRIDGE", "").strip()
     return approver.replace("{bridge}", bridge) if bridge else approver
+
+
+def _login(named: str) -> str:
+    # A dashboard login is a Switch login, so a demo's pack writes {switch_email} and whoever runs it signs in as the admin of their own stack.
+    email = os.environ.get("SWITCH_EMAIL", "").strip()
+    return named.replace("{switch_email}", email) if email else named
 
 
 def load_pack(brand_dir: Path | str) -> Pack:

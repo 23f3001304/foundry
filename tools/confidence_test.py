@@ -1,6 +1,9 @@
-"""Measures whether a model's low confidence means anything. Half of the notes are deliberately garbled, and they all go through the real clean-up code.
+"""Measures whether a model's low confidence means anything by the time the desk reads it. Half of the notes are deliberately garbled, and they all go through the real clean-up code.
+
+A garbled note often comes back as a question. That stops it, and the desk never reads how sure the question was. So a question here gets a reply, and what is scored is the report made after it.
 
 Exits 1 unless low confidence catches at least half the garbled and marks under a quarter of the clean.
+On 2026-11-05 all 10 garbled notes came back as a question, and none of the clean. After the reply below, low confidence caught 7 of 10 garbled and marked 0 of 10 clean, so clean-up keeps its confidence. An earlier 10 of 10 scored the questions.
 It measured the reader of replies too, on 2026-11-05. That caught 3 of 10 garbled and marked 0 of 10 clean, so the reader no longer gives a confidence.
 
 uv run --env-file .env python tools/confidence_test.py
@@ -22,6 +25,8 @@ from foundry.pack import load_pack
 BRAND = Path(__file__).resolve().parent.parent / "brands" / "demo-it-firm"
 AT_ONCE = 4
 SENT_AT = datetime(2026, 11, 5, 9, 30, tzinfo=UTC)
+# What someone says to a question about a note they can't make any clearer.
+NOT_SURE_REPLY = "I don't know, put it in as I said it"
 
 # (what a Team Lead sent, whether it is deliberately garbled). All made up.
 NOTES = [
@@ -66,26 +71,42 @@ def score(results: list[tuple[bool, float | None]]) -> Score:
     return Score(sum(low), sum(garbled for garbled, _ in results), len(low) - sum(low), sum(not garbled for garbled, _ in results))
 
 
-def _cleanup_confidence(note: str, llm: Callable[[str], str]) -> float | None:
+@dataclass(frozen=True)
+class Measured:
+    confidence: float | None
+    asked: bool = False
+    still_asking: bool = False
+
+
+def through_the_desk_s_steps(note: str, llm: Callable[[str], str]) -> Measured:
     pack = load_pack(BRAND)
+    asked = False
     try:
-        return clean_note(note, SENT_AT, pack, llm).confidence
+        result = clean_note(note, SENT_AT, pack, llm)
+        if result.questions:
+            asked = True
+            # The question and the reply follow the note, as Desk._clean_report and Desk._take_burst write them. A second question means nothing is filed yet, so there is no score to read.
+            question = "\n".join(result.questions)
+            result = clean_note(f"{note}\n\nAsked: {question}\nAnswered: {NOT_SURE_REPLY}", SENT_AT, pack, llm)
     except CleanupFailed:
-        return None
+        return Measured(None, asked)
+    return Measured(result.confidence, asked, bool(result.questions))
 
 
-def _measure(name: str, cases: list[tuple[str, bool]], ask: Callable[[str], float | None]) -> Score:
+def _measure(name: str, cases: list[tuple[str, bool]], ask: Callable[[str], Measured]) -> Score:
     with ThreadPoolExecutor(AT_ONCE) as pool:
-        confidences = list(pool.map(ask, [text for text, _ in cases]))
-    for (text, garbled), confidence in zip(cases, confidences):
-        print(f"{name} {'garbled' if garbled else 'clean  '} {'no answer' if confidence is None else f'{confidence:.2f}'} {text}", flush=True)
-    found = score([(garbled, confidence) for (_, garbled), confidence in zip(cases, confidences)])
+        measured = list(pool.map(ask, [text for text, _ in cases]))
+    for (text, garbled), one in zip(cases, measured):
+        print(f"{name} {'garbled' if garbled else 'clean  '} {'asked' if one.asked else '     '} {'no answer' if one.confidence is None else f'{one.confidence:.2f}'} {text}", flush=True)
+    found = score([(garbled, one.confidence) for (_, garbled), one in zip(cases, measured)])
+    asked = [garbled for (_, garbled), one in zip(cases, measured) if one.asked]
+    print(f"Came back as a question: {sum(asked)} of {found.garbled} garbled, {len(asked) - sum(asked)} of {found.clean} clean. Still a question after the answer: {sum(one.still_asking for one in measured)}.", flush=True)
     print(f"{name}: garbled caught {found.caught} of {found.garbled}, clean marked {found.marked} of {found.clean}. {'Meets the bar.' if found.meets_bar else 'Misses the bar.'}", flush=True)
     return found
 
 
 def main(llm: Callable[[str], str]) -> int:
-    return 0 if _measure("Clean-up", NOTES, lambda note: _cleanup_confidence(note, llm)).meets_bar else 1
+    return 0 if _measure("Clean-up", NOTES, lambda note: through_the_desk_s_steps(note, llm)).meets_bar else 1
 
 
 if __name__ == "__main__":

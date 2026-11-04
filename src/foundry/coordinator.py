@@ -22,7 +22,7 @@ from foundry.log import Entry, Log, Writer
 from foundry.reading import Reading, asks_for_status, is_short_ask, might_be_status, read_message
 from foundry.switch_client import DESK_NAME, Outcome, SwitchClient
 from foundry.tables import TABLE_KINDS, is_file_answer, job_folder, read_file, safe_name
-from foundry.text import headline, quiet
+from foundry.text import CUT_SHORT, headline, quiet
 from foundry.tools.layout import MakerError
 
 if TYPE_CHECKING:
@@ -1051,7 +1051,7 @@ class Coordinator:
 
     def _reason(self, heard: _Heard) -> bool:
         pool = [item for item in heard.own if item.state is ItemState.OPEN]
-        if not pool or _names_another(heard.reading, pool):
+        if not pool or _names_another(heard.reading, pool) or self._about_someone_else(heard, pool):
             return False
         item = _pick(heard.reading, pool)
         # With no item named, "blocked on QA" means all they owe on the one job. Across jobs it could be about either.
@@ -1065,6 +1065,11 @@ class Coordinator:
             self._settle_cards(one, Trigger.REMINDER)
         self.client.post_message(burst.room_id, REASON_NOTED)
         return True
+
+    def _about_someone_else(self, heard: _Heard, pool: list[Item]) -> bool:
+        # "Team Lead C is blocked" says nothing about what the sender owes.
+        person, sender = heard.reading.person, heard.burst.sender
+        return bool(person) and _key(person) not in (_key(sender), _key(self._name_of(sender, heard.bucket))) and not any(_owned_by(item, person) for item in pool)
 
     def _give_reason(self, item: Item, reason: str, at: datetime, room_id: str, sender: str) -> None:
         # A reason stops the one reminder and shows in the status. The item stays open.
@@ -1192,7 +1197,9 @@ class Coordinator:
         return f"{title}: {line}." if job.state is State.COLLECTING else f"{title}: {stage}. {line}."
 
     def _headline(self, job: Job) -> str:
-        return headline(job.brief or "this job").rstrip(".")
+        # A sentence's own full stop goes in the middle of a line. The dots of a line cut short stay.
+        line = headline(job.brief or "this job")
+        return line if line.endswith(CUT_SHORT) else line.removesuffix(".")
 
     def _title(self, job: Job) -> str:
         return quiet(self._headline(job))
