@@ -5,6 +5,7 @@ from pathlib import Path
 
 from lxml import etree
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
@@ -13,6 +14,7 @@ from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.util import Pt
 
 from foundry.brand import Brand, load_brand_dir
+from foundry.chain import Link, source_line, write_links
 from foundry.tools.layout import fit_size
 
 mcp = MCPServer("foundry-deck")
@@ -21,6 +23,11 @@ WIDTH, HEIGHT = 960, 540
 TITLE_ONLY = 5
 BULLET_GAP = 16
 DRAWING = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+# The small line under a slide's content that says where its numbers came from. It stops short of the corner logo.
+SOURCE_BOX = (56, 500, 780, 28)
+NARROW_SOURCE_BOX = (56, 500, 580, 28)
+SOURCE_SIZES = (11, 7)
+SOURCE_SHAPE = 'Each source is {"value": "62%", "entry": 123, "label": "Team Lead B, 6:12 pm"}.'
 
 
 def _apply_theme(deck: Presentation, brand: Brand) -> None:
@@ -174,6 +181,41 @@ def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
 LAYOUTS = {"title": _make_title, "content": _make_content, "statement": _make_statement}
 
 
+class SourceError(ToolError, ValueError):
+    """A source the maker got wrong. As a ToolError the maker is shown why, which a plain ValueError would not be."""
+
+
+def _source(item: object, slide: int, words: list[str]) -> Link:
+    if not isinstance(item, dict):
+        raise SourceError(SOURCE_SHAPE)
+    value, entry, label = item.get("value"), item.get("entry"), item.get("label")
+    if not isinstance(value, str) or not value.strip():
+        raise SourceError(f'A source needs its "value", the words or number it is for. {SOURCE_SHAPE}')
+    if isinstance(entry, bool) or not isinstance(entry, int):
+        raise SourceError(f'A source needs its "entry", the whole number job_facts gave for it. {SOURCE_SHAPE}')
+    if not isinstance(label, str) or not label.strip():
+        raise SourceError(f'A source needs its "label", who gave it and when. {SOURCE_SHAPE}')
+    if not any(value in text for text in words):
+        raise SourceError(f"A source's value must be words on its slide. {value!r} is not on it.")
+    return Link(slide, value, entry, label)
+
+
+def _sources_of(spec: dict, slide: int) -> list[Link]:
+    given = spec.get("sources") or []
+    if not isinstance(given, list):
+        raise SourceError(f'A slide\'s "sources" must be a list. {SOURCE_SHAPE}')
+    words = [spec.get(key, "") for key in ("title", "subtitle", "text")] + list(spec.get("bullets", []))
+    return [_source(item, slide, words) for item in given]
+
+
+def _print_sources(slide, brand: Brand, links: list[Link], layout: str) -> None:
+    # Over the brand's dark colour the words are paper, and elsewhere they are ink.
+    solid = brand.style == "solid"
+    colour = "paper" if solid and layout in ("title", "statement") else "ink"
+    box = NARROW_SOURCE_BOX if solid and layout == "title" else SOURCE_BOX
+    _text_box(slide, brand, "body", colour, box, [source_line(links)], *SOURCE_SIZES)
+
+
 @mcp.tool()
 def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, highlight: str = "") -> str:
     """Build an on-brand .pptx and return its absolute path. The title slide comes first, from title.
@@ -184,20 +226,30 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     {"layout": "title", "title": "...", "subtitle": "..."}
     Any slide can also have "highlight": words on that slide to put on the brand's accent colour, for the one thing that matters most.
     highlight does the same for the title slide. Text that cannot fit raises an error. Shorten it or split the slide.
+
+    Any slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 6:12 pm"}], one for each number or
+    fact on that slide that came from the log. value is the words on the slide. entry is the number job_facts gave that entry.
+    label says who gave it and when. The slide prints them as a small line, and the links are saved beside the deck for the chain.
     """
     brand = load_brand_dir(brand_dir)
     deck = Presentation()
     deck.slide_width, deck.slide_height = Pt(WIDTH), Pt(HEIGHT)
     _apply_theme(deck, brand)
     _title_slide(deck, brand, title, "", highlight)
-    for spec in slides:
+    links: list[Link] = []
+    for number, spec in enumerate(slides, start=2):
         layout = LAYOUTS.get(spec.get("layout"))
         if layout is None:
             raise ValueError(f"Unknown layout {spec.get('layout')!r}. Use one of: {', '.join(LAYOUTS)}.")
+        sources = _sources_of(spec, number)
         layout(deck, brand, spec)
+        if sources:
+            _print_sources(deck.slides[-1], brand, sources, spec["layout"])
+            links += sources
     path = Path(out_path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     deck.save(str(path))
+    write_links(path, links)
     return str(path)
 
 
