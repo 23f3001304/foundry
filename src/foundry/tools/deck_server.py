@@ -224,9 +224,9 @@ def _fit_table(brand: Brand, cells: list[list[str]], width: int, height: int) ->
 
 
 def _underline(cell, brand: Brand) -> None:
-    # A thin line under a row in the accent colour. It goes first, ahead of the fill, which is where the file format wants it.
+    # A thin line under a row in the text colour, because the accent is for the one thing that matters most on a slide. It goes first, ahead of the fill, which is where the file format wants it.
     line = etree.Element(f"{DRAWING}lnB", w=str(RULE_WIDTH))
-    etree.SubElement(etree.SubElement(line, f"{DRAWING}solidFill"), f"{DRAWING}srgbClr", val=brand.colors["accent"].removeprefix("#"))
+    etree.SubElement(etree.SubElement(line, f"{DRAWING}solidFill"), f"{DRAWING}srgbClr", val=brand.colors["ink"].removeprefix("#"))
     cell._tc.get_or_add_tcPr().insert(0, line)
 
 
