@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block main %}
 <h1>Sign in</h1>
-<p class="lead">Use your Switch login. Foundry passes it to Switch and keeps neither the login nor the password.</p>
+<p class="lead">Use your Switch login. Foundry passes your password to Switch and doesn't keep it.</p>
 {% if error %}<p class="problem" role="alert">{{ error }}</p>{% endif %}
 <form class="stack" method="post" action="/login">
   <label for="login">Login</label>

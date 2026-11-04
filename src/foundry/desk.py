@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import re
+import sqlite3
 import tempfile
 import uuid
 from collections.abc import Callable, Iterable, Iterator
@@ -26,7 +27,7 @@ from foundry.commands import (
     APPROVE,
     CHANGES_IN_CHAT,
     COULD_NOT,
-    DUE_CHOICES,
+    DUE_ACTIONS,
     JOB_APPROVALS,
     LABELS,
     LOG_ANSWERED,
@@ -41,6 +42,7 @@ from foundry.commands import (
     NOT_OPEN,
     NOT_STUCK,
     NOT_THE_APPROVER,
+    NOT_THIS_CLIENT,
     NOT_YOUR_JOB,
     NOTES_NEEDED,
     REVISE,
@@ -50,6 +52,7 @@ from foundry.commands import (
     CommandStore,
     Refused,
     outcome_for,
+    still_waits_on,
 )
 from foundry.coordinator import Coordinator
 from foundry.daily import REPORT_FIX_TOO_LATE, VOICE_UNCONFIRMED, DailyReports
@@ -167,6 +170,13 @@ DECISION_EVENTS = {
 JOB_CARDS = {Trigger.BRIEF, Trigger.FINAL_WORK, Trigger.STUCK, Trigger.QUESTION}
 # The reminder, the due card and the "Already told" card are answered by the coordinator, which owns the list of who owes what.
 ITEM_CARDS = {Trigger.REMINDER, Trigger.DUE, Trigger.ALREADY_TOLD}
+
+
+def approving_confirms_voice(job: Job) -> bool:
+    # The brief card, or a report's card, also shows what a voice note was heard as when its sender is the one approving, and approving it confirms that.
+    event = DECISION_EVENTS.get((job.state, Decision.APPROVE))
+    shown = event == "brief_approved" or (event == "signoff_approved" and job.kind == "report")
+    return shown and job.heard == UNCONFIRMED and job.requester == job.approver
 
 
 def sender_kind(payload: dict) -> str:
@@ -733,10 +743,14 @@ class Desk:
         return self.log.add(self._sent_at(payload), bucket, room_id, payload["sender"], kind, text, sender_name=payload.get("sender_name") or "", job_id=job.id if job else None, ref=ref)
 
     def _decide(self, job: Job, event: dict) -> None:
+        # The gate clears the job's approval, so the card it was for is named first.
+        request_id = job.approval["request_id"] if job.approval else None
         decision = self.gate.check(job, event)
+        self._note_word(request_id, decision)
         if decision is Decision.REVISE and job.revision_notes:
             # The approver's own words, kept on the job so a number they ask for counts as sourced. A reviewer's notes never come this way.
-            self._log_person(event, "revision_notes", job.revision_notes, job=job)
+            # They name the card, so the chain can say where they were given.
+            self._log_person(event, "revision_notes", job.revision_notes, ref=request_id, job=job)
         self._apply(job, decision)
 
     def _with_voice_as_text(self, event: dict) -> dict | None:
@@ -850,6 +864,8 @@ class Desk:
         self.cards.pump()
 
     def _take_voice_answer(self, card: Card, choice: str | None, at: datetime) -> None:
+        if choice:
+            self.cards.note(card.request_id, answer=choice)
         if choice == RIGHT and card.item_id:
             # The note was an answer to an item, so Right belongs to the item and not to the job's own note.
             self.coordinator.confirm_voice(card, at)
@@ -1125,6 +1141,8 @@ class Desk:
         self._note_answer_time(card, outcome)
         if card is not None:
             self.cards.got_through(card.request_id)
+            if outcome.state == "answered" and outcome.answered_by == card.person:
+                self._note_choice(card, outcome)
         if card is None or card.trigger in JOB_CARDS:
             # Finished first, so the log has the answer ahead of what it causes and a card it asks again for opens in this turn.
             if card is not None:
@@ -1413,23 +1431,37 @@ class Desk:
     # What the dashboard asks for. It only writes commands, so every check that matters is made here.
 
     def apply_commands(self) -> None:
-        while (command := self.commands.next()) is not None:
+        while True:
+            try:
+                command = self.commands.next()
+                if command is None:
+                    return
+                # Taken before it is applied, so whatever happens to the file after, a command is applied at most once.
+                self.commands.done(command.id)
+            except sqlite3.OperationalError as error:
+                # A locked file only skips this round. The rest of the tick goes on, and the commands wait.
+                logger.warning("Could not take the dashboard's commands just now, so they wait for the next round: %s", error)
+                return
             error = None
             try:
                 self._apply_command(command)
             except Refused as refused:
                 error = str(refused)
             except Exception:
-                # Marked done all the same, or this one would hold up every command behind it on each tick.
+                # Taken all the same, or this one would hold up every command behind it on each tick.
                 logger.exception("Could not apply dashboard command %s (%s).", command.id, command.action)
                 error = COULD_NOT
-            self.commands.done(command.id, error)
+            if error is not None:
+                try:
+                    self.commands.done(command.id, error)
+                except sqlite3.OperationalError as locked:
+                    logger.warning("Could not record why dashboard command %s was not done: %s", command.id, locked)
 
     def _apply_command(self, command: Command) -> None:
         if command.action == "answer_card":
             self._answer_card(command, command.payload.get("request_id", ""), command.payload.get("choice"), command.payload.get("notes"))
-        elif command.action in DUE_CHOICES:
-            self._answer_due_card(command, DUE_CHOICES[command.action])
+        elif command.action in DUE_ACTIONS:
+            self._answer_due_card(command, DUE_ACTIONS[command.action])
         elif command.action == "restart":
             self._restart(command)
         elif command.action == "flag":
@@ -1441,11 +1473,14 @@ class Desk:
         card = self.cards.get(request_id)
         if card is None:
             raise Refused(NO_SUCH_CARD)
+        # The identity check alone can't tell two clients apart when the same person is addressed in both.
+        if card.bucket != command.payload.get("bucket"):
+            raise Refused(NOT_THIS_CLIENT)
         if card.trigger is Trigger.VOICE:
             raise Refused(VOICE_IN_CHAT)
         if card.person != command.acts_as:
             raise Refused(NOT_FOR_YOU)
-        if card.state != OPEN:
+        if card.state != OPEN and not self._job_still_waits_on(card):
             raise Refused(NOT_OPEN)
         if card.trigger in JOB_APPROVALS:
             self._approve_here(command, card, choice, (notes or "").strip())
@@ -1454,16 +1489,25 @@ class Desk:
             raise Refused(NOT_A_CHOICE)
         if not card.choices and choice != APPROVE:
             raise Refused(CHANGES_IN_CHAT if choice == REVISE else NOT_A_CHOICE)
-        self._note_dashboard(command, card, choice)
+        self._answered_here(card)
         outcome = outcome_for(card, choice, self.clock())
+        self._note_choice(card, outcome)
         if card.trigger is Trigger.QUESTION:
             # A job's own question, answered as a press on it is. It already says in the room that the answer came.
             self.cards.finish(card.request_id, ANSWERED)
             self._take_job_answer(outcome)
         else:
             self._take_card_answer(card, outcome)
+        self._note_dashboard(command, card, choice)
         self._close_chat_card(card, say=card.trigger is not Trigger.QUESTION)
         self.cards.pump()
+
+    def _job_still_waits_on(self, card: Card) -> bool:
+        return still_waits_on(self._job_of(card) if card.job_id else None, card)
+
+    def _answered_here(self, card: Card) -> None:
+        # A press opens the echo window, so a word typed just after, while the chat card still shows, isn't taken for the next card's answer.
+        self.cards.note_answer(card.person, card.room_id, self.clock())
 
     def _approve_here(self, command: Command, card: Card, choice: str | None, notes: str) -> None:
         # Typed as the approver in the room the card is in, so the job takes it as it takes a typed yes. The gate closes the chat card itself.
@@ -1474,9 +1518,13 @@ class Desk:
             raise Refused(NOTES_NEEDED)
         if choice not in (APPROVE, REVISE):
             raise Refused(NOT_A_CHOICE)
-        self._note_dashboard(command, card, choice)
+        if choice == APPROVE and approving_confirms_voice(job):
+            # This card also shows what was heard, and approving it would confirm that for the sender. They do that in chat.
+            raise Refused(VOICE_IN_CHAT)
+        self._answered_here(card)
         word = "yes" if choice == APPROVE else f"revise: {notes}"
         self._decide(job, {"type": "message", "room_id": card.room_id, "payload": {"sender": card.person, "body": word}})
+        self._note_dashboard(command, card, choice)
         self.cards.pump()
 
     def _answer_due_card(self, command: Command, choice: str) -> None:
@@ -1494,14 +1542,16 @@ class Desk:
             raise Refused(NOT_STUCK)
         if card.person != command.acts_as:
             raise Refused(NOT_FOR_YOU)
-        # A card that ran out still takes an answer, as a typed word does.
-        if card.state not in (OPEN, EXPIRED):
+        # A card that ran out still takes an answer, as a typed word does, and so does one an earlier try ended before it failed.
+        if card.state not in (OPEN, EXPIRED) and not self._job_still_waits_on(card):
             raise Refused(NOT_OPEN)
-        was_open = card.state == OPEN
-        self._log_dashboard(command, job.bucket, card.room_id, LOG_RESTARTED.format(via=VIA_DASHBOARD), job.id, card.request_id)
+        self._answered_here(card)
+        outcome = outcome_for(card, APPROVE, self.clock())
+        self._note_choice(card, outcome)
         self.cards.finish(card.request_id, ANSWERED)
-        self._take_job_answer(outcome_for(card, APPROVE, self.clock()))
-        if was_open:
+        self._take_job_answer(outcome)
+        self._log_dashboard(command, job.bucket, card.room_id, LOG_RESTARTED.format(via=VIA_DASHBOARD), job.id, card.request_id)
+        if card.state != EXPIRED:
             self._close_chat_card(card)
         self.cards.pump()
 
@@ -1535,16 +1585,30 @@ class Desk:
 
     def _job_named(self, command: Command) -> Job:
         try:
-            return self.store.get(command.payload.get("job_id"))
+            job = self.store.get(command.payload.get("job_id"))
         except KeyError:
             raise Refused(NOT_YOUR_JOB) from None
+        if job.bucket != command.payload.get("bucket"):
+            raise Refused(NOT_THIS_CLIENT)
+        return job
+
+    def _note_choice(self, card: Card, outcome: Outcome) -> None:
+        # What the person chose, kept on the card so the dashboard can say how it was answered.
+        choice = outcome.chosen_from(card.choices) or outcome.answer
+        if choice:
+            self.cards.note(card.request_id, answer=choice)
+
+    def _note_word(self, request_id: str | None, decision: Decision) -> None:
+        # The same for a typed word, which answers the job's card by saying yes or revise.
+        if request_id and decision in (Decision.APPROVE, Decision.REVISE) and self.cards.get(request_id) is not None:
+            self.cards.note(request_id, answer=decision.value)
 
     def _note_dashboard(self, command: Command, card: Card, choice: str | None) -> None:
         text = LOG_ANSWERED.format(title=card.title, choice=LABELS.get(choice, choice), via=VIA_DASHBOARD)
         self._log_dashboard(command, card.bucket, card.room_id, text, card.job_id, card.request_id)
 
     def _log_dashboard(self, command: Command, bucket: str, room_id: str, text: str, job_id: str | None, ref: str | None) -> None:
-        # The person it was done as, and that it was done here, so the chain can say so.
+        # The person it was done as, and that it was done here, so the chain can say so. Written once it worked.
         self.log.add(self.clock(), bucket, room_id, command.acts_as, "dashboard_action", text, job_id=job_id, ref=ref)
 
     def _close_chat_card(self, card: Card, say: bool = True) -> None:
@@ -1553,10 +1617,9 @@ class Desk:
             self.client.close_card(card.request_id)
             if say:
                 # Switch marks a closed card "Cancelled", so say the answer did arrive.
-                self.client.post_message(card.room_id, ANSWERED_HERE.format(title=card.title))
+                self.client.post_message(card.room_id, ANSWERED_HERE.format(title=quiet(card.title)))
         except httpx.HTTPError as error:
             logger.warning("Could not close card %s after an answer on the dashboard: %s", card.request_id, error)
-
 
 async def run(desk: Desk, rooms: list[str], tick_seconds: float = 3) -> None:
     turn = asyncio.Lock()

@@ -87,6 +87,8 @@ h1 { margin: 0.5rem 0 0.75rem; font-size: 1.875rem; line-height: 1.15; font-weig
 h2 { margin: 2rem 0 0.5rem; font-size: 1.25rem; line-height: 1.2; font-weight: 700; }
 h3 { margin: 0 0 0.25rem; font-size: 1rem; font-weight: 700; overflow-wrap: anywhere; }
 p { margin: 0.5rem 0; max-width: 46rem; }
+/* A long link or a name with no spaces in it wraps, so it can't push a phone's screen wider. */
+table.list td, table.list th, h2, p { overflow-wrap: anywhere; }
 .lead { color: var(--ink-soft); }
 .small { font-size: 0.875rem; color: var(--ink-soft); }
 .block { display: block; }

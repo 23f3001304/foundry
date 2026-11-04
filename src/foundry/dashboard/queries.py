@@ -10,9 +10,9 @@ from pathlib import Path
 from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, Card, Trigger, _card
 from foundry.cards import COLUMNS as CARD_COLUMNS
 from foundry.chain import LINK_MARK, SAID, NotFlagged, Step, chain_for, name_of, names
-from foundry.commands import DUE_CHOICES, JOB_APPROVALS, Command, CommandStore
+from foundry.commands import DUE_ACTIONS, JOB_APPROVALS, LABELS, Command, CommandStore, still_waits_on
 from foundry.dashboard.auth import User
-from foundry.desk import Settings
+from foundry.desk import Settings, approving_confirms_voice
 from foundry.items import Item, ItemState, _item, status_line
 from foundry.items import COLUMNS as ITEM_COLUMNS
 from foundry.jobs import Job, State, _job
@@ -88,6 +88,9 @@ MOST_PAST_CARDS = 200
 MOST_TIMELINES = 20
 FILE_GONE = "The file is no longer on this machine."
 NOT_FOR_VOICE = "Only the person who sent the note can approve this, in chat."
+CONFIRMS_VOICE = "This card also confirms what Foundry heard in the voice note, so it is answered in chat. Asking for changes can be done here."
+STILL_WAITING = "Answered, but the job did not move on. Try again."
+NOBODY_ASKED = "Nobody has been asked yet."
 WAITING_FOR = "Waiting for {name} to answer."
 QUEUED_BEHIND = " It is queued behind another card."
 NO_REPLY = "No reply to Foundry yet"
@@ -100,8 +103,12 @@ DONE = "Done"
 DIDNT_DO = "Foundry didn't do it: {error}"
 
 
+# How long a page waits for a database the desk is writing. Short, so a locked file shows a plain page and doesn't hold everything else up.
+READ_TIMEOUT = 2
+
+
 def open_read_only(path: Path | str) -> sqlite3.Connection:
-    return sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=10)
+    return sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=READ_TIMEOUT)
 
 
 class ReadOnlyLog(Log):
@@ -378,7 +385,12 @@ class Reader:
     def _row(self, job: Job, cards: list[Card], known: dict[str, str]) -> JobRow:
         stage, sprite = stage_of(job)
         items = self.items(job.id)
-        return JobRow(job.id, job.bucket, bucket_name(job.bucket), title_of(job), stage, sprite, status_line(items) if items else "", self._waiting(job, cards, known), TONES.get(job.state, ""))
+        # Nobody can have gone quiet on a request Foundry hasn't made yet, so only the people it asked count.
+        asked = [item for item in items if item.asked_at is not None]
+        owes = status_line(asked) if asked else ""
+        if len(items) > len(asked):
+            owes = f"{owes}, {len(items) - len(asked)} not asked yet" if owes else NOBODY_ASKED
+        return JobRow(job.id, job.bucket, bucket_name(job.bucket), title_of(job), stage, sprite, owes, self._waiting(job, cards, known), TONES.get(job.state, ""))
 
     def job_rows(self, user: User) -> list[JobRow]:
         if not user.businesses:
@@ -386,9 +398,9 @@ class Reader:
         cards, known = self.cards(user.businesses), self._names(user)
         return [self._row(job, cards, known[job.bucket]) for job in self.jobs(user.businesses)]
 
-    def offer(self, user: User, card: Card, known: dict[str, str]) -> Offer:
+    def offer(self, user: User, card: Card, known: dict[str, str], job: Job | None = None) -> Offer:
         # What this login may do about a card. The desk checks all of it again when it is asked.
-        if card.state != OPEN:
+        if card.state != OPEN and not still_waits_on(job, card):
             return Offer()
         if card.trigger is Trigger.VOICE:
             return Offer(notice=NOT_FOR_VOICE)
@@ -397,6 +409,8 @@ class Reader:
         if card.choices:
             return Offer([(choice, choice) for choice in card.choices])
         if card.trigger in JOB_APPROVALS:
+            if job is not None and approving_confirms_voice(job):
+                return Offer(changes=True, notice=CONFIRMS_VOICE)
             return Offer([("approve", "Try again" if card.trigger is Trigger.STUCK else "Approve")], changes=True)
         return Offer([("approve", "Approve")])
 
@@ -426,11 +440,12 @@ class Reader:
         items = self.items(job.id)
         by_id = {card.request_id: card for card in cards}
         approval = by_id.get(job.approval["request_id"]) if job.approval else None
-        answer = approval if approval is not None and approval.trigger in JOB_APPROVALS and approval.state == OPEN else None
+        # A card an earlier try ended before it failed still stands for the job, so it can be answered again.
+        answer = approval if approval is not None and approval.trigger in JOB_APPROVALS and (approval.state == OPEN or still_waits_on(job, approval)) else None
         restart = Offer()
         if job.state is State.BLOCKED and approval is not None and approval.trigger is Trigger.STUCK:
-            restart = self._restart_offer(approval, acts_as, known)
-        answer_offer = self.offer(user, answer, known) if answer else Offer()
+            restart = self._restart_offer(job, approval, acts_as, known)
+        answer_offer = self.offer(user, answer, known, job) if answer else Offer()
         if answer is not None and answer.trigger is Trigger.STUCK:
             # The restart button is how a stuck job goes on. Notes are the other way, so there is no second button for the same thing.
             answer_offer.buttons = []
@@ -438,14 +453,14 @@ class Reader:
         due_offer = self.offer(user, due, known) if due else Offer()
         if due_offer.buttons:
             # The three answers a due-time card offers, each as an action of its own.
-            due_offer.buttons = [(action, label) for action, label in DUE_CHOICES.items() if label in due.choices]
+            due_offer.buttons = [(action, label) for action, label in DUE_ACTIONS.items() if label in due.choices]
         return JobPage(
             self._row(job, cards, known), job.brief or "", job.report or "", list(job.attention), [self._item_row(item) for item in items],
             answer, answer_offer, restart, due, due_offer, self._files(self.log.for_job(job.bucket, job.id)), job.approver == acts_as,
         )
 
-    def _restart_offer(self, card: Card, acts_as: str, known: dict[str, str]) -> Offer:
-        if card.state not in (OPEN, EXPIRED):
+    def _restart_offer(self, job: Job, card: Card, acts_as: str, known: dict[str, str]) -> Offer:
+        if card.state not in (OPEN, EXPIRED) and not still_waits_on(job, card):
             return Offer()
         if card.person != acts_as:
             return Offer(notice=WAITING_FOR.format(name=known.get(card.person, card.person)))
@@ -455,20 +470,28 @@ class Reader:
         if not user.businesses:
             return [], 0
         known = self._names(user)
+        jobs = {job.id: job for job in self.jobs(user.businesses)}
         answered = {bucket: {entry.ref: entry for entry in reversed(self.log.of_kind(bucket, "card_answered"))} for bucket in user.businesses}
         here = {bucket: {entry.ref for entry in self.log.of_kind(bucket, "dashboard_action")} for bucket in user.businesses}
         rows = []
         for card in self.cards(user.businesses):
             who = known[card.bucket].get(card.person, card.person)
-            if card.state == ANSWERED:
+            job = jobs.get(card.job_id) if card.job_id else None
+            waits = still_waits_on(job, card)
+            if waits:
+                status = STILL_WAITING
+            elif card.state == ANSWERED:
                 answer = answered[card.bucket].get(card.request_id)
                 where = "on the dashboard as" if card.request_id in here[card.bucket] else "in chat by"
-                status = f"Answered {where} {who}" + (f", {self.when(answer.at)}" if answer else "")
+                chosen = card.data.get("answer")
+                with_ = f" with {LABELS.get(chosen, chosen)}," if chosen else ""
+                status = f"Answered{with_} {where} {who}" + (f", {self.when(answer.at)}" if answer else "")
             else:
                 status = {OPEN: "Open in chat", QUEUED: "Waiting behind another card", CLOSED: "Closed by Foundry", EXPIRED: "Ran out. Nobody answered it."}[card.state]
             # What a card says matters while someone still has to answer it.
-            detail = card.detail if card.state in (OPEN, QUEUED) else ""
-            rows.append(CardRow(card.request_id, bucket_name(card.bucket), card.title, detail, CARD_KINDS[card.trigger], status, card.state, self.offer(user, card, known[card.bucket])))
+            detail = card.detail if waits or card.state in (OPEN, QUEUED) else ""
+            # An answer that didn't go through is still waiting for one, so it sits with the open cards.
+            rows.append(CardRow(card.request_id, bucket_name(card.bucket), card.title, detail, CARD_KINDS[card.trigger], status, OPEN if waits else card.state, self.offer(user, card, known[card.bucket], job)))
         live = [row for row in rows if row.state in (OPEN, QUEUED)]
         past = [row for row in rows if row.state not in (OPEN, QUEUED)]
         return live + past[:MOST_PAST_CARDS], max(0, len(past) - MOST_PAST_CARDS)
@@ -592,10 +615,11 @@ class Reader:
         payload = command.payload
         if command.action == "answer_card":
             card = self.card(str(payload.get("request_id", "")))
-            return f"Answered {card.title if card else 'a card'} with {payload.get('choice', '')}"
+            choice = payload.get("choice", "")
+            return f"Answered {card.title if card else 'a card'} with {LABELS.get(choice, choice)}"
         if command.action == "reload_pack":
             return "Read the business's pack again"
         rows = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", str(payload.get("job_id", "")))
         job = title_of(_job(rows[0])) if rows else "a job"
-        what = {"restart": "Restart", "flag": "Flag something in"}.get(command.action) or DUE_CHOICES[command.action]
+        what = {"restart": "Restart", "flag": "Flag something in"}.get(command.action) or DUE_ACTIONS[command.action]
         return f"{what} {job}" if command.action == "flag" else f"{what}: {job}"

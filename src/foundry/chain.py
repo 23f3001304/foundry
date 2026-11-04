@@ -61,6 +61,7 @@ DELIVERED = "delivered"
 NO_SOURCE = "no source found"
 NO_SOURCE_DETAIL = "No entry for this job gives {needle}."
 NOT_FLAGGED = "Entry {entry_id} is not a flagged item."
+MOST_FLAGGED_TEXT = 60
 NOT_A_TARGET = "Cannot flag {target!r}. It is not a file made for this job, a number or statement in one, or an entry in this log."
 SOURCE_LINE = "Source: {parts}"
 HOUR, MINUTE = r"(?:[01]?\d|2[0-3])", r"[0-5]\d"
@@ -239,17 +240,21 @@ def _parse(target: str, paths: Collection[str]) -> Target:
     raise ValueError(NOT_A_TARGET.format(target=target))
 
 
-def _flag_text(target: Target) -> str:
+def _flag_text(target: Target, said: Entry | None, known: dict[str, str]) -> str:
     name = Path(target.path).name
-    return {ENTRY: f"Flagged entry {target.entry}", FILE: f"Flagged {name}", TEXT: f"Flagged {target.needle} in {name}"}[target.kind]
+    if said is not None:
+        words = " ".join(said.text.split())
+        return f"Flagged what {name_of(said, known)} said: {words if len(words) <= MOST_FLAGGED_TEXT else words[:MOST_FLAGGED_TEXT].rstrip() + '...'}"
+    return {FILE: f"Flagged {name}", TEXT: f"Flagged {target.needle} in {name}"}[target.kind]
 
 
 def flag(log: Log, bucket: str, by: str, target: str, job_id: str, room_id: str, at: datetime) -> Entry:
     # The log only grows, so a flag that points at nothing is refused rather than kept.
     found = _parse(target, _made_paths(log.for_job(bucket, job_id)))
-    if found.kind == ENTRY and log.get(bucket, found.entry) is None:
+    said = log.get(bucket, found.entry) if found.kind == ENTRY else None
+    if found.kind == ENTRY and said is None:
         raise ValueError(NOT_A_TARGET.format(target=target))
-    return log.add(at, bucket, room_id, by, "flag", _flag_text(found), job_id=job_id, ref=target)
+    return log.add(at, bucket, room_id, by, "flag", _flag_text(found, said, names(log, bucket)), job_id=job_id, ref=target)
 
 
 # The chain
@@ -340,7 +345,7 @@ class _Trail:
     def _said(self, entry: Entry, label: str) -> None:
         notes = self._heard(entry)
         if not notes:
-            self._add(entry, WHAT.get(entry.kind, entry.kind.replace("_", " ")), entry.text, label)
+            self._add(entry, WHAT.get(entry.kind, entry.kind.replace("_", " ")), self._how(entry) if entry.kind == "revision_notes" else entry.text, label)
         for note in notes:
             self._add(note, RECORDED, "", label)
             self._add(note, HEARD, note.text, label, who=DESK_NAME)
@@ -402,10 +407,10 @@ class _Trail:
             if entry.kind == "review" and entry.id > first_made:
                 self._add(entry, PASSED if entry.ref == REVIEW_PASS else SENT_BACK, entry.text, DIRECT)
 
-    def _how_answered(self, answer: Entry) -> str:
-        # The desk logs a dashboard answer beside the card's own answer, under the same card.
-        here = any(entry.kind == "dashboard_action" and entry.ref == answer.ref for entry in self.job)
-        return f"{answer.text} ({VIA_DASHBOARD})" if here else answer.text
+    def _how(self, entry: Entry) -> str:
+        # The desk logs a dashboard answer beside the card's own answer, and the changes asked for with it, all under the same card.
+        here = bool(entry.ref) and any(other.kind == "dashboard_action" and other.ref == entry.ref for other in self.job)
+        return f"{entry.text} ({VIA_DASHBOARD})" if here else entry.text
 
     def _delivery(self, used: dict[str, Hits]) -> None:
         if self.copies and not used:
@@ -420,7 +425,7 @@ class _Trail:
         # The answer that came just before the delivery is the sign-off that let it go.
         answers = [entry for entry in self.job if entry.kind == "card_answered" and entry.id < last.id]
         if answers:
-            self._add(answers[-1], SIGNED_OFF, self._how_answered(answers[-1]), DIRECT)
+            self._add(answers[-1], SIGNED_OFF, self._how(answers[-1]), DIRECT)
         self._add(last, DELIVERED, f"{last.text or 'the report'} to {last.room_id}", DIRECT)
 
 

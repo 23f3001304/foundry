@@ -28,6 +28,21 @@ def _set_times(named: object = None) -> tuple[str, ...]:
     return override or _clock_times(named or ()) or DEFAULT_SET_TIMES
 
 
+DASHBOARD_LINE = "{login: manager-a, acts_as: '@manager-a:localhost'}"
+
+
+def _dashboard(named: object = None) -> tuple[dict, ...]:
+    # Who may manage the business on the dashboard, and who each acts as in chat. Read here, so a typo stops the desk when it starts and names the line.
+    if named is None:
+        return ()
+    if not isinstance(named, list):
+        raise PackError(f"I can't read dashboard {named!r} in the pack. Write it as a list with a login and an acts_as on each line, like [{DASHBOARD_LINE}].")
+    for number, listed in enumerate(named, start=1):
+        if not isinstance(listed, dict) or not all(isinstance(listed.get(key), str) and listed[key].strip() for key in ("login", "acts_as")):
+            raise PackError(f"I can't read entry {number} of dashboard in the pack: {listed!r}. Each needs a login and an acts_as, like {DASHBOARD_LINE}.")
+    return tuple(named)
+
+
 @dataclass(frozen=True)
 class Pack:
     update_rule: str = ""
@@ -77,5 +92,5 @@ def load_pack(brand_dir: Path | str) -> Pack:
         working_hours=_clock_times(data.get("working_hours") or Pack.working_hours),
         ask_again_hours=int(data.get("ask_again_hours", Pack.ask_again_hours)),
         measures=tuple(data.get("measures") or ()),
-        dashboard=tuple(data.get("dashboard") or ()),
+        dashboard=_dashboard(data.get("dashboard")),
     )

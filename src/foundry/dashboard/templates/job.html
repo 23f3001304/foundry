@@ -4,7 +4,7 @@
 <p class="stage-line"><img class="sprite" src="/static/team/{{ job.row.sprite }}.png" alt="" width="32" height="32"><span class="stage {{ job.row.tone }}">{{ job.row.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.row.client }}</span>{% endif %}</p>
 {% for line in job.row.waiting %}<p class="small">{{ line }}</p>{% endfor %}
 
-{% if job.answer_offer.buttons or job.answer_offer.changes or job.restart.buttons or job.restart.notice or job.due_offer.buttons or job.due_offer.notice %}
+{% if job.answer_offer.buttons or job.answer_offer.changes or job.answer_offer.notice or job.restart.buttons or job.restart.notice or job.due_offer.buttons or job.due_offer.notice %}
 <section>
   <h2>What you can do</h2>
   {% if job.answer_offer.buttons or job.answer_offer.changes %}
@@ -22,6 +22,7 @@
     </div>
   </form>
   {% endif %}
+  {% if job.answer_offer.notice %}<p class="small">{{ job.answer.title }}. {{ job.answer_offer.notice }}</p>{% endif %}
   {% if job.restart.buttons %}
   <form class="buttons" method="post" action="/jobs/{{ job.row.id }}/act">
     <input type="hidden" name="csrf" value="{{ csrf }}">

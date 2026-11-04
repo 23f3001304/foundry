@@ -5,14 +5,17 @@ import secrets
 import sqlite3
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import jinja2
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import FormData
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request
 from starlette.responses import FileResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
@@ -20,7 +23,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
 from foundry.chain import SAID
-from foundry.commands import DUE_CHOICES, CommandStore
+from foundry.commands import DUE_ACTIONS, CommandStore
 from foundry.dashboard.auth import COOKIE, LIFETIME, REFUSED, User, csrf_ok, current_user, end_session, find_session, start_session, switch_login
 from foundry.dashboard.queries import MEDIA, PICTURES, Reader, is_made_file
 from foundry.desk import Settings
@@ -30,6 +33,9 @@ HERE = Path(__file__).parent
 TEAM = HERE.parents[2] / "assets" / "team"
 POLICY = "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'"
 NOT_ACCEPTED = "Switch did not accept that login."
+# Pages are for this machine. A request that names any other host is somebody else's page asking for ours.
+THIS_MACHINE = ["127.0.0.1", "localhost"]
+NOT_FROM_HERE = "That login form didn't come from this page, so nothing was sent to Switch. Open the dashboard's own address and try again."
 SWITCH_DOWN = "Foundry can't reach Switch. Check that it is running, then try again."
 SWITCH_TROUBLE = "Switch had a problem with that login. Try again in a moment."
 ASK_FOR_BOTH = "Enter your login and your password."
@@ -42,11 +48,11 @@ ERRORS = {
     405: "That page doesn't take this.",
 }
 MOST_STATEMENT = 200
-JOB_ACTIONS = ("restart", *DUE_CHOICES)
+JOB_ACTIONS = ("restart", *DUE_ACTIONS)
 JOB_ANSWERS = ("approve", "revise")
 MOST_CHOICE = 300
 
-Handler = Callable[..., Awaitable[Response]]
+Handler = Callable[..., Response]
 
 
 def whole_number(value: object) -> int | None:
@@ -65,12 +71,13 @@ def signed_in(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
         user = current_user(request)
         if user is None:
             return RedirectResponse("/login", 303)
+        # The handlers are plain functions that read SQLite, so they run in the thread pool and not on the event loop.
         if request.method == "POST":
             form = await request.form()
             if not csrf_ok(request, form.get("csrf")):
                 raise HTTPException(403, FORM_EXPIRED)
-            return await handler(request, user, form)
-        return await handler(request, user)
+            return await run_in_threadpool(handler, request, user, form)
+        return await run_in_threadpool(handler, request, user)
 
     return guarded
 
@@ -83,7 +90,8 @@ def job_of(request: Request, user: User, job_id: str):
 
 
 def ask(request: Request, user: User, action: str, payload: dict, bucket: str) -> None:
-    request.app.state.commands.add(action, payload, user.login, user.businesses[bucket])
+    # The command names the client it is about, and the desk compares that with the card or job's own.
+    request.app.state.commands.add(action, {"bucket": bucket, **payload}, user.login, user.businesses[bucket])
 
 
 def recent(request: Request, user: User):
@@ -100,6 +108,10 @@ async def login_page(request: Request) -> Response:
 
 
 async def login_submit(request: Request) -> Response:
+    # A browser says which page a form came from. One from another site isn't sent on to Switch.
+    origin = request.headers.get("origin")
+    if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
+        return render(request, "login.html", title="Sign in", status=403, error=NOT_FROM_HERE)
     form = await request.form()
     login, password = str(form.get("login") or "").strip(), str(form.get("password") or "")
     if not login or not password:
@@ -119,7 +131,7 @@ async def login_submit(request: Request) -> Response:
 
 
 @signed_in
-async def logout(request: Request, user: User, form: FormData) -> Response:
+def logout(request: Request, user: User, form: FormData) -> Response:
     end_session(request)
     response = RedirectResponse("/login", 303)
     response.delete_cookie(COOKIE, path="/")
@@ -130,17 +142,17 @@ async def logout(request: Request, user: User, form: FormData) -> Response:
 
 
 @signed_in
-async def overview(request: Request, user: User) -> Response:
+def overview(request: Request, user: User) -> Response:
     return render(request, "overview.html", user, title="Overview", page="overview", figures=request.app.state.reader.overview(user))
 
 
 @signed_in
-async def jobs(request: Request, user: User) -> Response:
+def jobs(request: Request, user: User) -> Response:
     return render(request, "jobs.html", user, title="Jobs", page="jobs", rows=request.app.state.reader.job_rows(user))
 
 
 @signed_in
-async def job(request: Request, user: User) -> Response:
+def job(request: Request, user: User) -> Response:
     page = request.app.state.reader.job_page(user, request.path_params["job_id"])
     if page is None:
         raise HTTPException(404)
@@ -148,7 +160,7 @@ async def job(request: Request, user: User) -> Response:
 
 
 @signed_in
-async def job_act(request: Request, user: User, form: FormData) -> Response:
+def job_act(request: Request, user: User, form: FormData) -> Response:
     found = job_of(request, user, request.path_params["job_id"])
     action = form.get("action")
     if action not in JOB_ACTIONS:
@@ -158,10 +170,10 @@ async def job_act(request: Request, user: User, form: FormData) -> Response:
 
 
 @signed_in
-async def job_answer(request: Request, user: User, form: FormData) -> Response:
+def job_answer(request: Request, user: User, form: FormData) -> Response:
     found = job_of(request, user, request.path_params["job_id"])
     card = request.app.state.reader.card(str(form.get("request_id") or ""))
-    if card is None or card.job_id != found.id:
+    if card is None or card.job_id != found.id or card.bucket != found.bucket:
         raise HTTPException(404)
     choice = form.get("choice")
     if choice not in JOB_ANSWERS:
@@ -174,12 +186,12 @@ async def job_answer(request: Request, user: User, form: FormData) -> Response:
 
 
 @signed_in
-async def work(request: Request, user: User) -> Response:
+def work(request: Request, user: User) -> Response:
     return render(request, "work.html", user, title="Generated work", page="work", jobs=request.app.state.reader.work(user))
 
 
 @signed_in
-async def work_file(request: Request, user: User) -> Response:
+def work_file(request: Request, user: User) -> Response:
     found = request.app.state.reader.file_for(user, request.path_params["entry_id"])
     if found is None:
         raise HTTPException(404)
@@ -190,13 +202,13 @@ async def work_file(request: Request, user: User) -> Response:
 
 
 @signed_in
-async def responses(request: Request, user: User) -> Response:
+def responses(request: Request, user: User) -> Response:
     cards, hidden = request.app.state.reader.card_rows(user)
     return render(request, "responses.html", user, title="Responses", page="responses", cards=cards, hidden=hidden, recent=recent(request, user))
 
 
 @signed_in
-async def responses_answer(request: Request, user: User, form: FormData) -> Response:
+def responses_answer(request: Request, user: User, form: FormData) -> Response:
     card = request.app.state.reader.card(str(form.get("request_id") or ""))
     if card is None or card.bucket not in user.businesses:
         raise HTTPException(404)
@@ -211,7 +223,7 @@ async def responses_answer(request: Request, user: User, form: FormData) -> Resp
 
 
 @signed_in
-async def action_log(request: Request, user: User) -> Response:
+def action_log(request: Request, user: User) -> Response:
     reader, only = request.app.state.reader, request.query_params.get("job")
     timelines, more = reader.job_logs(user, only)
     if only and not timelines:
@@ -220,7 +232,7 @@ async def action_log(request: Request, user: User) -> Response:
 
 
 @signed_in
-async def log_flag(request: Request, user: User, form: FormData) -> Response:
+def log_flag(request: Request, user: User, form: FormData) -> Response:
     found = job_of(request, user, str(form.get("job_id") or ""))
     if found.approver != user.businesses[found.bucket]:
         raise HTTPException(403)
@@ -247,7 +259,7 @@ async def log_flag(request: Request, user: User, form: FormData) -> Response:
 
 
 @signed_in
-async def chain(request: Request, user: User) -> Response:
+def chain(request: Request, user: User) -> Response:
     page = request.app.state.reader.chain(user, request.path_params["flag_id"])
     if page is None:
         raise HTTPException(404)
@@ -299,7 +311,7 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
     ]
     app = Starlette(
         routes=routes,
-        middleware=[Middleware(BaseHTTPMiddleware, dispatch=secure)],
+        middleware=[Middleware(TrustedHostMiddleware, allowed_hosts=THIS_MACHINE), Middleware(BaseHTTPMiddleware, dispatch=secure)],
         exception_handlers={HTTPException: http_error, sqlite3.OperationalError: no_data},
     )
     reader = Reader(settings)

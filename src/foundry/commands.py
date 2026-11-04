@@ -7,12 +7,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from foundry.cards import Card, Trigger
+from foundry.cards import ANSWERED, Card, Trigger
+from foundry.coordinator import ASK_AGAIN, ASK_SOMEONE_ELSE, GO_WITHOUT
+from foundry.jobs import Job
 from foundry.switch_client import Outcome, _choice_ids
 
 ACTIONS = ("answer_card", "ask_again", "ask_someone_else", "go_without", "restart", "flag", "reload_pack")
-# The due-time card's buttons, which the jobs page offers as actions of their own.
-DUE_CHOICES = {"ask_again": "Ask again", "ask_someone_else": "Ask someone else", "go_without": "Go without"}
+# The due-time card's buttons, which the jobs page offers as actions of their own. Their words are the coordinator's, because that is what the card says.
+DUE_ACTIONS = {"ask_again": ASK_AGAIN, "ask_someone_else": ASK_SOMEONE_ELSE, "go_without": GO_WITHOUT}
 # A card with no choices of its own is an approval, and these are its two answers.
 APPROVE, REVISE = "approve", "revise"
 LABELS = {APPROVE: "Approve", REVISE: "Ask for changes"}
@@ -31,6 +33,7 @@ NOT_A_CHOICE = "That isn't one of the card's choices."
 CHANGES_IN_CHAT = "Asking for changes on this card is only possible in chat."
 NOTES_NEEDED = "Say what should change."
 NOT_YOUR_JOB = "Foundry has no such job."
+NOT_THIS_CLIENT = "That belongs to a different client than the one this was asked for."
 NOT_IN_THIS_JOB = "That isn't part of this job."
 NOT_STUCK = "That job isn't stuck."
 NO_DUE_CARD = "No due-time card is open for that job."
@@ -64,6 +67,16 @@ class Command:
 
 def _command(row: tuple) -> Command:
     return Command(row[0], row[1], json.loads(row[2]), row[3], row[4], datetime.fromisoformat(row[5]), datetime.fromisoformat(row[6]) if row[6] else None, row[7])
+
+
+def still_waits_on(job: Job | None, card: Card) -> bool:
+    # A try that ended the card and then failed saved nothing, so the job still names it. Until the job moves on, that card can be answered again.
+    if job is None or card.state != ANSWERED:
+        return False
+    if job.approval and job.approval["request_id"] == card.request_id:
+        # An approval a press in chat ended for its notes is waiting for those words, not for this answer.
+        return not job.approval["awaiting_notes"]
+    return bool(job.question and job.question["request_id"] == card.request_id)
 
 
 def outcome_for(card: Card, choice: str, at: datetime) -> Outcome:

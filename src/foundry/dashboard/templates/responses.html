@@ -5,7 +5,7 @@
   <p class="small">{{ card.kind }}{% if user.businesses|length > 1 %}. {{ card.client }}{% endif %}</p>
   <p class="status">{{ card.status }}</p>
   {% if card.detail %}<pre class="text">{{ card.detail }}</pre>{% endif %}
-  {% if card.offer.buttons %}
+  {% if card.offer.buttons or card.offer.changes %}
   <form class="stack" method="post" action="/responses/answer">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="request_id" value="{{ card.request_id }}">
@@ -29,7 +29,7 @@
 {% set queued = cards|selectattr("state", "equalto", "queued")|list %}
 {% set past = cards|rejectattr("state", "in", ["open", "queued"])|list %}
 <section>
-  <h2>Open in chat</h2>
+  <h2>Waiting for an answer</h2>
   {% if open_cards %}<ul class="rows">{% for card in open_cards %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is open.</p>{% endif %}
 </section>
 <section>
