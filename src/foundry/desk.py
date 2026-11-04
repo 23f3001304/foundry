@@ -16,7 +16,7 @@ from typing import NamedTuple
 import httpx
 
 from foundry.buffer import Burst, MessageBuffer
-from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, OPEN, QUEUED, SHOW_NEEDS, Card, CardQueue, Trigger
+from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
 from foundry.chain import Link, carries, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines
 from foundry.checks import file_text, needs_attention, people_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date, signoff_detail
@@ -106,10 +106,7 @@ LAST_LIST = "The list you wrote last time. Change what the approver asked about 
 QUESTION_WINDOW = timedelta(hours=24)
 # What a voice note has come to: the sender hasn't answered yet, said it was right, or typed what they meant. Typed notes have none of these.
 UNCONFIRMED, CONFIRMED, CORRECTED = "unconfirmed", "confirmed", "corrected"
-RIGHT = "Right"
-WRONG = "Wrong"
 LATE_FIX_CHOICES = ("Re-make with the fix", "Carry on")
-VOICE_CARD_TITLE = "Check what I heard"
 VOICE_CARD_DETAIL = 'I heard: "{text}"\n\nIs that right?'
 # The brief or report card, when the sender is the one approving it, shows this and does both jobs.
 HEARD_LINE = 'What I heard from the voice note: "{text}"\nApproving this also confirms I heard it right.'
@@ -728,11 +725,7 @@ class Desk:
             logger.warning("Could not open a voice card for job %s, so what was heard stays unconfirmed: %s", job.id, error)
 
     def _voice_in(self, bucket: str, message_ids: Iterable[int]) -> tuple[str, list[int]]:
-        # What speech-to-text heard in these logged messages, and the log entries that hold it. A message that came from voice names them in its ref.
-        messages = [self.log.get(bucket, message_id) for message_id in message_ids]
-        named = [int(part) for message in messages if message is not None for part in (message.ref or "").split(",") if part.strip().isdigit()]
-        heard = [entry for entry in (self.log.get(bucket, entry_id) for entry_id in named) if entry is not None and entry.kind == "voice_heard"]
-        return "\n".join(entry.text for entry in heard), [entry.id for entry in heard]
+        return self.log.heard_in(bucket, message_ids)
 
     def _opening_ids(self, job: Job) -> list[int]:
         opened = next((entry for entry in self.log.for_job(job.bucket, job.id) if entry.kind == "job_opened"), None)
@@ -800,12 +793,17 @@ class Desk:
         self.cards.pump()
 
     def _take_voice_answer(self, card: Card, choice: str | None, at: datetime) -> None:
-        if choice == RIGHT:
+        if choice == RIGHT and card.item_id:
+            # The note was an answer to an item, so Right belongs to the item and not to the job's own note.
+            self.coordinator.confirm_voice(card, at)
+        elif choice == RIGHT:
             job = self._job_of(card)
             if job is not None:
                 self._mark_confirmed(job, card.person, card.room_id, at, card.data.get("heard", ""), card.data.get("entries", []))
                 self.store.save(job)
         elif choice == WRONG:
+            if card.item_id:
+                self.coordinator.drop_heard(card)
             self.client.post_message(card.room_id, ASK_FOR_THE_FIX)
             self.cards.note(card.request_id, awaiting_fix=self.clock().isoformat())
         else:
@@ -822,7 +820,8 @@ class Desk:
     def _fix_awaited(self, burst: Burst) -> tuple[Job, Card] | None:
         # After Wrong, the sender's next words are the fix, for a day. With several Wrongs the newest comes first.
         answered = self.cards.find(burst.sender, self.settings.bucket_for(burst.room_id), Trigger.VOICE, ANSWERED)
-        owed = [card for card in answered if card.room_id == burst.room_id and self._fix_still_owed(card)]
+        # A note that answered an item is fixed by the item's next answer, which the coordinator reads, not by the job.
+        owed = [card for card in answered if card.room_id == burst.room_id and not card.item_id and self._fix_still_owed(card)]
         for card in sorted(owed, key=lambda card: datetime.fromisoformat(card.data["awaiting_fix"]), reverse=True):
             job = self._job_of(card)
             if job is not None:
@@ -1201,6 +1200,9 @@ class Desk:
             self._clean_report(asked)
             self.store.save(asked)
             return
+        # What people say back to the who-owes list, and a question about where the work is, before anything is sorted as a request.
+        if self.coordinator.take(burst) or self.coordinator.tell_stage(burst):
+            return
         kind = classify(burst.text, self.llm, self.settings.pack_for(burst.room_id).update_rule)
         if kind is Kind.REPORT:
             self._start_report(burst)
@@ -1324,6 +1326,8 @@ class Desk:
     def _who_owes_prompt(self, job: Job) -> list[str]:
         now = self.clock().astimezone(self._business_zone())
         lines = [self.coordinator.people_for(job), LOCAL_TIME.format(now=now.isoformat(timespec="minutes"), day=f"{now:%A}"), OWES_ASK]
+        if measures := self.coordinator.measures_for(job):
+            lines.append(measures)
         # On a redraft the agent only has the brief, which no longer holds the list.
         if job.revision_notes and (last := self.coordinator.draft_for(job)):
             lines.append(f"{LAST_LIST}\n{last}")

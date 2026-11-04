@@ -107,6 +107,13 @@ class Log:
                 names[sender] = name
         return [Writer(sender, names.get(sender, ""), room_id, datetime.fromtimestamp(at, UTC)) for sender, (room_id, at) in reversed(newest.items())]
 
+    def heard_in(self, bucket: str, message_ids: Iterable[int]) -> tuple[str, list[int]]:
+        # What speech-to-text heard in these logged messages, and the entries that hold it. A message that came from voice names them in its ref.
+        messages = [self.get(bucket, message_id) for message_id in message_ids]
+        named = [int(part) for message in messages if message is not None for part in (message.ref or "").split(",") if part.strip().isdigit()]
+        heard = [entry for entry in (self.get(bucket, entry_id) for entry_id in named) if entry is not None and entry.kind == "voice_heard"]
+        return "\n".join(entry.text for entry in heard), [entry.id for entry in heard]
+
     def last_answer(self, bucket: str, sender: str, measure: str) -> Entry | None:
         rows = self._select("WHERE bucket = ? AND sender = ? AND kind = 'item_answer' AND ref = ? ORDER BY at DESC, id DESC LIMIT 1", bucket, sender, measure)
         return rows[0] if rows else None

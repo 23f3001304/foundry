@@ -64,6 +64,10 @@ ENDS = (ANSWERED, CLOSED, EXPIRED)
 
 APPROVE_CLEAN = "Approve everything clean"
 SHOW_NEEDS = "Show what needs me"
+# The card that asks a sender whether speech-to-text heard them right.
+RIGHT = "Right"
+WRONG = "Wrong"
+VOICE_CARD_TITLE = "Check what I heard"
 ROUTINE_TITLE = "Routine items"
 NEEDS_YOU = " (needs you)"
 ROUTINE_CLOSED = "I closed your routine card because something needs a decision first. Its items come back at the next set time."
@@ -224,6 +228,10 @@ class CardQueue:
 
     def find(self, person: str, bucket: str, trigger: Trigger, state: str) -> list[Card]:
         return self._select("WHERE person = ? AND bucket = ? AND trigger = ? AND state = ? ORDER BY rowid", person, bucket, trigger.value, state)
+
+    def about_item(self, item_id: str, trigger: Trigger, *states: str) -> list[Card]:
+        marks = ", ".join("?" * len(states))
+        return self._select(f"WHERE item_id = ? AND trigger = ? AND state IN ({marks}) ORDER BY rowid", item_id, trigger.value, *states)
 
     def note(self, request_id: str, **data) -> Card:
         # What the desk learns about a card after it opens, such as that its sender still owes a fix.

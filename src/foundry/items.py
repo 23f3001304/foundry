@@ -93,12 +93,23 @@ def _names(names: list[str]) -> str:
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
 
 
+def _handed_over(item: Item, items: list[Item]) -> bool:
+    # Skipped because someone else was asked for the same input, so it is neither owed nor gone without.
+    same = (item.job_id, item.input, item.measure)
+    return item.state is ItemState.SKIPPED and any(other.state is not ItemState.SKIPPED and (other.job_id, other.input, other.measure) == same for other in items)
+
+
 def status_line(items: list[Item]) -> str:
     # Built by code from the list, and everything people wrote in it is quieted here.
+    items = [item for item in items if not _handed_over(item, items)]
     parts = [f"{sum(item.state in IN for item in items)} of {len(items)} in"]
     open_items = [item for item in items if item.state is ItemState.OPEN]
-    parts += [f'{quiet(item.owner_name)} said "{quiet(item.reason)}"' for item in open_items if item.reason]
-    silent = [quiet(item.owner_name) if item.owner_name else f"whoever owes {quiet(item.input)}" for item in open_items if not item.reason]
+    # A voice answer nobody has confirmed yet is neither silence nor an answer.
+    heard = [item for item in open_items if item.answer is not None and not item.confirmed]
+    parts += [f'{quiet(item.owner_name)} said "{quiet(item.reason)}"' for item in open_items if item.reason and item not in heard]
+    if heard:
+        parts.append(f"waiting for {_names(list(dict.fromkeys(quiet(item.owner_name) for item in heard)))} to confirm what Foundry heard")
+    silent = [quiet(item.owner_name) if item.owner_name else f"whoever owes {quiet(item.input)}" for item in open_items if not item.reason and item not in heard]
     if silent:
         parts.append(f"no reply to Foundry yet from {_names(list(dict.fromkeys(silent)))}")
     without = [quiet(item.input) for item in items if item.state is ItemState.SKIPPED]
@@ -142,6 +153,10 @@ class ItemStore:
 
     def open_in(self, bucket: str) -> list[Item]:
         return self._select("WHERE bucket = ? AND state = ? AND asked_at IS NOT NULL ORDER BY rowid", bucket, ItemState.OPEN.value)
+
+    def answered_for(self, owner: str, bucket: str) -> list[Item]:
+        # Items this person has given an answer for, whether they gave it or the asker passed it on. A later answer replaces it.
+        return self._select("WHERE owner = ? AND bucket = ? AND state IN (?, ?) ORDER BY rowid", owner, bucket, ItemState.ANSWERED.value, ItemState.PASSED_ON.value)
 
     def drop_unasked(self, job_id: str) -> None:
         # A new draft of a brief replaces the last one. An item Foundry has already asked about is never dropped.
