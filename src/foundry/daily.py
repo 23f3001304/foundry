@@ -20,7 +20,7 @@ from foundry.jobs import Job, JobStore, State, advance
 from foundry.log import Entry, Log
 from foundry.pack import Pack
 from foundry.switch_client import DESK_NAME, Outcome, SwitchClient
-from foundry.text import headline, quiet
+from foundry.text import ROOM_OF, headline, quiet
 
 if TYPE_CHECKING:
     from foundry.desk import Settings
@@ -54,7 +54,6 @@ DRAFT = "Draft report for {day}, waiting for your approval:\n\n{detail}"
 NOTE_TITLE = "Note from {writer}: {gist}"
 NOTES_HEADING = "Notes in this report:"
 NO_NOTE = "No note today from: {rooms}."
-ROOM_OF = "the room of {people}"
 MARK_UNCONFIRMED = "voice note not confirmed by the sender"
 MARK_KEPT = "kept after a check"
 MARK_NEEDS = "needs attention"

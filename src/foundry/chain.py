@@ -13,6 +13,7 @@ from foundry.commands import VIA_DASHBOARD
 from foundry.jobs import Job
 from foundry.log import Entry, Log
 from foundry.switch_client import DESK_NAME
+from foundry.text import ROOM_OF
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ PASSED = "passed the review"
 SENT_BACK = "sent it back"
 SIGNED_OFF = "signed off"
 DELIVERED = "delivered"
+ROOM_SET_FOR_IT = "the room set for it"
 NO_SOURCE = "no source found"
 NO_SOURCE_DETAIL = "No entry for this job gives {needle}."
 NOT_FLAGGED = "Entry {entry_id} is not a flagged item."
@@ -434,7 +436,12 @@ class _Trail:
         answers = [entry for entry in self.job if entry.kind == "card_answered" and entry.id < last.id]
         if answers:
             self._add(answers[-1], SIGNED_OFF, self._how(answers[-1]), DIRECT)
-        self._add(last, DELIVERED, f"{last.text or 'the report'} to {last.room_id}", DIRECT)
+        self._add(last, DELIVERED, f"{last.text or 'the report'} to {self._room_of(last.room_id)}", DIRECT)
+
+    def _room_of(self, room_id: str) -> str:
+        # A room's id means nothing to a person, so a room goes by who spoke in it on this job.
+        people = dict.fromkeys(name_of(entry, self.known) for entry in self.job if entry.room_id == room_id and entry.kind in SAID)
+        return ROOM_OF.format(people=" and ".join(people)) if people else ROOM_SET_FOR_IT
 
 
 def chain_for(log: Log, bucket: str, flag_id: int, inputs_dir: Path | str | None = None) -> list[Step]:

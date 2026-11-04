@@ -8,6 +8,9 @@ def quiet(text: str | None) -> str:
     return (text or "").replace("@", "@\u200b")
 
 
+ROOM_OF = "the room of {people}"
+
+
 def same_login(text: object) -> str:
     # How a login is compared: a pack's list, what is typed at sign-in, and what a command carries all match without regard to case or spaces.
     return str(text or "").strip().casefold()
