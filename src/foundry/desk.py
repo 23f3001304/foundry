@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import tempfile
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta, timezone
@@ -54,6 +55,8 @@ CARD_ANSWER = re.compile(r"[Aa]\d+\s+\S+")
 CARD_AND_QUESTION = "A card and a question are both waiting on you here. Please press the button on the card, or answer the question in words."
 RESEND_VOICE = "I couldn't read that voice note. Please resend it in under 30 seconds, or type it."
 NO_REPORT = "I couldn't write that up just now. Send any reply to try again."
+ONLY_THE_SENDER = "Only the person who sent the note can answer this, so it is still waiting."
+HEARD_THE_ANSWER = "Got your answer."
 # A question left this long is dropped, so tomorrow's note isn't read as its answer.
 QUESTION_WINDOW = timedelta(hours=24)
 DECISION_EVENTS = {
@@ -480,8 +483,26 @@ class Desk:
         except KeyError:
             logger.warning("Answer for an unknown job: %s", outcome.request_id)
         else:
-            self._apply(job, self.gate.check(job, outcome))
+            if job.question and outcome.request_id == job.question["request_id"]:
+                self._take_pressed_answer(job, outcome)
+            else:
+                self._apply(job, self.gate.check(job, outcome))
         self.client.ack_outcome(outcome.session_id, outcome.request_id)
+
+    def _take_pressed_answer(self, job: Job, outcome: Outcome) -> None:
+        asked, choices = job.question["text"], job.question["choices"]
+        job.question = None
+        choice = outcome.chosen_from(choices)
+        if outcome.state == "answered" and outcome.answered_by != job.requester:
+            self.client.post_message(job.room_id, ONLY_THE_SENDER)
+            self._offer_choices(job, asked, choices)
+        elif outcome.state == "answered" and choice:
+            self.client.post_message(job.room_id, f"Got your answer: {choice.rstrip('.')}.")
+            job.brief += f"\nAnswered: {choice}"
+            self._clean_report(job)
+        elif outcome.state == "answered":
+            logger.warning("Job %s had an answer naming no known choice: %s", job.id, outcome.answers)
+        self.store.save(job)
 
     def _apply(self, job: Job, decision: Decision) -> None:
         event = DECISION_EVENTS.get((job.state, decision))
@@ -505,6 +526,7 @@ class Desk:
     def _take_burst(self, burst: Burst) -> None:
         asked = self._open_question(burst.room_id, burst.sender, burst.first_at)
         if asked:
+            self._close_question(asked)
             asked.brief += f"\nAnswered: {burst.text}"
             asked.language = burst.language or asked.language
             self._clean_report(asked)
@@ -541,6 +563,28 @@ class Desk:
         self._clean_report(job)
         self.store.save(job)
 
+    def _offer_choices(self, job: Job, question: str, choices: list[str]) -> None:
+        request_id = f"{job.id}-{uuid.uuid4().hex[:8]}"
+        try:
+            self.client.open_question_card(job.room_id, request_id, question, choices)
+        except httpx.HTTPError as error:
+            logger.warning("Could not open a question card for job %s: %s", job.id, error)
+            if not job.language:
+                self.client.post_message(job.room_id, question)
+            return
+        job.question = {"request_id": request_id, "text": question, "choices": choices}
+
+    def _close_question(self, job: Job) -> None:
+        if not job.question:
+            return
+        # Switch marks a closed card "Cancelled", so say the answer did arrive.
+        try:
+            self.client.close_card(job.question["request_id"])
+        except httpx.HTTPError as error:
+            logger.warning("Could not close the question card for job %s: %s", job.id, error)
+        job.question = None
+        self.client.post_message(job.room_id, HEARD_THE_ANSWER)
+
     def _clean_report(self, job: Job) -> None:
         if job.revision_notes:
             job.brief += f"\n\nThe approver asked for these changes:\n{job.revision_notes}"
@@ -558,7 +602,11 @@ class Desk:
             question = "\n".join(result.questions)
             job.brief += f"\n\nAsked: {question}"
             job.asked_at = self.clock().isoformat()
-            self._reply(job, quiet(question))
+            choices = [quiet(choice) for choice in result.choices]
+            if job.language or not choices:
+                self._reply(job, quiet(question))
+            if choices:
+                self._offer_choices(job, quiet(question), choices)
             return
         job.report, job.asked_at = quiet(result.text), None
         advance(job, "report_drafted")

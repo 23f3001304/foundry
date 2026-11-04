@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 CARD_LIFETIME = timedelta(hours=23)
 MAX_TITLE_CHARS = 500
+QUESTION_TITLE = "One question"
 MAX_DETAIL_CHARS = 4000
 CARD_OPTIONS = [
     {"id": "approve", "label": "Approve", "decision": "accept"},
@@ -32,6 +33,15 @@ class Outcome:
     state: str
     answer: str | None
     answered_by: str | None
+    answers: list[dict] | None = None
+
+    def chosen_from(self, choices: list[str]) -> str | None:
+        picked = ((self.answers or [{}])[0].get("selected_option_ids") or [None])[0]
+        return dict(zip(_choice_ids(choices), choices)).get(picked)
+
+
+def _choice_ids(choices: list[str]) -> list[str]:
+    return [f"choice-{position}" for position, _ in enumerate(choices, start=1)]
 
 
 class SwitchClient:
@@ -96,12 +106,33 @@ class SwitchClient:
             "expires_at": (datetime.now(UTC) + CARD_LIFETIME).isoformat(),
         })
 
+    def open_question_card(self, room_id: str, request_id: str, question: str, choices: list[str]) -> None:
+        self._call("POST", f"/agent-sessions/{self.session_id}/approvals", json={
+            "request_id": request_id,
+            "turn_id": request_id,
+            "kind": "questions",
+            "title": QUESTION_TITLE,
+            "detail": None,
+            "options": [],
+            "questions": [{
+                "id": "answer",
+                "title": QUESTION_TITLE,
+                "prompt": question[:MAX_DETAIL_CHARS],
+                "options": [{"id": choice_id, "label": choice, "description": None} for choice_id, choice in zip(_choice_ids(choices), choices)],
+                "multi_select": False,
+                "allow_custom_answer": False,
+            }],
+            "room_id": room_id,
+            "thread_id": None,
+            "expires_at": (datetime.now(UTC) + CARD_LIFETIME).isoformat(),
+        })
+
     def close_card(self, request_id: str) -> None:
         self._call("POST", f"/agent-sessions/{self.session_id}/approvals/{request_id}/close")
 
     def outcomes(self) -> list[Outcome]:
         return [
-            Outcome(row["sessionId"], row["requestId"], row["state"], row["answer"], row["answeredBy"])
+            Outcome(row["sessionId"], row["requestId"], row["state"], row["answer"], row["answeredBy"], row.get("answers"))
             for row in self._call("GET", "/agent-sessions/approvals/outcomes").json()
         ]
 
