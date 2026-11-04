@@ -49,6 +49,8 @@ RETRY = "A person asked to try this job again. If your file is still right, repl
 NOTHING_MADE = "Nobody made a file for this job. Make what the brief asks for."
 ASK_WHAT_THEY_NEED = "Do you want something made from this? If so, tell me what you need."
 USE_THE_BUTTONS = "More than one approval is waiting on you here. Please use the buttons on the card you mean."
+# Switch reads a typed card answer like "A1 2" itself, and the same text still arrives here as a message.
+CARD_ANSWER = re.compile(r"[Aa]\d+\s+\S+")
 CARD_AND_QUESTION = "A card and a question are both waiting on you here. Please press the button on the card, or answer the question in words."
 RESEND_VOICE = "I couldn't read that voice note. Please resend it in under 30 seconds, or type it."
 NO_REPORT = "I couldn't write that up just now. Send any reply to try again."
@@ -442,7 +444,7 @@ class Desk:
             return
         payload = event["payload"]
         text = payload["body"].strip()
-        if not text or self._answers_an_approval(event, text) or event["room_id"] in self.settings.inside_rooms():
+        if not text or CARD_ANSWER.fullmatch(text) or self._answers_an_approval(event, text) or event["room_id"] in self.settings.inside_rooms():
             return
         at = datetime.fromtimestamp(payload["timestamp"] / 1000, UTC)
         self.buffer.add(event["room_id"], payload["sender"], text, at, payload.get("spoken_language"))
