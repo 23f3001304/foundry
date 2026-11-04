@@ -16,19 +16,16 @@ history:
   - {as: Team Lead B, room: team-b, days_ago: 3, say: "Team B moved the payment fixes to QA."}
   - {as: Team Lead C, room: team-c, days_ago: 21, say: "Team C has the reporting module in UAT."}
 steps:
-  # A Team Lead's daily note. The design has this as a Hinglish voice note, which needs Sarvam, so without a key the same words are typed and the voice step says it was skipped.
+  # A Team Lead's daily note. It is a Hinglish voice note when there is a Sarvam key. Without one the same words are typed, and the timeline says so.
   - as: Team Lead A
     room: team-a
     voice: "aaj Team A ne customer portal ke login defects fix kar diye, kal QA wale retest karenge"
-    wait_for: {text: "in today's report", timeout: 180}
-  - as: Team Lead A
-    room: team-a
     say: "aaj Team A ne customer portal ke login defects fix kar diye, kal QA wale retest karenge"
     wait_for: {text: "in today's report", timeout: 180}
   # The request, and the brief's card with who owes what.
   - as: Delivery Manager
     room: delivery
-    say: "I need the release status deck for the client by {in:60}. Team Leads A, B and C each owe me their team's stories closed this sprint and defects open by {in:12}."
+    say: "I need the release status deck for the client by {in:60}. Team Leads A, B and C each owe me their team's stories closed this sprint and defects open by {in:8}."
     wait_for: {button: Approve, timeout: 300}
   - as: Delivery Manager
     room: delivery
@@ -38,7 +35,7 @@ steps:
   - as: Team Lead A
     room: team-a
     say: "Team A closed 41 stories this sprint and has 3 defects open."
-    wait_for: {text: "Got it", timeout: 180}
+    wait_for: {text: ": 3.", timeout: 180}
   - as: Team Lead B
     room: team-b
     say: "blocked on QA"

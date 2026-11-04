@@ -6,7 +6,7 @@ A business's team asks for work in the chat they already use, by text or voice n
 
 The same setup also turns a messy note from the field into a clean report, and shows the person signing it exactly which words changed and which document backs each change.
 
-Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe and Shilagate Homes are fictional, and so is everything in their folders.
+Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shilagate Homes and Morpankh Systems are fictional, and so is everything in their folders.
 
 ## What sets it apart
 
@@ -28,7 +28,15 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe and Sh
 | Stuck job, 30-minute timeout, restart with a person's go-ahead | Run live on Mattermost |
 | These steps from a fresh clone on a wiped Switch stack | Run by the author up to the makers and through the note clean-up. Not yet run by a teammate |
 | Reviewer on another vendor | Run live on Mattermost through delivery with Codex on `gpt-5.6-terra`. It sent one slide back with a note, passed the fix, and was shown the images. This used the Codex copy from the desktop app, version 0.146.0-alpha.9.2, not an `npm` install. An earlier OpenCode review also worked, until its free usage limit ran out |
-| Voice notes and voice replies | Tested against a fake Sarvam only, no key yet |
+| The IT firm scene with scripted people, on Nov 5, 2026: request, brief card with who owes what, each Team Lead asked in their own room, answers, a reason, a status question, one reminder, one due card with the reason and the silence, Go without, and a deck with the figures and their printed sources | Run live on Mattermost with real agents and real models, from a git worktree against a running stack, not a fresh clone. The team's messages are scripted. What Foundry said back and the deck are real |
+| The IT firm's final card, sign-off and delivery | **Not run.** Codex's usage limit ran out in this run, so the reviewer posted the limit's message and never passed anything. The job stayed in review until the stuck card, and trying again failed the same way. No review was faked, so the deck was never delivered |
+| Other cards in that run: Ask for changes with typed notes, a typed `A19 yes`, a typed `yes` in a card's thread, Already told the asker, Ask again, Ask someone else and its follow-up, a passed-on answer, a stuck card from a maker's `WORK_BLOCKED` | Run live on Mattermost |
+| A flagged number's chain | Run on the real log and the real deck by calling `chain_for` from a script. It holds who answered and who used it, and no review or sign-off, because neither ran. The dashboard's flag button is not part of this run |
+| The IT firm's routine cards at the set times | Run live on Mattermost: "Show what needs me" and "Approve everything clean" both pressed, a typed `yes` told to use the buttons, and the report posted. Keep and Leave out were not reached, because no note in the run needed attention |
+| The number check on finished work | Run by script on six real decks, because no final card could open. No false alarm on a deck made by the same code. It has not caught a wrong number on a real deck |
+| Confidence on a real model, 20 made-up notes, half garbled | Run on Nov 5, 2026. Clean-up caught 10 of 10 garbled and marked 0 of 10 clean, so it keeps its confidence. The reader of replies caught 3 of 10, so it lost its confidence |
+| One client's fact asked for from another client's job | Run live. Asked plainly, the maker said "not available". Told to open decks already made, it read the other client's deck in the shared folder, and left the fact out by its own choice. Nothing stops it reading, see "The makers share one folder" |
+| Voice notes and voice replies | Tested against a fake Sarvam only, no key yet. In the IT firm scene the voice note's words were typed instead, and the scene says so |
 | Telegram, and an outside person answering there | Not run, needs a bot token |
 | Slack, Discord, Teams | Not run, so not claimed |
 | WhatsApp cards: buttons, list, typed answer, sign-off, changes, delivery | Run through a real Switch and the desk against a local stand-in for Meta's API, with made-up credentials. Not run on Meta's real API, which needs a Meta app and a public address |
@@ -151,7 +159,7 @@ uv run --env-file .env python tools/register_desk.py
 
 ### 4. Create the rooms
 
-This makes rooms for both fictional clients, plus one internal department to show the other room tree. It also writes each maker's `.mcp.json` and saves the room ids in `.env`.
+This makes rooms for both fictional clients, one internal department to show the other room tree, and the four rooms of Morpankh Systems, the fictional IT firm. It also writes each maker's `.mcp.json` and saves the room ids in `.env`.
 
 ```bash
 uv run --env-file .env python scripts/demo_seed.py
@@ -185,16 +193,38 @@ The contact sheet lists two electricians at Palm Court, so the desk asks which o
 
 `brands/shilagate-homes/sources/reports.md` has fixed dates. A note that says "the work started 2 days ago" only finds its match when the dates line up, so edit that file to suit the day you try it.
 
+### 7. Play the IT firm demo
+
+Morpankh Systems is a fictional IT firm. A Delivery Manager asks for a release status deck, and three Team Leads each owe the figures for it. Team Lead A answers, Team Lead B says "blocked on QA", and Team Lead C says nothing. **The team's messages are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models.**
+
+Put Mattermost's admin sign-in and team name in `.env`. They are in Switch's own `.env`. Then make the scripted people and what they said before the scene. The history is marked as seeded in the log.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py ensure it_firm
+uv run --env-file .env python scripts/seed_history.py it_firm
+```
+
+In `.env`, set `FOUNDRY_QUIET_SECONDS=8`, and set `FOUNDRY_SET_TIMES` to two clock times, 25 and 28 minutes from now. Restart the desk, then play the scene from another terminal. It prints a timeline, and each step waits for what Foundry really does.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py play it_firm
+```
+
+The inputs are due 8 minutes in. The scene needs a reviewer that can run, or it stops at the review. See "What has actually been run" for how far it got.
+
+To measure whether a model's confidence catches a garbled note, run `tools/confidence_test.py` with the same `uv run --env-file .env python`.
+
 ### Good to know
 
 - **Fonts:** a `.pptx` can't carry its fonts, so a machine without them shows a substitute. Install the files in `brands/<brand>/fonts` where you open the decks.
-- **Reviewer:** Codex uses your machine's login, and Switch copies that login into its session folder under `~/.local/state/switch`. It also takes the reasoning effort from your own `~/.codex/config.toml`. At `xhigh`, the first review took 13 minutes and the second took 4. The agent controller looks for `codex` on PATH, and the desktop app's copy isn't on it, so install the CLI or add the app's folder to PATH before starting the controller. To change the reviewer, set `FOUNDRY_REVIEWER_PROVIDER` and `FOUNDRY_REVIEWER_MODEL` in `.env` before creating the rooms, because an existing `foundry-reviewer` is reused as it is. Codex needs an empty model. Leaving the provider empty uses OpenCode's free model. That free tier has a usage limit, and the terminal can keep working after Switch-hosted OpenCode is refused. When that happens the room shows no error. The reviewer sits on "Working" until the 30-minute timeout, then a stuck card asks a person, so unchecked work never passes. OpenCode's own log says `Free usage limit reached`. Claude works too, but then a vendor is checking its own work.
+- **Reviewer:** Codex uses your machine's login, and Switch copies that login into its session folder under `~/.local/state/switch`. It also takes the reasoning effort from your own `~/.codex/config.toml`. At `xhigh`, the first review took 13 minutes and the second took 4. The agent controller looks for `codex` on PATH, and the desktop app's copy isn't on it, so install the CLI or add the app's folder to PATH before starting the controller. To change the reviewer, set `FOUNDRY_REVIEWER_PROVIDER` and `FOUNDRY_REVIEWER_MODEL` in `.env` before creating the rooms, because an existing `foundry-reviewer` is reused as it is. Codex needs an empty model. Leaving the provider empty uses OpenCode's free model. That free tier has a usage limit, and the terminal can keep working after Switch-hosted OpenCode is refused. When that happens the room shows no error. The reviewer sits on "Working" until the 30-minute timeout, then a stuck card asks a person, so unchecked work never passes. OpenCode's own log says `Free usage limit reached`. Codex has a usage limit too. When it runs out, the reviewer posts the limit's message in the review room, and the desk still waits for the timeout and the stuck card. Claude works too, but then a vendor is checking its own work.
 - **Approver:** whoever asks approves their own job. To name someone for one business, set `approver` in quotes in `brands/<brand>/pack.md`, or use `FOUNDRY_APPROVER` for every business that doesn't set its own. The value is a Switch sender id, `@switch-mattermost-<bridge id>-<username>:localhost`. Once that person has sent a request, it's in the `requester` column of `foundry-jobs.db`. With a wrong id, nobody can answer the card.
 - **Voice:** set `SARVAM_API_KEY`. Voice notes over 30 seconds get a request to resend or type, which is the limit of Sarvam's REST route. Sarvam charges per call.
 - **Classifier:** with no `ANTHROPIC_API_KEY`, Foundry uses this machine's Claude Code login.
 - **Old databases:** the job and buffer files aren't migrated between versions. Delete `foundry-*.db` after pulling changes.
 - **WhatsApp:** optional, and it changes Switch's code in your own deployment. See [integrations/whatsapp](integrations/whatsapp/README.md).
 - **A fresh Switch stack** gives clean channel names. Deleting a room leaves its Mattermost channel behind, and a new room with that name gets a suffix.
+- **The makers share one folder.** They are one set of agents with one working folder across every client, so any job's maker can open a deck made for another client. In our live check, a maker told to open decks already made read another client's deck and left the fact out by its own choice. Nothing in the code stopped it reading. Don't put real clients' confidential work on this setup as it stands.
 
 ## Tests
 

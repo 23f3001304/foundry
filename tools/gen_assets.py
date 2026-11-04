@@ -119,7 +119,7 @@ ASSETS = {
     },
     "demo-it-firm-logo": {
         "prompt": LOGO_STYLE + " The emblem shows one stylised peacock feather standing upright, drawn from simple flat shapes, with a round gold #E3B23C "
-        "eye near its tip, in deep teal #0F4C5C. The words 'MORPANKH SYSTEMS' run once around the circle in a clean sans-serif, and no other words appear anywhere.",
+        "eye near its tip, in deep teal #0F4C5C, inside a thin teal ring. There are no words, letters or numbers anywhere.",
         "out": "brands/demo-it-firm/logo.png",
         "cut": "logo",
     },

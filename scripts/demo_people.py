@@ -33,6 +33,7 @@ MOST_CHARS_SHOWN = 1500
 # What speech is spoken in for a voice step. Sarvam's Bulbul reads Hinglish on its Hindi voice.
 VOICE_LANGUAGE = "hi-IN"
 NO_VOICE = "Skipped a voice note because SARVAM_API_KEY is not set, so it has not run. Nothing stands in for it."
+TYPED_INSTEAD = "There is no SARVAM_API_KEY, so the voice note has not run. The same words are typed instead."
 
 
 def load_scene(name: str) -> dict:
@@ -240,10 +241,12 @@ class Stage:
 def _act(stage: Stage, number: int, step: dict) -> bool:
     # False when the step could not be done honestly, so nothing is waited for.
     who = f"Step {number}: {step['as']} in {step['room']}"
-    if "voice" in step:
-        if not os.environ.get("SARVAM_API_KEY"):
+    if "voice" in step and not os.environ.get("SARVAM_API_KEY"):
+        if "say" not in step:
             stage.say(f"{who}. {NO_VOICE}")
             return False
+        stage.say(f"{who}. {TYPED_INSTEAD}")
+    if "voice" in step and os.environ.get("SARVAM_API_KEY"):
         words = fill_times(step["voice"], stage.start)
         stage.post(step, "", stage.upload(step, "voice.wav", speak(words, VOICE_LANGUAGE)))
         stage.say(f"{who} sent a voice note saying: {words}")
