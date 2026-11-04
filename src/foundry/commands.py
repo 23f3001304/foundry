@@ -39,6 +39,8 @@ NOT_STUCK = "That job isn't stuck."
 NO_DUE_CARD = "No due-time card is open for that job."
 NOT_THE_APPROVER = "Only the person who approves this job can flag things in it."
 COULD_NOT = "Foundry couldn't do that. Try again in a moment."
+# What a command holds from the moment the desk takes it until the desk says how it went. A command that keeps it was taken and never finished, or finished and not recorded.
+CLAIMED = "claimed"
 
 ANSWERED_HERE = "Got your answer on {title}, from the dashboard."
 LOG_ANSWERED = "Answered {title} with {choice} {via}"
@@ -111,7 +113,14 @@ class CommandStore:
         rows = self._select("WHERE done_at IS NULL ORDER BY id LIMIT 1")
         return rows[0] if rows else None
 
+    def claim(self, command_id: int) -> None:
+        # Taken before the work, so it is never done twice. It reads as taken, and not as done, until done() says how it went.
+        self._write(command_id, CLAIMED)
+
     def done(self, command_id: int, error: str | None = None) -> None:
+        self._write(command_id, error)
+
+    def _write(self, command_id: int, error: str | None) -> None:
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute("UPDATE commands SET done_at = ?, error = ? WHERE id = ?", (datetime.now(UTC).isoformat(), error, command_id))
 

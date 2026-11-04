@@ -17,7 +17,7 @@ from typing import NamedTuple
 import httpx
 
 from foundry.buffer import Burst, MessageBuffer
-from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, ONE_BY_ONE, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
+from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, IN_ROUTINE, ITEMS, ONE_BY_ONE, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
 from foundry.chain import Link, carries, flag, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines
 from foundry.checks import calculations, entry_words, file_text, needs_attention, people_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date
@@ -174,10 +174,8 @@ ITEM_CARDS = {Trigger.REMINDER, Trigger.DUE, Trigger.ALREADY_TOLD}
 
 
 def approving_confirms_voice(job: Job) -> bool:
-    # The brief card, or a report's card, also shows what a voice note was heard as when its sender is the one approving, and approving it confirms that.
-    event = DECISION_EVENTS.get((job.state, Decision.APPROVE))
-    shown = event == "brief_approved" or (event == "signoff_approved" and job.kind == "report")
-    return shown and job.heard == UNCONFIRMED and job.requester == job.approver
+    # The brief card also shows what a voice note was heard as when its sender is the one approving, and approving it confirms that.
+    return DECISION_EVENTS.get((job.state, Decision.APPROVE)) == "brief_approved" and job.heard == UNCONFIRMED and job.requester == job.approver
 
 
 def sender_kind(payload: dict) -> str:
@@ -1151,7 +1149,7 @@ class Desk:
         self._note_answer_time(card, outcome)
         if card is not None:
             self.cards.got_through(card.request_id)
-            if outcome.state == "answered" and outcome.answered_by == card.person:
+            if outcome.state == "answered" and outcome.answered_by == card.person and self._not_answered_yet(card):
                 self._note_choice(card, outcome)
         if card is None or card.trigger in JOB_CARDS:
             # Finished first, so the log has the answer ahead of what it causes and a card it asks again for opens in this turn.
@@ -1448,7 +1446,7 @@ class Desk:
                 if command is None:
                     return
                 # Taken before it is applied, so whatever happens to the file after, a command is applied at most once.
-                self.commands.done(command.id)
+                self.commands.claim(command.id)
             except sqlite3.OperationalError as error:
                 # A locked file only skips this round. The rest of the tick goes on, and the commands wait.
                 logger.warning("Could not take the dashboard's commands just now, so they wait for the next round: %s", error)
@@ -1462,11 +1460,11 @@ class Desk:
                 # Taken all the same, or this one would hold up every command behind it on each tick.
                 logger.exception("Could not apply dashboard command %s (%s).", command.id, command.action)
                 error = COULD_NOT
-            if error is not None:
-                try:
-                    self.commands.done(command.id, error)
-                except sqlite3.OperationalError as locked:
-                    logger.warning("Could not record why dashboard command %s was not done: %s", command.id, locked)
+            try:
+                # Said last. Until then it reads as taken and not as done, so a crash or a locked file never passes for success.
+                self.commands.done(command.id, error)
+            except sqlite3.OperationalError as locked:
+                logger.warning("Could not record how dashboard command %s went, so it stays as taken: %s", command.id, locked)
 
     def _apply_command(self, command: Command) -> None:
         if command.action == "answer_card":
@@ -1503,6 +1501,8 @@ class Desk:
         self._answered_here(card)
         outcome = outcome_for(card, choice, self.clock())
         self._note_choice(card, outcome)
+        # The items inside a routine card, as they stand now, to tell which of them this answer approved.
+        waiting = [item for item in map(self.cards.get, card.data.get(ITEMS, ())) if item is not None and item.state == IN_ROUTINE]
         if card.trigger is Trigger.QUESTION:
             # A job's own question, answered as a press on it is. It already says in the room that the answer came.
             self.cards.finish(card.request_id, ANSWERED)
@@ -1510,8 +1510,16 @@ class Desk:
         else:
             self._take_card_answer(card, outcome)
         self._note_dashboard(command, card, choice)
+        self._note_routine_items(command, waiting)
         self._close_chat_card(card, say=card.trigger is not Trigger.QUESTION)
         self.cards.pump()
+
+    def _note_routine_items(self, command: Command, waiting: list[Card]) -> None:
+        # A routine card has no job, but each thing in it has, and a report approved through it is signed off on each one's card. So each is logged against its own job.
+        for item in waiting:
+            if (now := self.cards.get(item.request_id)) is not None and now.state == ANSWERED:
+                self.cards.note(item.request_id, answer=APPROVE)
+                self._log_dashboard(command, item.bucket, item.room_id, LOG_ANSWERED.format(title=item.title, choice=LABELS[APPROVE], via=VIA_DASHBOARD), item.job_id, item.request_id)
 
     def _job_still_waits_on(self, card: Card) -> bool:
         return still_waits_on(self._job_of(card) if card.job_id else None, card)
@@ -1602,6 +1610,10 @@ class Desk:
         if job.bucket != command.payload.get("bucket"):
             raise Refused(NOT_THIS_CLIENT)
         return job
+
+    def _not_answered_yet(self, card: Card) -> bool:
+        # A press on a card that was dealt with already, such as a chat card Switch couldn't close after an answer on the dashboard, changes nothing. It mustn't change what the card says it was answered with either.
+        return card.state in (OPEN, QUEUED, EXPIRED) or "answer" not in card.data
 
     def _note_choice(self, card: Card, outcome: Outcome) -> None:
         # What the person chose, kept on the card so the dashboard can say how it was answered.

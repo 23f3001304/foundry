@@ -7,10 +7,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, Card, Trigger, _card
+from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, ONE_BY_ONE, OPEN, QUEUED, Card, Trigger, _card
 from foundry.cards import COLUMNS as CARD_COLUMNS
 from foundry.chain import LINK_MARK, SAID, NotFlagged, Step, chain_for, name_of, names
-from foundry.commands import DUE_ACTIONS, JOB_APPROVALS, LABELS, Command, CommandStore, still_waits_on
+from foundry.commands import CLAIMED, DUE_ACTIONS, JOB_APPROVALS, LABELS, Command, CommandStore, still_waits_on
 from foundry.dashboard.auth import User
 from foundry.desk import Settings, approving_confirms_voice
 from foundry.items import Item, ItemState, _item, status_line
@@ -94,6 +94,8 @@ STILL_WAITING = "Answered, but the job did not move on. Try again."
 NOBODY_ASKED = "Nobody has been asked yet."
 WAITING_FOR = "Waiting for {name} to answer."
 QUEUED_BEHIND = " It is queued behind another card."
+WAITS_FOR_SET_TIME = " It waits for its set time."
+AWAITS_SET_TIME = "Waits for its set time"
 NO_REPLY = "No reply to Foundry yet"
 NOT_ASKED = "Not asked yet"
 CANT_REACH = "Foundry can't reach them yet"
@@ -102,6 +104,8 @@ DELIVERED = "delivered"
 WAITING_FOR_FOUNDRY = "Waiting for Foundry"
 DONE = "Done"
 DIDNT_DO = "Foundry didn't do it: {error}"
+# Taken by the desk with no result written, so it may or may not have happened.
+NOT_RECORDED = "Foundry has this, outcome not recorded"
 
 
 # How long a page waits for a database the desk is writing. Short, so a locked file shows a plain page and doesn't hold everything else up.
@@ -300,6 +304,11 @@ def squeeze(text: str) -> str:
     return text if len(text) <= MOST_TEXT else f"{text[:MOST_TEXT].rstrip()}..."
 
 
+def waits_for_a_set_time(card: Card) -> bool:
+    # A routine item opens at its person's next set time. One brought on its own, or a card in front of which another is open, waits behind that other card instead.
+    return card.state == QUEUED and card.is_routine and not card.is_merged and not card.data.get(ONE_BY_ONE)
+
+
 def is_made_file(entry: Entry) -> bool:
     return entry.kind == "file_made" and bool(entry.ref) and LINK_MARK not in entry.ref
 
@@ -380,7 +389,7 @@ class Reader:
         for card in cards:
             if card.job_id == job.id and card.state in (OPEN, QUEUED):
                 line = f"Waiting for an answer to {card.title}, from {known.get(card.person, card.person)}."
-                lines.append(line + (QUEUED_BEHIND if card.state == QUEUED else ""))
+                lines.append(line + (WAITS_FOR_SET_TIME if waits_for_a_set_time(card) else QUEUED_BEHIND if card.state == QUEUED else ""))
         return lines
 
     def _row(self, job: Job, cards: list[Card], known: dict[str, str]) -> JobRow:
@@ -488,7 +497,7 @@ class Reader:
                 with_ = f" with {LABELS.get(chosen, chosen)}," if chosen else ""
                 status = f"Answered{with_} {where} {who}" + (f", {self.when(answer.at)}" if answer else "")
             else:
-                status = {OPEN: "Open in chat", QUEUED: "Waiting behind another card", CLOSED: "Closed by Foundry", EXPIRED: "Ran out. Nobody answered it."}[card.state]
+                status = {OPEN: "Open in chat", QUEUED: AWAITS_SET_TIME if waits_for_a_set_time(card) else "Waiting behind another card", CLOSED: "Closed by Foundry", EXPIRED: "Ran out. Nobody answered it."}[card.state]
             # What a card says matters while someone still has to answer it.
             detail = card.detail if waits or card.state in (OPEN, QUEUED) else ""
             # An answer that didn't go through is still waiting for one, so it sits with the open cards.
@@ -605,7 +614,9 @@ class Reader:
     def recent(self, commands: CommandStore, login: str) -> list[Recent]:
         found = []
         for command in commands.recent(login):
-            if command.error:
+            if command.error == CLAIMED:
+                status, failed = NOT_RECORDED, False
+            elif command.error:
                 status, failed = DIDNT_DO.format(error=command.error), True
             else:
                 status, failed = (DONE if command.done_at else WAITING_FOR_FOUNDRY), False

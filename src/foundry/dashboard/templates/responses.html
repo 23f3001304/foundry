@@ -33,8 +33,8 @@
   {% if open_cards %}<ul class="rows">{% for card in open_cards %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is open.</p>{% endif %}
 </section>
 <section>
-  <h2>Waiting behind another card</h2>
-  <p class="small">A person gets one card at a time for each business. These open when the one in front is answered.</p>
+  <h2>Waiting for their turn</h2>
+  <p class="small">A person gets one card at a time for each business. A card opens when the one in front is answered, and a routine item opens at its set time.</p>
   {% if queued %}<ul class="rows">{% for card in queued %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is waiting.</p>{% endif %}
 </section>
 <section>
