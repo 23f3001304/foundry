@@ -187,7 +187,8 @@ class DailyReports:
         for event in ("report_drafted", "signoff_approved", "delivered"):
             advance(job, event)
         if not told:
-            # Filed again, so it was corrected. A report that was built from the old words has to follow.
+            # Filed again, so it was corrected. A report that was built from the old words has to follow, and it reads the note as saved, so it is saved first.
+            self.store.save(job)
             self._follow_correction(job)
             return ""
         return IN_TODAYS_REPORT if self._report_day(self.settings.pack_for(job.room_id), entry.at) == self._today() else IN_TOMORROWS_REPORT
@@ -250,31 +251,55 @@ class DailyReports:
             # The report is made again when the approver gives their notes or restarts it, and it will have this note and this line.
             self.store.save(report)
             return
-        self._take_back(report)
-        advance(report, "note_corrected")
-        # Made again the way "Ask for changes" makes it, though it is no round of changes.
-        self.redo(report)
+        closed = self._take_back(report)
+        # Saved with nothing in front of the approver, so if anything stops here the next tick's sweep brings the report back to them.
         self.store.save(report)
+        try:
+            advance(report, "note_corrected")
+            # Made again the way "Ask for changes" makes it, though it is no round of changes.
+            notes, entries, decisions = self._remake(report)
+            # Saved before the card is tried, because opening a card is what needs Switch.
+            self.store.save(report)
+            self._ask(report, notes, entries, decisions)
+        except Exception:
+            logger.exception("Could not put the report for job %s before the approver again after a note was corrected, so it is brought to them one by one.", report.id)
+            if report.state is State.MAKING:
+                advance(report, "report_drafted")
+            report.approval = None
+            self.store.save(report)
+            self._requeue(report)
+            return
+        self.store.save(report)
+        if closed:
+            self._say_made_again(report, closed)
 
-    def _take_back(self, report: Job) -> None:
+    def _say_made_again(self, report: Job, title: str) -> None:
+        # Switch marks a closed card "Cancelled", so say why. Only said once the report really is made again and in front of them.
+        try:
+            self.client.post_message(self._approval_room(report), REPORT_CARD_CLOSED.format(title=quiet(title)))
+        except httpx.HTTPError as error:
+            logger.warning("Could not tell the approver about job %s: %s", report.id, error)
+
+    def _take_back(self, report: Job) -> str | None:
+        # Withdraws the report's cards. Returns the title of one the approver had open, so they can be told once the report is made again.
         for state in (QUEUED, IN_ROUTINE, OPEN):
             for card in self.cards.find(report.approver, report.bucket, Trigger.DAILY_REPORT, state):
                 if card.job_id == report.id:
                     self._withdraw(card)
         approval = report.approval
         if approval is None:
-            return
+            return None
         card = self.cards.get(approval["request_id"])
-        if card is None or card.state == OPEN:
-            # Switch marks a closed card "Cancelled", so say why.
+        was_open = card is None or card.state == OPEN
+        if was_open:
             try:
                 self.client.close_card(approval["request_id"])
-                self.client.post_message(report.approval_room, REPORT_CARD_CLOSED.format(title=quiet(approval["title"])))
             except httpx.HTTPError as error:
                 logger.warning("Could not close the card for job %s: %s", report.id, error)
         if card is not None:
             self.cards.finish(approval["request_id"], CLOSED)
         report.approval = None
+        return approval["title"] if was_open else None
 
     def notes_in(self, report: Job) -> list[Entry]:
         # The notes a report is made from now, which the log keeps as the ones the approved report came from.
@@ -304,7 +329,28 @@ class DailyReports:
         key = (bucket, slot.isoformat())
         if key not in self._done and self._build(bucket, pack, slot):
             self._done.add(key)
+        # The report for this set time that is still being built is the build's to finish. Every other one that is waiting must be in front of the approver.
+        self._sweep(bucket, None if key in self._done else slot)
         self._remind(bucket, now, today)
+
+    def _sweep(self, bucket: str, building: datetime | None) -> None:
+        # A report waiting for its sign-off with no approval and no card that is up or waiting can't be reached by anyone. Whatever left it so, it gets a card again.
+        for report in self._reports(bucket):
+            if report.state is not State.SIGNOFF_PENDING or report.approval is not None or datetime.fromisoformat(report.sent_at) == building or self._live_items(report):
+                continue
+            if self.notes_in(report):
+                self._requeue(report)
+                self.cards.pump()
+            else:
+                self._drop(report)
+
+    def _drop(self, report: Job) -> None:
+        # Every note in it was left out, so there is nothing to approve. It ends here and nothing is sent.
+        advance(report, "report_dropped")
+        self.store.save(report)
+
+    def _live_items(self, report: Job) -> list[Card]:
+        return [card for card in self._items_of(report) if card.state in (QUEUED, IN_ROUTINE, OPEN)]
 
     def _build(self, bucket: str, pack: Pack, slot: datetime) -> bool:
         # True when this set time needs nothing more. False means the report is half made, and the next tick carries on from where this stopped.
@@ -316,6 +362,9 @@ class DailyReports:
         decisions = self._decisions(bucket, approver)
         notes = [entry for entry in entries if decisions.get(entry.id) != LEAVE_OUT]
         if not notes:
+            # A report that was made and then had every note left out before it reached anyone has nothing to approve.
+            if job is not None and job.state is State.SIGNOFF_PENDING:
+                self._drop(job)
             return True
         home = self.settings.home_room(bucket)
         if job is None:
@@ -339,13 +388,29 @@ class DailyReports:
         statuses = {entry.id: self._status(entry, decisions) for entry in notes}
         detail = quiet(self._detail(job, notes, entries, statuses))
         room = self._approval_room(job)
-        slot = datetime.fromisoformat(job.sent_at)
-        # Brought by Show what needs me even when clean, so it can always be changed. Clean only for its own day. It is for the set time it was made for, even if made a moment late.
-        data = {"clean": False, ALWAYS_SHOW: True, CLEAN_UNTIL: datetime.combine(slot.date() + timedelta(days=1), time.min, self._zone()).isoformat(), WAITING_SINCE: slot.isoformat()}
+        # It is for the set time it was made for, even if made a moment late.
+        data = self._item_data(job, datetime.fromisoformat(job.sent_at))
         item = self.cards.submit(Trigger.DAILY_REPORT, job.approver, job.bucket, room, self._title(job, notes, entries), detail, job_id=job.id, data=data)
         # The card it opens in lists titles only, so a report with nothing wrong is shown in full in the room first. If that can't be done, it is not approved blind.
         if not job.attention and NEEDS not in statuses.values() and self._post_draft(job, room, detail):
             self.cards.note(item.request_id, clean=True)
+
+    def _item_data(self, job: Job, waiting_since: datetime) -> dict:
+        # Brought by Show what needs me even when clean, so it can always be changed. Clean only for its own day.
+        slot = datetime.fromisoformat(job.sent_at)
+        return {"clean": False, ALWAYS_SHOW: True, CLEAN_UNTIL: datetime.combine(slot.date() + timedelta(days=1), time.min, self._zone()).isoformat(), WAITING_SINCE: waiting_since.isoformat()}
+
+    def _requeue(self, report: Job) -> None:
+        # A report brought one by one needs nothing from Switch to be queued, only the queue's own database, so it can always be made. It opens as soon as the approver can be reached.
+        entries = self._window(report.bucket, datetime.fromisoformat(report.sent_at))
+        decisions = self._decisions(report.bucket, report.approver)
+        notes = [entry for entry in entries if decisions.get(entry.id) != LEAVE_OUT]
+        statuses = {entry.id: self._status(entry, decisions) for entry in notes}
+        data = {**self._item_data(report, self.clock()), ONE_BY_ONE: True}
+        self.cards.submit(
+            Trigger.DAILY_REPORT, report.approver, report.bucket, self._approval_room(report), self._title(report, notes, entries), quiet(self._detail(report, notes, entries, statuses)),
+            job_id=report.id, data=data,
+        )
 
     def _items_of(self, report: Job) -> list[Card]:
         return [card for state in (QUEUED, IN_ROUTINE, OPEN, ANSWERED, CLOSED, EXPIRED) for card in self.cards.find(report.approver, report.bucket, Trigger.DAILY_REPORT, state) if card.job_id == report.id]
@@ -488,6 +553,9 @@ class DailyReports:
 
     def redo(self, job: Job) -> None:
         # The approver asked for changes, or restarted a report that stopped. The notes are not cleaned again, only combined again.
+        self._ask(job, *self._remake(job))
+
+    def _remake(self, job: Job) -> tuple[list[Entry], list[Entry], dict[int, str]]:
         if job.revision_notes:
             job.brief = f"{job.brief}\n\nThe approver asked for these changes:\n{job.revision_notes}"
         pack, slot = self.settings.pack_for(job.room_id), datetime.fromisoformat(job.sent_at)
@@ -499,6 +567,9 @@ class DailyReports:
             text, lines = self._combined(notes, slot.date(), pack, self._changes_of(job))
             job.report, job.attention = quiet(text), [*corrections, *lines]
         advance(job, "report_drafted")
+        return notes, entries, decisions
+
+    def _ask(self, job: Job, notes: list[Entry], entries: list[Entry], decisions: dict[int, str]) -> None:
         statuses = {note.id: self._status(note, decisions) for note in notes}
         self.gate.ask(job, self._title(job, notes, entries), quiet(self._detail(job, notes, entries, statuses)), self._approval_room(job))
 
