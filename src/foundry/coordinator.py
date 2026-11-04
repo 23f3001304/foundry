@@ -1054,12 +1054,15 @@ class Coordinator:
         if not pool or _names_another(heard.reading, pool):
             return False
         item = _pick(heard.reading, pool)
-        if item is None:
+        # With no item named, "blocked on QA" means all they owe on the one job. Across jobs it could be about either.
+        items = [item] if item is not None else pool if len({one.job_id for one in pool}) == 1 else []
+        if not items:
             return self._ask_which(heard, pool)
         burst = heard.burst
-        self._give_reason(item, heard.reading.reason or "", burst.first_at, burst.room_id, burst.sender)
-        # They have said something, so the reminder card is about nothing, and it would hold up their next card for hours.
-        self._settle_cards(item, Trigger.REMINDER)
+        for one in items:
+            self._give_reason(one, heard.reading.reason or "", burst.first_at, burst.room_id, burst.sender)
+            # They have said something, so the reminder card is about nothing, and it would hold up their next card for hours.
+            self._settle_cards(one, Trigger.REMINDER)
         self.client.post_message(burst.room_id, REASON_NOTED)
         return True
 
