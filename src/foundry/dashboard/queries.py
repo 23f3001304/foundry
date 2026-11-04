@@ -40,6 +40,7 @@ STAGES = {
     State.APPROVED: ("Approved, being delivered", "designer"),
     State.DELIVERED: ("Delivered", "designer"),
     State.BLOCKED: ("Stuck", "smith"),
+    State.DROPPED: ("Nothing to send, every note was left out", "designer"),
 }
 REPORT_STAGES = {State.RECEIVED: "Writing the report", State.SIGNOFF_PENDING: "Report waiting for sign-off"}
 NO_BRIEF = "No brief yet"
@@ -82,7 +83,7 @@ EVENTS = {
     "revision_notes": "asked for changes",
 }
 MOST_TEXT = 240
-TONES = {State.BLOCKED: "stuck", State.DELIVERED: "done"}
+TONES = {State.BLOCKED: "stuck", State.DELIVERED: "done", State.DROPPED: "done"}
 # A page that grows with every job would soon be too long to read, so it shows the newest and says what it left out.
 MOST_PAST_CARDS = 200
 MOST_TIMELINES = 20

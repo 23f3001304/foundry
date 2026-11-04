@@ -162,6 +162,7 @@ STAGES = {
     State.APPROVED: "approved and going out",
     State.DELIVERED: "delivered",
     State.BLOCKED: "stopped, waiting for a decision",
+    State.DROPPED: "nothing to send",
 }
 # Once the makers have started, a changed input no longer reaches them by itself.
 STARTED = (State.MAKING, State.REVIEWING, State.SIGNOFF_PENDING, State.BLOCKED)

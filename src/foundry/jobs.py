@@ -21,6 +21,8 @@ class State(Enum):
     APPROVED = "approved"
     DELIVERED = "delivered"
     BLOCKED = "blocked"
+    # A day's report with every note left out. Nothing was sent, and nothing reads it as sent.
+    DROPPED = "dropped"
 
 
 class IllegalTransition(Exception):
@@ -45,8 +47,10 @@ TRANSITIONS = {
     (State.SIGNOFF_PENDING, "signoff_revised"): State.MAKING,
     # A note in a day's report was corrected, so the report is made again. That is no round of changes.
     (State.SIGNOFF_PENDING, "note_corrected"): State.MAKING,
-    # Every note in a day's report was left out, so there is no report to approve. It ends here and delivers nothing.
-    (State.SIGNOFF_PENDING, "report_dropped"): State.DELIVERED,
+    # Every note in a day's report was left out, so there is no report to approve. It ends here and sends nothing.
+    (State.SIGNOFF_PENDING, "report_dropped"): State.DROPPED,
+    # A note in a dropped report was corrected, so the report is made again from its notes.
+    (State.DROPPED, "note_corrected"): State.MAKING,
     (State.APPROVED, "delivered"): State.DELIVERED,
     # A note filed in a day's report that isn't built yet is cleaned again when its sender corrects it.
     (State.DELIVERED, "note_reopened"): State.RECEIVED,
@@ -137,6 +141,12 @@ class JobStore:
 
     def in_room(self, room_id: str) -> list[Job]:
         return self._select("WHERE room_id = ? ORDER BY rowid", room_id)
+
+    def of_kind(self, kind: str, bucket: str, state: State | None = None) -> list[Job]:
+        # Filtered in the database, so a caller that runs every few seconds does not read every job there is.
+        if state is None:
+            return self._select("WHERE kind = ? AND bucket = ? ORDER BY rowid", kind, bucket)
+        return self._select("WHERE kind = ? AND bucket = ? AND state = ? ORDER BY rowid", kind, bucket, state.value)
 
     def save(self, job: Job) -> None:
         with closing(sqlite3.connect(self.path)) as db, db:

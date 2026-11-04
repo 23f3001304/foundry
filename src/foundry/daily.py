@@ -40,7 +40,9 @@ MARKED = "Left as written, because no document backs it: {words}."
 NOT_COMBINED = "I could not combine the notes just now, so they are joined as written."
 NUMBERS_NOT_IN_NOTES = "These numbers are in the report but in none of the notes: {numbers}."
 MARKS_LEFT_OUT = "The notes mark these as not found in our documents, but the report does not: {words}."
-NOTE_CORRECTED = "{writer} corrected a note after this report was built, and the report was made again."
+NOTE_CORRECTED = "{writer} corrected a note after this report was built."
+# Said on a report that was meant to be made again and could not be, so it never claims what did not happen.
+NOT_MADE_AGAIN = "I could not make the report again, so this is the text from before the correction."
 # What every such line has in it, so a report made again keeps them.
 CORRECTION_MARK = "corrected a note after this report was built"
 REPORT_CARD_CLOSED = "A note was corrected, so I closed the card for {title} and made the report again."
@@ -63,6 +65,8 @@ NO_BRIDGE = "The approver in the pack for {brand} has {{bridge}} in it, and FOUN
 BRIDGE = "{bridge}"
 # Something unexpected stops a business's daily work only this long, so a broken model call isn't repeated every few seconds.
 RETRY_AFTER = timedelta(minutes=1)
+# A report with no card up or waiting gets a new one no sooner than this after its last, so a card that is refused for good is not made again every tick.
+SWEEP_WAIT = timedelta(minutes=15)
 # How a note stands in the day's report.
 CLEAN, KEPT, NEEDS = "clean", "kept", "needs"
 
@@ -247,31 +251,42 @@ class DailyReports:
         if line not in report.attention:
             report.attention.append(line)
         waiting_for_notes = report.approval is not None and report.approval["awaiting_notes"]
-        if report.state is not State.SIGNOFF_PENDING or waiting_for_notes:
+        if report.state not in (State.SIGNOFF_PENDING, State.DROPPED) or waiting_for_notes:
             # The report is made again when the approver gives their notes or restarts it, and it will have this note and this line.
             self.store.save(report)
             return
-        closed = self._take_back(report)
-        # Saved with nothing in front of the approver, so if anything stops here the next tick's sweep brings the report back to them.
-        self.store.save(report)
+        # A dropped report is made again the same way: its notes are read afresh, and the corrected one is in them.
+        made, closed = False, None
         try:
+            closed = self._take_back(report)
+            # Saved with nothing in front of the approver, so if anything stops here the sweep brings the report back to them.
+            self.store.save(report)
             advance(report, "note_corrected")
             # Made again the way "Ask for changes" makes it, though it is no round of changes.
             notes, entries, decisions = self._remake(report)
+            made = True
             # Saved before the card is tried, because opening a card is what needs Switch.
             self.store.save(report)
             self._ask(report, notes, entries, decisions)
         except Exception:
             logger.exception("Could not put the report for job %s before the approver again after a note was corrected, so it is brought to them one by one.", report.id)
-            if report.state is State.MAKING:
-                advance(report, "report_drafted")
-            report.approval = None
-            self.store.save(report)
-            self._requeue(report)
+            self._bring_back(report, made)
             return
         self.store.save(report)
         if closed:
             self._say_made_again(report, closed)
+
+    def _bring_back(self, report: Job, made: bool) -> None:
+        # Back to waiting for sign-off with nothing in front of the approver, and one item in the queue, which needs no Switch.
+        if not made and NOT_MADE_AGAIN not in report.attention:
+            report.attention.append(NOT_MADE_AGAIN)
+        if report.state is State.DROPPED:
+            advance(report, "note_corrected")
+        if report.state is State.MAKING:
+            advance(report, "report_drafted")
+        report.approval = None
+        self.store.save(report)
+        self._requeue(report)
 
     def _say_made_again(self, report: Job, title: str) -> None:
         # Switch marks a closed card "Cancelled", so say why. Only said once the report really is made again and in front of them.
@@ -335,22 +350,29 @@ class DailyReports:
 
     def _sweep(self, bucket: str, building: datetime | None) -> None:
         # A report waiting for its sign-off with no approval and no card that is up or waiting can't be reached by anyone. Whatever left it so, it gets a card again.
-        for report in self._reports(bucket):
-            if report.state is not State.SIGNOFF_PENDING or report.approval is not None or datetime.fromisoformat(report.sent_at) == building or self._live_items(report):
+        for report in self.store.of_kind("daily", bucket, State.SIGNOFF_PENDING):
+            if report.approval is not None or datetime.fromisoformat(report.sent_at) == building or self._live_items(report) or self._was_sent(report):
                 continue
-            if self.notes_in(report):
+            if not self.notes_in(report):
+                self._drop(report)
+                continue
+            # A card Switch refuses for good, such as one for a room that is gone, is closed as soon as it is tried, so a new one waits a while rather than being made every tick.
+            newest = max((item.created_at for item in self._items_of(report)), default=None)
+            if newest is None or self.clock() - newest >= SWEEP_WAIT:
                 self._requeue(report)
                 self.cards.pump()
-            else:
-                self._drop(report)
+
+    def _was_sent(self, report: Job) -> bool:
+        # A crash after the report went out and was logged, before the job was saved as delivered, must not ask the approver again.
+        return any(entry.kind == "report_approved" for entry in self.log.for_job(report.bucket, report.id))
 
     def _drop(self, report: Job) -> None:
-        # Every note in it was left out, so there is nothing to approve. It ends here and nothing is sent.
+        # Every note in it was left out, so there is nothing to approve. It ends here, sends nothing, and comes back if a note in it is corrected.
         advance(report, "report_dropped")
         self.store.save(report)
 
     def _live_items(self, report: Job) -> list[Card]:
-        return [card for card in self._items_of(report) if card.state in (QUEUED, IN_ROUTINE, OPEN)]
+        return [card for state in (QUEUED, IN_ROUTINE, OPEN) for card in self.cards.find(report.approver, report.bucket, Trigger.DAILY_REPORT, state) if card.job_id == report.id]
 
     def _build(self, bucket: str, pack: Pack, slot: datetime) -> bool:
         # True when this set time needs nothing more. False means the report is half made, and the next tick carries on from where this stopped.
@@ -580,7 +602,7 @@ class DailyReports:
     # Looking things up
 
     def _reports(self, bucket: str) -> list[Job]:
-        return [job for job in self.store.all() if job.kind == "daily" and job.bucket == bucket]
+        return self.store.of_kind("daily", bucket)
 
     @staticmethod
     def _window_start(slot: datetime, built: list[datetime]) -> datetime:
