@@ -52,7 +52,7 @@ ROUTE = {
     Trigger.ATTENTION_NOTE: Route("approver", False),
     Trigger.ALREADY_TOLD: Route("asker", False),
 }
-HOLDS_JOB = {Trigger.BRIEF, Trigger.FINAL_WORK, Trigger.DUE, Trigger.STUCK, Trigger.LATE_FIX}
+HOLDS_JOB = {Trigger.BRIEF, Trigger.FINAL_WORK, Trigger.DUE, Trigger.STUCK}
 
 QUEUED = "queued"
 OPEN = "open"
@@ -222,8 +222,8 @@ class CardQueue:
         rows = self._select("WHERE person = ? AND bucket = ? AND state = ?", person, bucket, OPEN)
         return rows[0] if rows else None
 
-    def answered_for(self, person: str, bucket: str, trigger: Trigger) -> list[Card]:
-        return self._select("WHERE person = ? AND bucket = ? AND trigger = ? AND state = ? ORDER BY rowid", person, bucket, trigger.value, ANSWERED)
+    def find(self, person: str, bucket: str, trigger: Trigger, state: str) -> list[Card]:
+        return self._select("WHERE person = ? AND bucket = ? AND trigger = ? AND state = ? ORDER BY rowid", person, bucket, trigger.value, state)
 
     def note(self, request_id: str, **data) -> Card:
         # What the desk learns about a card after it opens, such as that its sender still owes a fix.

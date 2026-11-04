@@ -74,6 +74,8 @@ class Job:
     token: str = ""
     heard: str | None = None
     attention: list[str] = field(default_factory=list)
+    # A sender's fix that came while an ask was out. It waits for that ask to come back, then goes out.
+    pending_fix: str = ""
 
     @property
     def approval_room(self) -> str:
@@ -94,7 +96,7 @@ def advance(job: Job, event: str) -> Job:
     return job
 
 
-COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report", "language", "question", "bucket", "token", "heard", "attention")
+COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report", "language", "question", "bucket", "token", "heard", "attention", "pending_fix")
 
 
 class JobStore:
@@ -107,7 +109,7 @@ class JobStore:
                     state TEXT NOT NULL, revision_rounds INTEGER NOT NULL, brief TEXT, artifacts TEXT NOT NULL,
                     approval TEXT, revision_notes TEXT, waiting_on TEXT NOT NULL, asked_at TEXT,
                     kind TEXT NOT NULL, sent_at TEXT, report TEXT, language TEXT, question TEXT,
-                    bucket TEXT NOT NULL, token TEXT NOT NULL, heard TEXT, attention TEXT NOT NULL)"""
+                    bucket TEXT NOT NULL, token TEXT NOT NULL, heard TEXT, attention TEXT NOT NULL, pending_fix TEXT NOT NULL)"""
             )
 
     def create(self, room_id: str, requester: str, approver: str, bucket: str = "") -> Job:
@@ -139,10 +141,10 @@ class JobStore:
                     ON CONFLICT(id) DO UPDATE SET {", ".join(f"{name} = excluded.{name}" for name in COLUMNS[1:])}""",
                 (job.id, job.room_id, job.requester, job.approver, job.state.value,
                  job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes, json.dumps(job.waiting_on), job.asked_at, job.kind, job.sent_at, job.report, job.language, json.dumps(job.question),
-                 job.bucket, job.token, job.heard, json.dumps(job.attention)),
+                 job.bucket, job.token, job.heard, json.dumps(job.attention), job.pending_fix),
             )
 
     def _select(self, clause: str, *values: str) -> list[Job]:
         with closing(sqlite3.connect(self.path)) as db:
             rows = db.execute(f"SELECT {', '.join(COLUMNS)} FROM jobs {clause}", values).fetchall()
-        return [Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16]), row[17], row[18], row[19], json.loads(row[20])) for row in rows]
+        return [Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16]), row[17], row[18], row[19], json.loads(row[20]), row[21]) for row in rows]
