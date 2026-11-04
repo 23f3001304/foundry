@@ -154,11 +154,23 @@ class SwitchClient:
                     except httpx.HTTPStatusError as error:
                         # A restarting Switch answers 5xx. Anything else, such as a wrong key, won't fix itself.
                         if error.response.status_code < 500:
-                            raise
-                        logger.warning("Switch stream refused: %s", error)
+                            rooms = await self._rooms_left_after(http, rooms, error)
+                        else:
+                            logger.warning("Switch stream refused: %s", error)
                     await asyncio.sleep(self.reconnect_seconds)
             finally:
                 beat.cancel()
+
+    async def _rooms_left_after(self, http: httpx.AsyncClient, rooms: list[str], refusal: httpx.HTTPStatusError) -> list[str]:
+        # Switch refuses the whole stream over one room, so a deleted chat would otherwise stop every other room.
+        if refusal.response.status_code != 403:
+            raise refusal
+        answers = [await http.get(f"/agents/{self.agent_id}/rooms/{room}/history", params={"limit": 1}) for room in rooms]
+        closed = [room for room, answer in zip(rooms, answers) if answer.status_code in (403, 404)]
+        if not closed or len(closed) == len(rooms):
+            raise refusal
+        logger.warning("Stopped following %s: Switch has no such room or the desk isn't in it. Take it out of FOUNDRY_ROOMS in .env.", ", ".join(closed))
+        return [room for room in rooms if room not in closed]
 
     async def _stream(self, http: httpx.AsyncClient, rooms: list[str]) -> AsyncIterator[dict]:
         params = {"connection_id": self.connection_id, "scope": "all", "filter": "all", "rooms": ",".join(rooms)}
