@@ -6,7 +6,7 @@ A business's team asks for work in the chat they already use, by text or voice n
 
 The same setup also turns a messy note from the field into a clean report, and shows the person signing it exactly which words changed and which document backs each change.
 
-Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shilagate Homes, Morpankh Systems and Kasauti Capital Partners are fictional, and so is everything in their folders, including every figure.
+Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shilagate Homes, Morpankh Systems, Kasauti Capital Partners, Bhorvela Studio, Phatakha Pop and Ambaryug Teas are fictional, and so is everything in their folders, including every figure.
 
 ## What sets it apart
 
@@ -36,7 +36,9 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shila
 | The investment firm scene: five Office Heads each owe assets under management, four answer by chat and one by a file, one figure is far from the others, and the deck's charts are to be worked out by code | **Not run live yet.** The firm's kit and pack, the scene, the made-up figures and the tests are in, and the scene's checks of its own figures run in the tests. Nothing here says what Foundry did with them |
 | The number check on finished work | Run by script on six real decks, because no final card could open. No false alarm on a deck made by the same code. It has not caught a wrong number on a real deck |
 | Confidence on a real model, 20 made-up notes, half garbled | Run on Nov 5, 2026, through the desk's own two steps. All 10 garbled notes came back as a question, and none of the clean, so the question is what stops a garbled note. After the one reply tried, "I don't know, put it in as I said it", low confidence on the report caught 7 of 10 garbled and marked 0 of 10 clean, so clean-up keeps its confidence. A reply that sounds surer has not been measured. An earlier 10 of 10 scored the questions, which the desk never reads. The reader of replies caught 3 of 10, so it lost its confidence |
-| One client's fact asked for from another client's job | Run live. Asked plainly, the maker said "not available". Told to open decks already made, it read the other client's deck in the shared folder, and left the fact out by its own choice. Nothing stops it reading, see "The makers share one folder" |
+| One client's fact asked for from another client's job | Run live, when every client's makers shared one folder. Asked plainly, the maker said "not available". Told to open decks already made, it read the other client's deck in the shared folder, and left the fact out by its own choice. Nothing stopped it reading. Since then each agency client is given agents of its own, in a folder of its own, and that has been tested in code and **not run live** |
+| The marketing agency scene: Bhorvela Studio's Account Director and two clients, Phatakha Pop and Ambaryug Teas, each asking for a full campaign set (deck, poster, social posts at 1080x1080 and 1080x1920, written copy) at once, each with agents of its own | **Not run.** The code, the kits, the scene and the tests are in. The two sets have not been made, looked at or compared on a real stack, and neither client's folder has been checked for the other's words |
+| Pictures drawn by the Vertex image model inside a campaign set (`FOUNDRY_IMAGES=on`) | **Not run.** The tool is tested against a stand-in for Google's server only, and no real picture was drawn |
 | Voice notes and voice replies | Tested against a fake Sarvam only, no key yet. In the IT firm scene the voice note's words were typed instead, and the scene says so |
 | Telegram, and an outside person answering there | Not run, needs a bot token |
 | Slack, Discord, Teams | Not run, so not claimed |
@@ -69,9 +71,11 @@ A report skips the brief and the makers. The desk writes it from the note, asks 
 |---|---|---|
 | `foundry-desk` | Foundry's own process | Reads every room, sorts messages, runs approvals, delivers |
 | `foundry-brief` | Claude | Turns a request into a one-page brief |
-| `foundry-deck` | Claude, with the `build_deck` tool | Makes on-brand slides |
+| `foundry-deck` | Claude, with the `build_deck` and `write_copy` tools | Makes on-brand slides and a branded PDF of written copy |
 | `foundry-visual` | Claude, with the `render_graphic` tool | Makes on-brand graphics |
 | `foundry-reviewer` | Codex, or OpenCode if you change the setting | Checks the work against the brief and the brand kit |
+
+Each agency client has its own set of these four, named with its own ending, such as `foundry-deck-phatakha`, each in its own folder. An internal company or department shares one set across its rooms. When `FOUNDRY_IMAGES=on`, both makers also get a `generate_image` tool.
 
 ## Features and the Switch pieces behind them
 
@@ -79,14 +83,15 @@ A report skips the brief and the makers. The desk writes it from the note, asks 
 |---|---|
 | Rooms, agents and documents for one client from one file | `version: 2` room template, with `from-template-document` |
 | Agency or internal room tree from one setting | Template `if:` on `org_mode` |
-| A second client reusing the same agents | Template `filled` and `allow_existing` |
+| An internal department reusing the same agents | Template `filled` and `allow_existing` |
+| An agency client with agents of its own | A template param, `agent_suffix`, that ends each agent's name, and a folder named for the agent |
 | Reading all chat without being mentioned | Agent event stream with `filter=all` |
 | Who may ask and who may answer | Agent addressing policies, then Foundry's own check in `gates.py` |
 | Approvals with buttons | Approval cards on an agent session |
 | Questions with their answers as choices | Question cards on an agent session |
 | Notes and answers on WhatsApp | The open adapter from sandbox-quantum/switch#1166 with our button and list cards, in `integrations/whatsapp` |
 | Brand kit and business pack | Room documents, in the inside rooms only |
-| Deck and graphic tools | MCP servers in each maker's `.mcp.json` |
+| Deck, graphic, copy and picture tools | MCP servers in each maker's `.mcp.json` |
 | Sending files and stickers | Room media route |
 | Agents on a machine you control | Agent controller, and the `agent_management` flag |
 | Keeping clients out of the workrooms | Separate rooms grouped and linked by label, with the desk alone in both |
@@ -160,7 +165,9 @@ uv run --env-file .env python tools/register_desk.py
 
 ### 4. Create the rooms
 
-This makes rooms for both fictional clients, one internal department to show the other room tree, the four rooms of Morpankh Systems, the fictional IT firm, and the six rooms of Kasauti Capital Partners, the fictional investment firm. It also writes each maker's `.mcp.json` and saves the room ids in `.env`.
+This makes rooms for both fictional clients, one internal department to show the other room tree, the four rooms of Morpankh Systems, the fictional IT firm, the six rooms of Kasauti Capital Partners, the fictional investment firm, and the rooms of the marketing agency's two clients, Phatakha Pop and Ambaryug Teas. Each agency client is given agents of its own. The seed also writes each maker's `.mcp.json` and saves the room ids in `.env`.
+
+Picture drawing is off by default. If you want it, set `FOUNDRY_IMAGES=on` and `GOOGLE_CLOUD_PROJECT` in `.env` and sign in with `gcloud auth application-default login` before this step. Everything in this README runs without it.
 
 ```bash
 uv run --env-file .env python scripts/demo_seed.py
@@ -234,17 +241,38 @@ uv run --env-file .env python scripts/demo_people.py play investment_firm
 
 The inputs are due 15 minutes in and the deck 60 minutes in. The scene needs a reviewer that can run, or it stops at the review. See "What has actually been run" for how far it got.
 
+### 9. Play the marketing agency demo
+
+Bhorvela Studio is a fictional marketing agency with two fictional clients. Phatakha Pop is a loud fizzy drinks brand, and Ambaryug Teas is a quiet heritage tea house. A Marketing Manager at each asks for a full campaign set: a deck, a poster, social posts at 1080x1080 and 1080x1920, and written copy. Each client's kit leads its set, so the two come out looking and sounding different. The agency's Account Director approves each brief and each finished set inside the studio rooms, and the clients see nothing of it. **The people's messages are scripted. Everything Foundry says back, and every file, comes from the real desk, real agents and real models.**
+
+What this demo shows about clients:
+
+- **Each client has agents of its own.** `foundry-deck-phatakha` and `foundry-deck-ambaryug` are different agents in different folders, and a client's tools are pinned to its own brand folder. A maker, reviewer or brief agent from one client is ignored in the other's rooms.
+- **A client only learns the stage.** Asked where its work is, it is told "being made" or "being checked", with no name of anyone inside and no who-owes list. Who-owes-what runs in internal mode only.
+- **Each client is its own bucket.** The desk picks the bucket from the room, and nothing a model sends can name one. Two clients' files and log entries never mix in a lookup.
+- **Clients never sign in to the dashboard.** The packs list only the agency's own login, acting as the Account Director.
+- **Pictures are off by default.** With `FOUNDRY_IMAGES` off, the set is still complete, and its written copy has a "Pictures" section that says no pictures were drawn. With `FOUNDRY_IMAGES=on`, the makers may draw at most two pictures with `generate_image`, which calls the same Vertex model as `tools/gen_assets.py`. **Those pictures are AI-generated, and the files say so.** Google's policy bars passing generated content off as made only by people.
+
+Make the scripted people, then play the scene. In `.env`, set `FOUNDRY_QUIET_SECONDS=8` first, and restart the desk after the seed so it follows the new rooms.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py ensure agency
+uv run --env-file .env python scripts/demo_people.py play agency
+```
+
+Then open the files each client was given and read them. Phatakha Pop's set should name Mango Masala and never Ambaryug, and Ambaryug Teas' set should name the First Flush Reserve and never Phatakha.
+
 ### Good to know
 
 - **Fonts:** a `.pptx` can't carry its fonts, so a machine without them shows a substitute. Install the files in `brands/<brand>/fonts` where you open the decks.
-- **Reviewer:** Codex uses your machine's login, and Switch copies that login into its session folder under `~/.local/state/switch`. It also takes the reasoning effort from your own `~/.codex/config.toml`. At `xhigh`, the first review took 13 minutes and the second took 4. The agent controller looks for `codex` on PATH, and the desktop app's copy isn't on it, so install the CLI or add the app's folder to PATH before starting the controller. To change the reviewer, set `FOUNDRY_REVIEWER_PROVIDER` and `FOUNDRY_REVIEWER_MODEL` in `.env` before creating the rooms, because an existing `foundry-reviewer` is reused as it is. Codex needs an empty model. Leaving the provider empty uses OpenCode's free model. That free tier has a usage limit, and the terminal can keep working after Switch-hosted OpenCode is refused. When that happens the room shows no error. The reviewer sits on "Working" until the 30-minute timeout, then a stuck card asks a person, so unchecked work never passes. OpenCode's own log says `Free usage limit reached`. Codex has a usage limit too. When it runs out, the reviewer posts the limit's message in the review room, and the desk still waits for the timeout and the stuck card. Claude works too, but then a vendor is checking its own work.
+- **Reviewer:** Codex uses your machine's login, and Switch copies that login into its session folder under `~/.local/state/switch`. It also takes the reasoning effort from your own `~/.codex/config.toml`. At `xhigh`, the first review took 13 minutes and the second took 4. The agent controller looks for `codex` on PATH, and the desktop app's copy isn't on it, so install the CLI or add the app's folder to PATH before starting the controller. To change the reviewer, set `FOUNDRY_REVIEWER_PROVIDER` and `FOUNDRY_REVIEWER_MODEL` in `.env` before creating the rooms, because an existing `foundry-reviewer` is reused as it is. An agent's provider is fixed when it is registered, so each agency client's own reviewer takes whatever those two say when that client's rooms are made. Codex needs an empty model. Leaving the provider empty uses OpenCode's free model. That free tier has a usage limit, and the terminal can keep working after Switch-hosted OpenCode is refused. When that happens the room shows no error. The reviewer sits on "Working" until the 30-minute timeout, then a stuck card asks a person, so unchecked work never passes. OpenCode's own log says `Free usage limit reached`. Codex has a usage limit too. When it runs out, the reviewer posts the limit's message in the review room, and the desk still waits for the timeout and the stuck card. Claude works too, but then a vendor is checking its own work.
 - **Approver:** whoever asks approves their own job. To name someone for one business, set `approver` in quotes in `brands/<brand>/pack.md`, or use `FOUNDRY_APPROVER` for every business that doesn't set its own. The value is a Switch sender id, `@switch-mattermost-<bridge id>-<username>:localhost`. Once that person has sent a request, it's in the `requester` column of `foundry-jobs.db`. With a wrong id, nobody can answer the card.
 - **Voice:** set `SARVAM_API_KEY`. Voice notes over 30 seconds get a request to resend or type, which is the limit of Sarvam's REST route. Sarvam charges per call.
 - **Classifier:** with no `ANTHROPIC_API_KEY`, Foundry uses this machine's Claude Code login.
 - **Old databases:** the job and buffer files aren't migrated between versions. Delete `foundry-*.db` after pulling changes.
 - **WhatsApp:** optional, and it changes Switch's code in your own deployment. See [integrations/whatsapp](integrations/whatsapp/README.md).
 - **A fresh Switch stack** gives clean channel names. Deleting a room leaves its Mattermost channel behind, and a new room with that name gets a suffix.
-- **The makers share one folder.** They are one set of agents with one working folder across every client, so any job's maker can open a deck made for another client. In our live check, a maker told to open decks already made read another client's deck and left the fact out by its own choice. Nothing in the code stopped it reading. Don't put real clients' confidential work on this setup as it stands.
+- **Agency clients have their own makers, and an internal business's rooms share one folder.** An internal company or department is one business, so its rooms share one set of agents with one working folder. Agency clients do not: each is given agents of its own, in a folder of its own, because in our live check, when the makers were shared, a maker told to open decks already made read another client's deck and left the fact out by its own choice. Nothing in the code stopped it reading. Now a client's tools are also pinned to that client's brand folder, and its agents are told that other clients' folders are not theirs. That is tested in code and not yet run live, and the machine's own files are still open to an agent, so don't put real clients' confidential work on this setup as it stands.
 
 ## Tests
 
@@ -257,6 +285,8 @@ uv run pytest
 Team sprites, stickers, logos, photos and the banner were generated with Gemini on Vertex AI and then cut to a pixel grid or to size in code, as `tools/gen_assets.py` shows. They are AI-generated, not hand-drawn, and show original characters and fictional businesses. Brand stickers are recoloured from those sprites in code, and the hard hat and cup are drawn in code. The fonts are open fonts, with their licences beside them in each brand's `fonts` folder.
 
 The Kasauti Capital Partners logo is not generated. `tools/draw_kasauti_logo.py` draws it in code, in the two colours of the firm's kit, and its fonts are copies of the open fonts the other brands use.
+
+The marketing agency's three logos and the two clients' pictures are not AI-generated. They are original flat art drawn in code with Pillow, as `tools/draw_agency_art.py` shows, and drawing again gives the same files. Pictures that `generate_image` makes when `FOUNDRY_IMAGES=on` are AI-generated by the same Gemini model on Vertex AI, and each file and its record say so. The agency's fonts are DejaVu Sans Bold, Source Serif Pro, Source Sans Pro and Manrope, with their licences beside them.
 
 Speech comes from [Sarvam](https://docs.sarvam.ai/api-reference-docs/speech-to-text/transcribe): [Saaras](https://docs.sarvam.ai/api/getting-started/models/saaras) to read and Bulbul to speak.
 

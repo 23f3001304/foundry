@@ -1,4 +1,4 @@
-"""Creates both fictional clients, one department to show the internal room tree, the IT firm's four rooms and the investment firm's six. No real customer data.
+"""Creates both fictional clients, one department to show the internal room tree, the IT firm's four rooms, the investment firm's six and the marketing agency's two clients. No real customer data.
 
 uv run --env-file .env python scripts/demo_seed.py
 """
@@ -32,6 +32,9 @@ SEED = (
     ("internal", "office-c", "demo-investment-firm"),
     ("internal", "office-d", "demo-investment-firm"),
     ("internal", "office-e", "demo-investment-firm"),
+    # The agency's two clients. Each gets agents of its own, and the agency's own folder, brands/demo-agency, has no rooms.
+    ("agency", "phatakha", "demo-agency-client-a"),
+    ("agency", "ambaryug", "demo-agency-client-b"),
 )
 
 

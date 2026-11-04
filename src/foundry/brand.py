@@ -1,5 +1,6 @@
 """Loads a brand kit: front matter with the tokens, then plain guidance for the agents."""
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,8 +99,15 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
     return Brand(name, colours, fonts, voice, logo_path, guidance.strip(), style, business_type)
 
 
+PINNED = "This tool works only for the brand folder {pinned}, and {asked} is not it."
+
+
 def load_brand_dir(brand_dir: Path | str) -> Brand:
     folder = Path(brand_dir)
+    # A client's own makers are started with their client's brand folder named here, so their tools open no other client's kit, logo or picture.
+    pinned = os.environ.get("FOUNDRY_BRAND_DIR")
+    if pinned and folder.resolve() != Path(pinned).resolve():
+        raise BrandError(PINNED.format(pinned=Path(pinned).name, asked=folder.name))
     kit = folder / "kit.md"
     if not kit.exists():
         # The brand's name and not where it is kept, since this reaches pages and the makers.

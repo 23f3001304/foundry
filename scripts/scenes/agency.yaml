@@ -1,0 +1,52 @@
+# The marketing agency's campaign sets. A fictional agency with two fictional clients, and job titles for people. The people's words are scripted, and everything Foundry says back is real.
+# Both clients ask before either is answered, so two jobs run at once, each with agents of its own.
+# The Account Director works inside, in each client's studio room, where the brief and the final work wait for a yes. The clients are in their own rooms only, and never see a card.
+# Start the desk with FOUNDRY_QUIET_SECONDS=8. Picture drawing is off unless FOUNDRY_IMAGES=on, and the written copy says plainly when no pictures were drawn.
+name: agency
+# Two businesses, so brands and not brand. Neither has earlier history, because nobody in an agency scene owes anything.
+brands: [demo-agency-client-a, demo-agency-client-b]
+people:
+  Account Director: [phatakha-studio, ambaryug-studio]
+  Marketing Manager A: [phatakha]
+  Marketing Manager B: [ambaryug]
+watch: [phatakha, phatakha-studio, ambaryug, ambaryug-studio]
+steps:
+  - as: Marketing Manager A
+    room: phatakha
+    say: "We launch Phatakha Pop Mango Masala on 14 November. I need the full campaign set: a deck, a poster, social posts at 1080x1080 and 1080x1920, and written copy."
+    wait_for: {room: phatakha-studio, button: Approve, timeout: 300}
+  - as: Marketing Manager B
+    room: ambaryug
+    say: "Ambaryug Teas releases the First Flush Reserve on 21 November. I need the full campaign set: a deck, a poster, social posts at 1080x1080 and 1080x1920, and written copy."
+    wait_for: {room: ambaryug-studio, button: Approve, timeout: 300}
+  # The Account Director approves each brief inside. The clients see nothing of it.
+  - as: Account Director
+    room: phatakha-studio
+    press: Approve
+  - as: Account Director
+    room: ambaryug-studio
+    press: Approve
+  # A client who asks where the work is is told its stage, and nothing about who is doing what.
+  - as: Marketing Manager A
+    room: phatakha
+    say: "where's the campaign set?"
+    wait_for: {text: "being made", timeout: 180}
+  - as: Marketing Manager B
+    room: ambaryug
+    say: "where's the campaign set?"
+    wait_for: {text: "being made", timeout: 180}
+  # The makers made it and the reviewer passed it. The Account Director signs off each client's set, and only then does the client get it.
+  - as: Account Director
+    room: phatakha-studio
+    wait_for: {button: Approve, timeout: 2700}
+  - as: Account Director
+    room: phatakha-studio
+    press: Approve
+    wait_for: {room: phatakha, text: "Here is your final work", timeout: 180}
+  - as: Account Director
+    room: ambaryug-studio
+    wait_for: {button: Approve, timeout: 2700}
+  - as: Account Director
+    room: ambaryug-studio
+    press: Approve
+    wait_for: {room: ambaryug, text: "Here is your final work", timeout: 180}

@@ -17,11 +17,15 @@ from demo_people import load_scene, local_only, sender_id, switch_url, username
 
 
 def seed(scene: dict, log: Log, rooms: dict[str, str], bridge: str, now: datetime) -> list[Entry]:
-    bucket, history = scene["brand"], scene.get("history", [])
+    history = scene.get("history", [])
+    if not history:
+        # A scene with none, such as the agency's, has nothing to seed, and may be about more than one business.
+        return []
+    bucket = scene["brand"]
     missing = [entry["room"] for entry in history if entry["room"] not in rooms]
     if missing:
         raise SystemExit(f"These rooms don't exist yet: {', '.join(missing)}. Run scripts/demo_seed.py first.")
-    if not history or _already_seeded(log, bucket, history, now):
+    if _already_seeded(log, bucket, history, now):
         return []
     made = []
     for entry in sorted(history, key=lambda entry: entry["days_ago"], reverse=True):

@@ -240,10 +240,23 @@ def _give_up_if_room_is_gone(what: str) -> Iterator[None]:
         logger.warning("Gave up on %s: Switch refused it (%s), so its room is probably gone.", what, error.response.status_code)
 
 
+class Team(NamedTuple):
+    brief: str
+    makers: tuple[str, ...]
+    reviewer: str
+
+
+def team_named(ending: str = "") -> Team:
+    # The agents' names with a client's own ending on them, such as "-phatakha". With no ending they are the shared agents.
+    return Team(BRIEF_AGENT + ending, tuple(maker + ending for maker in MAKERS), REVIEWER + ending)
+
+
 @dataclass(frozen=True)
 class Workrooms:
     studio: str
     review: str
+    # What ends the name of each agent this client alone has. Empty when the agents are shared with other businesses.
+    agents: str = ""
 
 
 @dataclass
@@ -274,6 +287,11 @@ class Settings:
 
     def workrooms_for(self, room_id: str) -> Workrooms:
         return self.workrooms.get(room_id, Workrooms(room_id, room_id))
+
+    def team_for(self, room_id: str) -> Team:
+        # The agents of the client a room belongs to, found from its outside room or either of its inside ones. Any other room has the shared agents.
+        rooms = next((rooms for outside, rooms in self.workrooms.items() if room_id in (outside, rooms.studio, rooms.review)), None)
+        return team_named(rooms.agents if rooms else "")
 
     def inside_rooms(self) -> set[str]:
         return {room for rooms in self.workrooms.values() for room in (rooms.studio, rooms.review)}
@@ -320,9 +338,9 @@ class Settings:
 
 
 def _rooms_from(text: str) -> dict[str, Workrooms]:
-    # outside:studio:review, comma-separated. Internal mode names its projects room twice.
+    # outside:studio:review[:ending], comma-separated. Internal mode names its projects room twice. An agency client's agents carry its ending, such as -phatakha.
     parts = [entry.strip().split(":") for entry in text.split(",") if entry.strip()]
-    return {outside: Workrooms(studio, review) for outside, studio, review in parts}
+    return {outside: Workrooms(studio, review, *ending) for outside, studio, review, *ending in parts}
 
 
 def _named_brands(text: str) -> dict[str, str]:
@@ -436,12 +454,14 @@ class Desk:
         if match is None:
             return
         marker, tag, text = match.group(1), match.group(2), (match.group(3) or "").strip()
+        # The agents of the client whose room this came from, and no other client's.
+        team = self.settings.team_for(event["room_id"])
         owners, state, room_kind = {
-            BRIEF_READY: ((BRIEF_AGENT,), State.RECEIVED, "studio"),
-            WORK_READY: (MAKERS, State.MAKING, "studio"),
-            WORK_BLOCKED: (MAKERS, State.MAKING, "studio"),
-            REVIEW_PASS: ((REVIEWER,), State.REVIEWING, "review"),
-            REVIEW_FAIL: ((REVIEWER,), State.REVIEWING, "review"),
+            BRIEF_READY: ((team.brief,), State.RECEIVED, "studio"),
+            WORK_READY: (team.makers, State.MAKING, "studio"),
+            WORK_BLOCKED: (team.makers, State.MAKING, "studio"),
+            REVIEW_PASS: ((team.reviewer,), State.REVIEWING, "review"),
+            REVIEW_FAIL: ((team.reviewer,), State.REVIEWING, "review"),
         }[marker]
         agent = payload["sender_name"]
         if agent not in owners:
@@ -564,13 +584,14 @@ class Desk:
         return job.room_id if job.approver == job.requester else self.settings.workrooms_for(job.room_id).studio
 
     def _ask_makers(self, job: Job, retry: bool = False) -> None:
-        job.artifacts, job.waiting_on = [], list(MAKERS)
+        makers = self.settings.team_for(job.room_id).makers
+        job.artifacts, job.waiting_on = [], list(makers)
         job.asked_at = self.clock().isoformat()
         # The brief in this ask has any fix the sender gave, so none is left waiting.
         job.pending_fix = ""
         tag = job.id[:6]
         lines = [
-            f"{' '.join(f'@{maker}' for maker in MAKERS)} Job #{tag}. Make your part of what this approved brief asks for.",
+            f"{' '.join(f'@{maker}' for maker in makers)} Job #{tag}. Make your part of what this approved brief asks for.",
             *self._log_lines(job),
             f"When you finish, start your reply with {WORK_READY} #{tag}, then the absolute path of each file on its own line. If the brief needs nothing from you, reply with {WORK_READY} #{tag} alone.",
             f"Brief:\n{quiet(job.brief)}",
@@ -590,7 +611,7 @@ class Desk:
         last_round = f"Changes asked for last round:\n{quiet(job.revision_notes)}\n\n" if job.revision_notes else ""
         self.client.post_message(
             self.settings.workrooms_for(job.room_id).review,
-            f"@{REVIEWER} Job #{tag}. Check this work against the approved brief and the brand kit.\n\n"
+            f"@{self.settings.team_for(job.room_id).reviewer} Job #{tag}. Check this work against the approved brief and the brand kit.\n\n"
             f"Start your reply with {REVIEW_PASS} #{tag} if it meets both, or with {REVIEW_FAIL} #{tag}, then notes a maker can act on.\n\n"
             f"Brief:\n{quiet(job.brief)}\n\n{last_round}Files:\n{files}{self._inputs_for(job)}",
         )
@@ -1430,7 +1451,7 @@ class Desk:
         # The request in this ask has any fix the sender gave, so none is left waiting. One that was is not a reason to throw this draft away.
         job.pending_fix = ""
         lines = [
-            f"@{BRIEF_AGENT} Job #{job.id[:6]}. Draft a brief for this request. Start your reply with {BRIEF_READY} #{job.id[:6]}, then the brief.",
+            f"@{self.settings.team_for(job.room_id).brief} Job #{job.id[:6]}. Draft a brief for this request. Start your reply with {BRIEF_READY} #{job.id[:6]}, then the brief.",
             f"Request:\n{quiet(job.brief)}",
             f"Recent room messages:\n{quiet(self.client.read_context(job.room_id))}",
         ]

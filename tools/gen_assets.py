@@ -145,7 +145,8 @@ def token() -> str:
     ).stdout.strip()
 
 
-def generate(name: str, spec: dict, project: str, bearer: str) -> Path:
+def request_image(name: str, spec: dict, project: str, bearer: str) -> bytes:
+    """The Vertex call: the picture the model draws for a spec, as bytes. foundry.tools.image_server makes this same call."""
     parts = [{"text": spec["prompt"]}]
     for ref in spec.get("refs", []):
         data = base64.b64encode((RAW / f"{ref}.png").read_bytes()).decode()
@@ -179,11 +180,16 @@ def generate(name: str, spec: dict, project: str, bearer: str) -> Path:
     print(f"{name}: tokens {reply.get('usageMetadata', {}).get('totalTokenCount')}, model {reply.get('modelVersion')}")
     for part in reply["candidates"][0]["content"]["parts"]:
         if "inlineData" in part:
-            RAW.mkdir(parents=True, exist_ok=True)
-            path = RAW / f"{name}.png"
-            path.write_bytes(base64.b64decode(part["inlineData"]["data"]))
-            return path
+            return base64.b64decode(part["inlineData"]["data"])
     raise RuntimeError(f"{name}: no image returned: {json.dumps(reply)[:400]}")
+
+
+def generate(name: str, spec: dict, project: str, bearer: str) -> Path:
+    data = request_image(name, spec, project, bearer)
+    RAW.mkdir(parents=True, exist_ok=True)
+    path = RAW / f"{name}.png"
+    path.write_bytes(data)
+    return path
 
 
 def cut_logo(image: Image.Image) -> Image.Image:
