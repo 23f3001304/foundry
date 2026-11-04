@@ -278,8 +278,8 @@ def _join(names: list[str], word: str = "or") -> str:
 
 
 def _said_why(item: Item) -> str:
-    # The kit asks for the reason in the person's own words, and the reviewer has no log to find it in.
-    return SAID_WHY.format(reason=quiet(_one_line(item.reason))) if item.reason else ""
+    # The kit asks for the reason in the person's own words, and the reviewer has no log to find it in. A button on a reminder card is the card's words, and a client should never read them.
+    return SAID_WHY.format(reason=quiet(_one_line(item.reason))) if item.reason and item.reason not in REMINDER_CHOICES else ""
 
 
 def _names_another(reading: Reading, candidates: list[Item]) -> bool:
