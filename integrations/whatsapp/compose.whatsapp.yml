@@ -1,0 +1,8 @@
+# Loads the WhatsApp adapter into Switch's published image, from a Switch checkout with switch-whatsapp.patch applied.
+services:
+  switch:
+    environment:
+      MESSAGING_PUBLIC_URL: ${MESSAGING_PUBLIC_URL:?set it in Switch's .env to the public https address Meta can reach}
+    volumes:
+      - ./core/switch_core/bridges/collaboration/whatsapp:/app/switch_core/bridges/collaboration/whatsapp:ro
+      - ./core/switch_core/bridges/collaboration/platforms.py:/app/switch_core/bridges/collaboration/platforms.py:ro

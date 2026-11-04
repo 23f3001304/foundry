@@ -23,6 +23,7 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe and Sh
 | Request, brief, approval, deck and poster, review, sign-off, delivery | Run live on Mattermost with real agents |
 | Review notes staying out of the outside room | Checked in that run |
 | Note clean-up: question, answer, sign-off, report in both rooms | Run live on Mattermost |
+| A question with its answers on a card, when the sources list them | Run live on Mattermost by typing the answer, and on WhatsApp against the stand-in by pressing |
 | The builder's example note and three harder ones | Run on a real model, correct on Sonnet in two runs |
 | Stuck job, 30-minute timeout, restart with a person's go-ahead | Run live on Mattermost |
 | These steps from a fresh clone on a wiped Switch stack | Run by the author up to the makers and through the note clean-up. Not yet run by a teammate |
@@ -30,7 +31,8 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe and Sh
 | Voice notes and voice replies | Tested against a fake Sarvam only, no key yet |
 | Telegram, and an outside person answering there | Not run, needs a bot token |
 | Slack, Discord, Teams | Not run, so not claimed |
-| WhatsApp | Not built |
+| WhatsApp cards: buttons, list, typed answer, sign-off, changes, delivery | Run through a real Switch and the desk against a local stand-in for Meta's API, with made-up credentials. Not run on Meta's real API, which needs a Meta app and a public address |
+| WhatsApp voice notes and incoming files | Not run |
 | Classifier through an Anthropic API key | Not run. The Claude Code login route has been run |
 
 ## How a job moves
@@ -72,6 +74,8 @@ A report skips the brief and the makers. The desk writes it from the note, asks 
 | Reading all chat without being mentioned | Agent event stream with `filter=all` |
 | Who may ask and who may answer | Agent addressing policies, then Foundry's own check in `gates.py` |
 | Approvals with buttons | Approval cards on an agent session |
+| Questions with their answers as choices | Question cards on an agent session |
+| Notes and answers on WhatsApp | The open adapter from sandbox-quantum/switch#1166 with our button and list cards, in `integrations/whatsapp` |
 | Brand kit and business pack | Room documents, in the inside rooms only |
 | Deck and graphic tools | MCP servers in each maker's `.mcp.json` |
 | Sending files and stickers | Room media route |
@@ -189,6 +193,7 @@ The contact sheet lists two electricians at Palm Court, so the desk asks which o
 - **Voice:** set `SARVAM_API_KEY`. Voice notes over 30 seconds get a request to resend or type, which is the limit of Sarvam's REST route. Sarvam charges per call.
 - **Classifier:** with no `ANTHROPIC_API_KEY`, Foundry uses this machine's Claude Code login.
 - **Old databases:** the job and buffer files aren't migrated between versions. Delete `foundry-*.db` after pulling changes.
+- **WhatsApp:** optional, and it changes Switch's code in your own deployment. See [integrations/whatsapp](integrations/whatsapp/README.md).
 - **A fresh Switch stack** gives clean channel names. Deleting a room leaves its Mattermost channel behind, and a new room with that name gets a suffix.
 
 ## Tests
@@ -203,4 +208,4 @@ Team sprites, stickers, logos, photos and the banner were generated with Gemini 
 
 Speech comes from [Sarvam](https://docs.sarvam.ai/api-reference-docs/speech-to-text/transcribe): [Saaras](https://docs.sarvam.ai/api/getting-started/models/saaras) to read and Bulbul to speak.
 
-WhatsApp is not in this build. If it's added, the plan is to reuse Prakhar Gupta's open pull request, [sandbox-quantum/switch#1166](https://github.com/sandbox-quantum/switch/pull/1166), rather than write another adapter. That needs a change to Switch's core, and it would be shown on video only, because it needs a Meta app and a public address.
+The WhatsApp adapter is Prakhar Gupta's open pull request to Switch, [sandbox-quantum/switch#1166](https://github.com/sandbox-quantum/switch/pull/1166). We built on it and added reply buttons and lists for Switch's request cards. `integrations/whatsapp` holds their commits under their name, our commits on top, and Switch's licence and notice. It changes Switch's core code in a local deployment, and it needs a Meta app and a public address to run for real.

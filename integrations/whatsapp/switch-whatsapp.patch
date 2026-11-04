@@ -1,0 +1,4650 @@
+From 2b3581865c38d64c79f7f8649085ff3cf7849efd Mon Sep 17 00:00:00 2001
+From: Prakharrdev <prakhar06.work@gmail.com>
+Date: Thu, 29 Oct 2026 15:15:36 +0530
+Subject: [PATCH 1/4] Add WhatsApp as a messaging platform
+
+A collaboration-bridge adapter on the WhatsApp Business Cloud API, using
+the operator's own Meta app and phone number. Inbound arrives on the
+connection's own webhook address, signed with the app secret and
+deduplicated by wamid. Outbound goes through the Graph API (v26.0),
+covering text split at 4096 characters, quoting for threads, native
+media within WhatsApp's limits, and a reaction plus typing indicator
+while an agent works.
+
+What WhatsApp cannot do is declared on the adapter and in
+docs/messaging-platforms/whatsapp.md: the 24-hour window (no
+templates), no edits or deletes, 1:1 only, no channel creation and no
+directory search.
+
+Closes #789
+---
+ .../bridges/collaboration/platforms.py        |    5 +
+ .../collaboration/whatsapp/__init__.py        |    0
+ .../bridges/collaboration/whatsapp/adapter.py | 1101 ++++++++++++++++
+ .../collaboration/whatsapp/chunking.py        |   65 +
+ .../bridges/collaboration/whatsapp/client.py  |  219 +++
+ .../collaboration/whatsapp/formatting.py      |  113 ++
+ .../bridges/collaboration/whatsapp/icon.svg   |    3 +
+ .../collaboration/test_whatsapp_adapter.py    | 1171 +++++++++++++++++
+ .../collaboration/test_whatsapp_markup.py     |  133 ++
+ .../test_whatsapp_webhook_route.py            |  189 +++
+ docs/messaging-platforms/whatsapp.md          |  164 +++
+ 11 files changed, 3163 insertions(+)
+ create mode 100644 core/switch_core/bridges/collaboration/whatsapp/__init__.py
+ create mode 100644 core/switch_core/bridges/collaboration/whatsapp/adapter.py
+ create mode 100644 core/switch_core/bridges/collaboration/whatsapp/chunking.py
+ create mode 100644 core/switch_core/bridges/collaboration/whatsapp/client.py
+ create mode 100644 core/switch_core/bridges/collaboration/whatsapp/formatting.py
+ create mode 100644 core/switch_core/bridges/collaboration/whatsapp/icon.svg
+ create mode 100644 core/tests/switch_core/bridges/collaboration/test_whatsapp_adapter.py
+ create mode 100644 core/tests/switch_core/bridges/collaboration/test_whatsapp_markup.py
+ create mode 100644 core/tests/switch_core/bridges/collaboration/test_whatsapp_webhook_route.py
+ create mode 100644 docs/messaging-platforms/whatsapp.md
+
+diff --git a/core/switch_core/bridges/collaboration/platforms.py b/core/switch_core/bridges/collaboration/platforms.py
+index dc8661ff..aa22b3cf 100644
+--- a/core/switch_core/bridges/collaboration/platforms.py
++++ b/core/switch_core/bridges/collaboration/platforms.py
+@@ -32,6 +32,10 @@ from switch_core.bridges.collaboration.telegram.adapter import (
+     TelegramAdapter,
+     TelegramConnectionConfig,
+ )
++from switch_core.bridges.collaboration.whatsapp.adapter import (
++    WhatsAppAdapter,
++    WhatsAppConnectionConfig,
++)
+ 
+ if TYPE_CHECKING:
+     from switch_core.bridges.collaboration.lifecycle_service import (
+@@ -53,6 +57,7 @@ PLATFORMS: tuple[PlatformRegistration, ...] = (
+     PlatformRegistration("teams", TeamsAdapter, TeamsConnectionConfig),
+     PlatformRegistration("discord", DiscordAdapter, DiscordConnectionConfig),
+     PlatformRegistration("telegram", TelegramAdapter, TelegramConnectionConfig),
++    PlatformRegistration("whatsapp", WhatsAppAdapter, WhatsAppConnectionConfig),
+ )
+ 
+ 
+diff --git a/core/switch_core/bridges/collaboration/whatsapp/__init__.py b/core/switch_core/bridges/collaboration/whatsapp/__init__.py
+new file mode 100644
+index 00000000..e69de29b
+diff --git a/core/switch_core/bridges/collaboration/whatsapp/adapter.py b/core/switch_core/bridges/collaboration/whatsapp/adapter.py
+new file mode 100644
+index 00000000..bf9febc4
+--- /dev/null
++++ b/core/switch_core/bridges/collaboration/whatsapp/adapter.py
+@@ -0,0 +1,1101 @@
++from __future__ import annotations
++
++import hashlib
++import hmac
++import json
++import logging
++import mimetypes
++from collections.abc import Awaitable, Callable
++from typing import Any, ClassVar
++
++import httpx
++from pydantic import Field, ValidationInfo, field_validator
++
++from switch_core.bridges.collaboration.adapter import (
++    ActivityMark,
++    ActivityMarkRefused,
++    AgentIdentity,
++    PlatformAdapter,
++    RichContent,
++    RichContentFailed,
++    TurnActivity,
++)
++from switch_core.bridges.collaboration.install import (
++    InboundWebhook,
++    WebhookAuthenticityError,
++    WebhookPayloadError,
++    WebhookRequest,
++)
++from switch_core.bridges.collaboration.models import (
++    Attachment,
++    AttachmentFailure,
++    BridgeConnectionConfig,
++    BridgeCredentialError,
++    BridgeOperationError,
++    ChannelCreationUnsupported,
++    ChannelType,
++    FailureReason,
++    InboundAgentJoin,
++    InboundAppJoin,
++    InboundCommand,
++    InboundMessage,
++    InboundUserJoin,
++)
++from switch_core.bridges.collaboration.session.renderers import Markup
++from switch_core.bridges.collaboration.session.renderers.neutral import turn_status
++from switch_core.bridges.collaboration.whatsapp.chunking import (
++    MAX_CAPTION,
++    MAX_MESSAGE,
++    chunk_message,
++)
++from switch_core.bridges.collaboration.whatsapp.client import (
++    REENGAGEMENT_REQUIRED,
++    TOKEN_INVALID,
++    MediaTooLarge,
++    WhatsAppGraphClient,
++    WhatsAppGraphError,
++)
++from switch_core.bridges.collaboration.whatsapp.formatting import (
++    to_markdown,
++    to_whatsapp,
++)
++
++logger = logging.getLogger(__name__)
++
++SIGNATURE_HEADER = "x-hub-signature-256"
++
++#: Said wherever a reply is refused for the 24-hour customer-service window.
++WINDOW_CLOSED = (
++    "WhatsApp refused this reply: a business can only send free-form messages "
++    "within 24 hours of the person's last message to it, and their last "
++    "message is older than that. It will go through once they write again. "
++    "Switch does not send WhatsApp template messages, which are the only thing "
++    "WhatsApp allows outside that window."
++)
++
++# The Cloud API's media limits, by the message type a file is sent as. A type
++# WhatsApp does not play inline is sent as a document, which carries any file.
++_IMAGE_TYPES = frozenset({"image/jpeg", "image/png"})
++_AUDIO_TYPES = frozenset(
++    {"audio/aac", "audio/amr", "audio/mpeg", "audio/mp4", "audio/ogg"}
++)
++_VIDEO_TYPES = frozenset({"video/mp4", "video/3gpp"})
++MAX_IMAGE_BYTES = 5 * 1024 * 1024
++MAX_AUDIO_BYTES = 16 * 1024 * 1024
++MAX_VIDEO_BYTES = 16 * 1024 * 1024
++MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
++
++_MEDIA_TYPES = ("image", "video", "audio", "document", "sticker")
++
++# Marks the message an agent is working on, as Slack and Telegram do.
++_WORKING_REACTION = "\U0001f440"
++
++_TURN_REF_PREFIX = "turn:"
++
++
++def _media_kind(mimetype: str) -> tuple[str, int]:
++    """The message type a file goes out as, and WhatsApp's size limit for it."""
++    if mimetype in _IMAGE_TYPES:
++        return "image", MAX_IMAGE_BYTES
++    if mimetype in _AUDIO_TYPES:
++        return "audio", MAX_AUDIO_BYTES
++    if mimetype in _VIDEO_TYPES:
++        return "video", MAX_VIDEO_BYTES
++    return "document", MAX_DOCUMENT_BYTES
++
++
++def _megabytes(size: int) -> str:
++    return f"{size / (1024 * 1024):.1f} MB"
++
++
++def sign(app_secret: str, body: bytes) -> str:
++    """What Meta puts in `SIGNATURE_HEADER` for a webhook body."""
++    digest = hmac.new(app_secret.encode(), body, hashlib.sha256).hexdigest()
++    return f"sha256={digest}"
++
++
++def appsecret_proof(app_secret: str, access_token: str) -> str:
++    """The access token signed with the app secret, as Graph checks it."""
++    return hmac.new(
++        app_secret.encode(), access_token.encode(), hashlib.sha256
++    ).hexdigest()
++
++
++class _WhatsAppMarkup(Markup):
++    """WhatsApp's spelling of the marks a card makes: one star for bold, and a
++    code span that cannot be fenced longer, so a literal holding a backtick
++    goes out as plain text."""
++
++    def bold(self, text: str) -> str:
++        return f"*{text}*"
++
++    def code(self, text: str) -> str:
++        return text if "`" in text else f"`{text}`"
++
++
++WHATSAPP_MARKUP = _WhatsAppMarkup()
++
++
++class WhatsAppConnectionConfig(BridgeConnectionConfig):
++    access_token: str = Field(
++        title="Access token",
++        description=(
++            "A permanent token for a system user of your Meta business, with "
++            "the whatsapp_business_messaging and whatsapp_business_management "
++            "permissions. Business settings → Users → System users → Generate "
++            "new token. The temporary token on the app's API Setup page also "
++            "works, but expires after 24 hours."
++        ),
++    )
++    phone_number_id: str = Field(
++        title="Phone number ID",
++        description=(
++            "The numeric ID of the business phone number, not the number "
++            "itself. App dashboard → WhatsApp → API Setup, under the 'From' "
++            "number."
++        ),
++    )
++    app_secret: str = Field(
++        title="App secret",
++        description=(
++            "Meta signs every webhook with it, and Switch refuses a webhook "
++            "that is not signed with it. App dashboard → App settings → Basic "
++            "→ App secret."
++        ),
++    )
++    verify_token: str = Field(
++        title="Verify token",
++        description=(
++            "Any string you choose. Enter the same string as the Verify token "
++            "in the app's WhatsApp → Configuration → Webhook settings; Meta "
++            "sends it back when it checks the webhook address."
++        ),
++    )
++
++    @field_validator("access_token", "phone_number_id", "app_secret", "verify_token")
++    @classmethod
++    def _not_blank(cls, value: str, info: ValidationInfo) -> str:
++        stripped = value.strip()
++        if not stripped:
++            raise ValueError(f"{info.field_name} is empty.")
++        return stripped
++
++    @field_validator("phone_number_id")
++    @classmethod
++    def _numeric_id(cls, value: str) -> str:
++        if not value.isdigit():
++            raise ValueError(
++                "phone_number_id is the numeric ID shown under the 'From' "
++                "number on the app's WhatsApp → API Setup page, not the phone "
++                "number itself."
++            )
++        return value
++
++
++class WhatsAppAdapter(PlatformAdapter):
++    """WhatsApp collaboration bridge adapter, on the WhatsApp Business Cloud API.
++
++    One business phone number, on the operator's own Meta app. Every chat is
++    one person writing to that number: WhatsApp gives a business no way to
++    start a chat or create a group from the API, so a chat's room is made when
++    the person first writes. Group messages are not bridged.
++
++    Single identity: every agent posts as the business number, which WhatsApp
++    shows under the business profile's name, so the agent's name is written at
++    the head of each message as Telegram's adapter does.
++
++    Inbound arrives by webhook on this connection's own address, proved by an
++    HMAC of the body under the app secret; Meta first checks the address with
++    a GET carrying the verify token. Outbound goes through the Graph API.
++
++    What WhatsApp cannot do, and what happens instead:
++
++    - No threads. A reply sent under a thread quotes the message it answers,
++      and a person's quote-reply arrives with the quoted message as its root.
++    - No edits or deletes of a sent message, so a turn is not drawn as a
++      message at all: the person sees a 👀 reaction and the typing indicator
++      on their message while the agent works, then the agent's reply. A
++      request card is posted once and not redrawn when it is answered.
++    - Free-form replies only within 24 hours of the person's last message.
++      Outside it WhatsApp refuses the send, and the refusal says why.
++    """
++
++    display_name: ClassVar[str] = "WhatsApp"
++    docs_slug: ClassVar[str | None] = None
++    receives_webhooks: ClassVar[bool] = True
++    # The person starts the chat; a business cannot.
++    supports_channel_creation: ClassVar[bool] = False
++    # The business only knows the people who have written to it.
++    supports_directory_search: ClassVar[bool] = False
++    # WhatsApp links only a bare http(s) URL.
++    renders_custom_url_schemes: ClassVar[bool] = False
++
++    draws_session_activity: ClassVar[bool] = True
++
++    #: A problem somebody has to act on gets its own message, because no
++    #: message here can be edited to say so.
++    separate_attention_slot: ClassVar[bool] = True
++
++    #: Every chat is one person and the business, and every message notifies.
++    notifies_only_by_mention: ClassVar[bool] = False
++    every_message_notifies_members: ClassVar[bool] = True
++
++    supports_activity_reactions: ClassVar[bool] = True
++
++    #: Every agent reacts as the one business number.
++    activity_reactions_per_agent: ClassVar[bool] = False
++
++    def __init__(self, *, config: WhatsAppConnectionConfig) -> None:
++        super().__init__()
++        self._config = config
++        self._http = httpx.AsyncClient(timeout=30)
++        self._client = WhatsAppGraphClient(
++            http=self._http,
++            access_token=config.access_token,
++            phone_number_id=config.phone_number_id,
++        )
++
++    # ── Declarations ─────────────────────────────────────────────────────────
++
++    @classmethod
++    def claimed_workspace(cls, connection_config: dict[str, object]) -> str | None:
++        """One business number is connected at most once: Meta delivers its
++        events to one address, so a second bridge on it would hear nothing."""
++        return f"WhatsApp phone number {connection_config['phone_number_id']}"
++
++    @classmethod
++    async def verify_credentials(cls, connection_config: dict[str, object]) -> None:
++        """Read the phone number back with the token, proved with the app secret.
++
++        One call checks three of the four fields: the token is accepted, it
++        reaches this phone number, and the app secret is the app's own. The
++        verify token is checked by Meta itself, when the address is saved.
++        """
++        config = WhatsAppConnectionConfig.model_validate(connection_config)
++        async with httpx.AsyncClient(timeout=30) as http:
++            client = WhatsAppGraphClient(
++                http=http,
++                access_token=config.access_token,
++                phone_number_id=config.phone_number_id,
++            )
++            try:
++                await client.phone_number(
++                    appsecret_proof=appsecret_proof(
++                        config.app_secret, config.access_token
++                    )
++                )
++            except WhatsAppGraphError as exc:
++                raise BridgeCredentialError(
++                    f"WhatsApp refused these credentials: {exc}. Check the "
++                    "access token, the phone number ID and the app secret "
++                    "against your Meta app."
++                ) from exc
++            except httpx.RequestError as exc:
++                raise BridgeCredentialError(
++                    "Could not reach the WhatsApp Graph API to check the "
++                    f"credentials: {exc!r}. Try again."
++                ) from exc
++
++    @classmethod
++    def classify_failure(cls, exc: BaseException) -> FailureReason | None:
++        if isinstance(exc, WhatsAppGraphError):
++            if exc.code == TOKEN_INVALID or exc.status == 401:
++                return "auth_failed"
++            return "platform_error"
++        if isinstance(exc, httpx.RequestError):
++            return "network"
++        return None
++
++    # ── Lifecycle ────────────────────────────────────────────────────────────
++
++    async def start(
++        self,
++        on_message: Callable[[InboundMessage], Awaitable[None]],
++        on_command: Callable[[InboundCommand], Awaitable[None]],
++        on_agent_joined: Callable[[InboundAgentJoin], Awaitable[None]],
++        on_user_joined: Callable[[InboundUserJoin], Awaitable[None]],
++        on_app_joined: Callable[[InboundAppJoin], Awaitable[None]],
++    ) -> None:
++        """Opens nothing: WhatsApp delivers every event to the webhook address."""
++        if self.webhook_url is None:
++            raise BridgeOperationError(
++                "This deployment has no public https address "
++                "(MESSAGING_PUBLIC_URL), so Meta has nowhere to deliver "
++                "WhatsApp messages and none could ever arrive. Set it, then "
++                "start the connection again."
++            )
++        self._on_message = on_message
++        self._on_command = on_command
++        self._on_agent_joined = on_agent_joined
++        self._on_user_joined = on_user_joined
++        self._on_app_joined = on_app_joined
++
++    async def stop(self) -> None:
++        await self._http.aclose()
++
++    # ── Webhooks ─────────────────────────────────────────────────────────────
++
++    async def verify_webhook(self, request: WebhookRequest) -> None:
++        if request.method == "GET":
++            mode = request.query.get("hub.mode", "")
++            token = request.query.get("hub.verify_token", "")
++            if mode != "subscribe" or not hmac.compare_digest(
++                token.encode(), self._config.verify_token.encode()
++            ):
++                raise WebhookAuthenticityError(
++                    "The address check did not carry this connection's verify token"
++                )
++            return
++        if request.method != "POST":
++            raise WebhookAuthenticityError(
++                f"WhatsApp delivers by GET and POST, not {request.method}"
++            )
++        given = request.headers.get(SIGNATURE_HEADER, "")
++        if not given.startswith("sha256="):
++            raise WebhookAuthenticityError("The request carries no sha256 signature")
++        expected = sign(self._config.app_secret, request.body)
++        if not hmac.compare_digest(given.encode(), expected.encode()):
++            raise WebhookAuthenticityError(
++                "The signature does not match this connection's app secret"
++            )
++
++    def parse_webhook(self, request: WebhookRequest) -> InboundWebhook:
++        if request.method == "GET":
++            challenge = request.query.get("hub.challenge")
++            if not challenge:
++                raise WebhookPayloadError("The address check carries no hub.challenge")
++            return InboundWebhook(
++                envelope_type="address_check",
++                payload={},
++                handshake=challenge,
++                external_event_id=None,
++                delivery_attempt=0,
++                answers_inline=False,
++            )
++        try:
++            payload = json.loads(request.body)
++        except ValueError as exc:
++            raise WebhookPayloadError("The webhook body is not JSON") from exc
++        values = _change_values(payload)
++        messages = [m for v in values for m in v.get("messages") or []]
++        statuses = [s for v in values for s in v.get("statuses") or []]
++        errors = [e for v in values for e in v.get("errors") or []]
++        if messages:
++            envelope_type = "message"
++            event_id = _required_str(messages[0], "id", "message")
++        elif statuses:
++            envelope_type = "status"
++            event_id = (
++                f"{_required_str(statuses[0], 'id', 'status')}:"
++                f"{_required_str(statuses[0], 'status', 'status')}"
++            )
++        elif errors:
++            envelope_type = "error"
++            event_id = None
++        else:
++            envelope_type = "unhandled"
++            event_id = None
++        return InboundWebhook(
++            envelope_type=envelope_type,
++            payload=payload,
++            handshake=None,
++            external_event_id=event_id,
++            delivery_attempt=0,
++            answers_inline=False,
++        )
++
++    async def dispatch_event(
++        self, *, envelope_type: str, payload: dict[str, Any]
++    ) -> None:
++        """Relay the messages a webhook carries and log its statuses and errors.
++
++        A webhook for a field this bridge does not read is answered and
++        ignored with a warning rather than refused: Meta retries a refused
++        delivery for days, and the retries would say nothing new.
++        """
++        if envelope_type == "unhandled":
++            logger.warning(
++                "Ignoring a WhatsApp webhook with no messages, statuses or "
++                "errors (fields: %s). Switch reads only the 'messages' webhook "
++                "field; unsubscribe the Meta app from any other.",
++                ", ".join(_change_fields(payload)),
++            )
++            return
++        for value in _change_values(payload):
++            metadata = value.get("metadata") or {}
++            if str(metadata.get("phone_number_id")) != self._config.phone_number_id:
++                logger.warning(
++                    "Ignoring a WhatsApp event for phone number %s on the "
++                    "connection for %s. The Meta app delivers several numbers' "
++                    "events to this address; connect each on its own app.",
++                    metadata.get("phone_number_id"),
++                    self._config.phone_number_id,
++                )
++                continue
++            for error in value.get("errors") or []:
++                logger.error("WhatsApp reported an error: %s", _describe_error(error))
++            for status in value.get("statuses") or []:
++                self._log_status(status)
++            business_number = _digits(str(metadata.get("display_phone_number", "")))
++            contacts = value.get("contacts") or []
++            for message in value.get("messages") or []:
++                await self._dispatch_message(message, contacts, business_number)
++
++    def _log_status(self, status: dict[str, Any]) -> None:
++        """Say when WhatsApp could not deliver something this bridge sent.
++
++        WhatsApp often accepts a send and refuses it afterwards, in a status
++        callback. The room has no message to attach that to, so it is said
++        here, at error, with WhatsApp's reason.
++        """
++        if status.get("status") != "failed":
++            logger.debug(
++                "WhatsApp message %s is %s", status.get("id"), status.get("status")
++            )
++            return
++        recipient = status.get("recipient_user_id") or status.get("recipient_id")
++        for error in status.get("errors") or [{}]:
++            if error.get("code") == REENGAGEMENT_REQUIRED:
++                logger.error(
++                    "WhatsApp message %s to %s was not delivered. %s",
++                    status.get("id"),
++                    recipient,
++                    WINDOW_CLOSED,
++                )
++                continue
++            logger.error(
++                "WhatsApp message %s to %s was not delivered: %s",
++                status.get("id"),
++                recipient,
++                _describe_error(error),
++            )
++
++    async def _dispatch_message(
++        self,
++        message: dict[str, Any],
++        contacts: list[dict[str, Any]],
++        business_number: str,
++    ) -> None:
++        sender = message.get("from_user_id") or message.get("from")
++        wamid = message.get("id")
++        if not sender or not wamid:
++            logger.warning(
++                "Ignoring a WhatsApp message with no sender or id (type %s)",
++                message.get("type"),
++            )
++            return
++        sender = str(sender)
++        if message.get("group_id"):
++            logger.warning(
++                "Ignoring WhatsApp message %s from a group: this bridge relays "
++                "one-to-one chats with the business number only.",
++                wamid,
++            )
++            return
++        if business_number and _digits(str(message.get("from", ""))) == (
++            business_number
++        ):
++            return
++        kind = str(message.get("type", ""))
++        if kind in ("reaction", "system", "request_welcome"):
++            logger.debug("Not relaying WhatsApp %s message %s", kind, wamid)
++            return
++
++        profile_name = _profile_name(contacts, message)
++        sender_name = _handle(profile_name, sender)
++        root_id = (message.get("context") or {}).get("id")
++        text = self._text_of(message, kind)
++
++        if kind == "text" and text.strip().startswith("!"):
++            parsed = _parse_command(text.strip())
++            if parsed is not None and self._on_command is not None:
++                name, args = parsed
++                await self._on_command(
++                    InboundCommand(
++                        channel_id=sender,
++                        channel_type="direct",
++                        sender_id=sender,
++                        sender_name=sender_name,
++                        command=name,
++                        args=args,
++                        message_ref=str(wamid),
++                        root_id=str(root_id) if root_id else None,
++                        channel_name=profile_name,
++                    )
++                )
++                await self._mark_read(str(wamid), typing=False)
++                return
++
++        if self._on_message is None:
++            logger.error(
++                "WhatsApp message %s arrived before the bridge started; it is "
++                "not relayed.",
++                wamid,
++            )
++            return
++        attachments, failures = await self._fetch_attachments(message, kind)
++        await self._on_message(
++            InboundMessage(
++                channel_id=sender,
++                channel_type="direct",
++                sender_id=sender,
++                sender_name=sender_name,
++                content=text,
++                message_ref=str(wamid),
++                root_id=str(root_id) if root_id else None,
++                channel_name=profile_name,
++                attachments=attachments,
++                attachment_failures=failures,
++            )
++        )
++        await self._mark_read(str(wamid), typing=False)
++
++    def _text_of(self, message: dict[str, Any], kind: str) -> str:
++        """What a message says, in WhatsApp's markup as the person wrote it;
++        the bridge core reads it as Markdown with `translate_inbound`.
++
++        A kind with no text of its own is described in words rather than
++        dropped, so the room always sees that the person sent something.
++        """
++        if kind == "text":
++            return str((message.get("text") or {}).get("body", ""))
++        if kind in _MEDIA_TYPES:
++            return str((message.get(kind) or {}).get("caption", ""))
++        if kind == "location":
++            location = message.get("location") or {}
++            place = ", ".join(
++                str(part)
++                for part in (location.get("name"), location.get("address"))
++                if part
++            )
++            coordinates = f"{location.get('latitude')},{location.get('longitude')}"
++            return (
++                f"_shared a location: {place + ' ' if place else ''}"
++                f"https://maps.google.com/?q={coordinates}_"
++            )
++        if kind == "contacts":
++            names = [
++                str((card.get("name") or {}).get("formatted_name", "a contact"))
++                for card in message.get("contacts") or []
++            ]
++            return f"_shared contact cards: {', '.join(names) or 'none readable'}_"
++        if kind == "interactive":
++            interactive = message.get("interactive") or {}
++            reply = interactive.get("button_reply") or interactive.get("list_reply")
++            if isinstance(reply, dict) and reply.get("title"):
++                return str(reply["title"])
++        if kind == "button":
++            button = message.get("button") or {}
++            if button.get("text"):
++                return str(button["text"])
++        if kind == "unsupported":
++            reason = "; ".join(
++                _describe_error(error) for error in message.get("errors") or []
++            )
++            return (
++                "_sent a message WhatsApp does not deliver to businesses"
++                f"{': ' + reason if reason else ''}_"
++            )
++        logger.warning(
++            "WhatsApp message %s is a %r message, which this bridge cannot read",
++            message.get("id"),
++            kind,
++        )
++        return f"_sent a WhatsApp {kind or 'unknown'} message that Switch cannot show_"
++
++    async def _fetch_attachments(
++        self, message: dict[str, Any], kind: str
++    ) -> tuple[list[Attachment], list[AttachmentFailure]]:
++        """Download a message's file, or say why it could not be relayed.
++
++        Two steps, as the Cloud API has it: the media id gives a short-lived
++        URL, and the URL gives the bytes, both with the access token."""
++        if kind not in _MEDIA_TYPES:
++            return [], []
++        media = message.get(kind) or {}
++        media_id = media.get("id")
++        mimetype = str(media.get("mime_type") or "application/octet-stream")
++        filename = str(
++            media.get("filename")
++            or f"{kind}_{media_id}{mimetypes.guess_extension(mimetype.split(';')[0]) or ''}"
++        )
++        if not media_id:
++            return [], [
++                AttachmentFailure(filename=filename, reason="WhatsApp sent no media id")
++            ]
++        cap = self._max_attachment_bytes
++        try:
++            info = await self._client.media_info(str(media_id))
++            size = info.get("file_size")
++            if isinstance(size, int) and size > cap:
++                logger.warning(
++                    "WhatsApp attachment %s is %d bytes, over the %d cap",
++                    filename,
++                    size,
++                    cap,
++                )
++                return [], [
++                    AttachmentFailure(
++                        filename=filename,
++                        reason=f"{size} bytes exceeds the {cap} byte limit",
++                    )
++                ]
++            data = await self._client.download(str(info["url"]), max_bytes=cap)
++        except MediaTooLarge as exc:
++            logger.warning("WhatsApp attachment %s: %s", filename, exc)
++            return [], [AttachmentFailure(filename=filename, reason=str(exc))]
++        except (WhatsAppGraphError, httpx.HTTPError, KeyError) as exc:
++            logger.exception("Failed to download WhatsApp attachment %s", filename)
++            return [], [
++                AttachmentFailure(filename=filename, reason=f"download failed: {exc}")
++            ]
++        return [Attachment(filename=filename, mimetype=mimetype, data=data)], []
++
++    async def _mark_read(self, message_id: str, *, typing: bool) -> None:
++        """Best effort: a read receipt that fails costs the person a blue tick,
++        not the message, so it is logged and the turn goes on."""
++        try:
++            await self._client.mark_read(message_id, typing=typing)
++        except (WhatsAppGraphError, httpx.HTTPError) as exc:
++            logger.warning(
++                "Could not mark WhatsApp message %s read: %s", message_id, exc
++            )
++
++    # ── Messaging ────────────────────────────────────────────────────────────
++
++    async def send_message(
++        self,
++        channel_id: str,
++        sender_name: str,
++        content: str,
++        thread_root_id: str | None = None,
++        *,
++        room_wide_mention: bool = False,
++    ) -> str | None:
++        """Post as the business number with the agent's name at the head.
++
++        WhatsApp shows the business profile's name on every message, and has
++        no per-message identity, so the agent's name is part of the body. A
++        body over WhatsApp's limit is sent as several messages in order; the
++        first one's id is returned, and is the one a quote-reply threads to.
++        """
++        agent = await self.agent_rendering(sender_name)
++        return await self._send_text(
++            channel_id, _attribute(agent.body_label, content), thread_root_id
++        )
++
++    async def _send_text(
++        self, channel_id: str, body: str, thread_root_id: str | None
++    ) -> str:
++        first: str | None = None
++        for chunk in chunk_message(body):
++            payload: dict[str, Any] = {
++                "type": "text",
++                "text": {"body": chunk, "preview_url": False},
++            }
++            ref = await self._send(
++                channel_id, payload, thread_root_id if first is None else None
++            )
++            first = first or ref
++        assert first is not None
++        return first
++
++    async def _send(
++        self,
++        channel_id: str,
++        payload: dict[str, Any],
++        thread_root_id: str | None,
++    ) -> str:
++        """Send one message to a chat, quoting `thread_root_id` when it is a
++        WhatsApp message. Raises `BridgeOperationError` with the reason when
++        the 24-hour window is closed, and `WhatsAppGraphError` for any other
++        refusal."""
++        addressed = {**_address(channel_id), **payload}
++        if thread_root_id and thread_root_id.startswith("wamid."):
++            addressed["context"] = {"message_id": thread_root_id}
++        try:
++            return await self._client.send(addressed)
++        except WhatsAppGraphError as exc:
++            if exc.code == REENGAGEMENT_REQUIRED:
++                raise BridgeOperationError(WINDOW_CLOSED) from exc
++            raise
++
++    async def send_attachment(
++        self,
++        channel_id: str,
++        sender_name: str,
++        filename: str,
++        mimetype: str,
++        data: bytes,
++        caption: str | None = None,
++        thread_root_id: str | None = None,
++    ) -> str | None:
++        """Upload a file and send it as WhatsApp's own media message.
++
++        A file over WhatsApp's limit for its kind, or one WhatsApp refuses, is
++        replaced by a message in the chat saying which file and why, so it is
++        never dropped silently. A caption WhatsApp cannot carry — over its
++        limit, or on audio, which takes none — is sent as a message of its own
++        just before the file.
++        """
++        kind, limit = _media_kind(mimetype)
++        if len(data) > limit:
++            logger.warning(
++                "Not sending %s to WhatsApp chat %s: %d bytes is over WhatsApp's "
++                "%d byte limit for %s files",
++                filename,
++                channel_id,
++                len(data),
++                limit,
++                kind,
++            )
++            return await self._refuse_attachment(
++                channel_id,
++                sender_name,
++                filename,
++                caption,
++                thread_root_id,
++                f"{_megabytes(len(data))} is over WhatsApp's {_megabytes(limit)} "
++                f"limit for {kind} files",
++            )
++
++        agent = await self.agent_rendering(sender_name)
++        attributed = _attribute(
++            agent.body_label, self.translate_outbound(caption or "")
++        )
++        overflow_ref: str | None = None
++        if kind == "audio" or len(attributed) > MAX_CAPTION:
++            overflow_ref = await self._send_text(channel_id, attributed, thread_root_id)
++            attributed = ""
++        try:
++            media_id = await self._client.upload_media(
++                filename=filename, mimetype=mimetype, data=data
++            )
++            media: dict[str, Any] = {"id": media_id}
++            if attributed:
++                media["caption"] = attributed
++            if kind == "document":
++                media["filename"] = filename
++            ref = await self._send(
++                channel_id,
++                {"type": kind, kind: media},
++                None if overflow_ref else thread_root_id,
++            )
++        except WhatsAppGraphError as exc:
++            logger.error(
++                "WhatsApp refused attachment %s for chat %s: %s",
++                filename,
++                channel_id,
++                exc,
++            )
++            return await self._refuse_attachment(
++                channel_id,
++                sender_name,
++                filename,
++                None if overflow_ref else caption,
++                thread_root_id,
++                f"WhatsApp refused it: {exc.message}",
++            )
++        return overflow_ref or ref
++
++    async def _refuse_attachment(
++        self,
++        channel_id: str,
++        sender_name: str,
++        filename: str,
++        caption: str | None,
++        thread_root_id: str | None,
++        reason: str,
++    ) -> str | None:
++        note = f"_sent an attachment that couldn't be relayed: {filename} ({reason})_"
++        body = f"{caption}\n{note}" if caption else note
++        return await self.send_message(
++            channel_id, sender_name, self.translate_outbound(body), thread_root_id
++        )
++
++    async def update_message(
++        self, channel_id: str, message_ref: str, new_content: str
++    ) -> None:
++        """The Cloud API cannot edit a sent message, so the original stands."""
++        logger.warning(
++            "Not editing WhatsApp message %s in %s: WhatsApp cannot edit a sent "
++            "message, so the original stays as it was.",
++            message_ref,
++            channel_id,
++        )
++
++    async def delete_message(self, channel_id: str, message_ref: str) -> None:
++        """The Cloud API cannot delete a sent message, so it stays."""
++        logger.warning(
++            "Not deleting WhatsApp message %s in %s: WhatsApp cannot delete a "
++            "sent message, so it stays in the chat.",
++            message_ref,
++            channel_id,
++        )
++
++    async def send_typing(
++        self, channel_id: str, sender_name: str, is_typing: bool
++    ) -> None:
++        """Nothing: WhatsApp ties its typing indicator to the received message
++        being answered, which this call does not name. The indicator is shown
++        with the working mark instead (`mark_activity`)."""
++
++    async def mark_activity(
++        self,
++        channel_id: str,
++        message_ref: str,
++        *,
++        agent_name: str,
++        mark: ActivityMark,
++        on: bool,
++        force: bool = False,
++    ) -> None:
++        """React 👀 to the message being worked on, and take it off after.
++
++        Putting it on also marks the message read and shows the typing
++        indicator, which WhatsApp clears by itself on the reply or after 25
++        seconds.
++        """
++        try:
++            await self._send(
++                channel_id,
++                {
++                    "type": "reaction",
++                    "reaction": {
++                        "message_id": message_ref,
++                        "emoji": _WORKING_REACTION if on else "",
++                    },
++                },
++                None,
++            )
++        except BridgeOperationError as exc:
++            raise ActivityMarkRefused(
++                f"WhatsApp will not react to {message_ref}: {exc}"
++            ) from exc
++        if on:
++            await self._mark_read(message_ref, typing=True)
++
++    # ── Session activity ─────────────────────────────────────────────────────
++
++    def rich_markup(self) -> Markup:
++        return WHATSAPP_MARKUP
++
++    def rich_fallback_limit(self) -> int:
++        return MAX_MESSAGE
++
++    def rich_fallback_text(self, content: RichContent) -> str:
++        """The base text, except that a problem somebody has to act on says
++        what the problem is. The base draws a turn as its state alone, and an
++        agent host gone offline mid-turn would be announced as "Working…"."""
++        if isinstance(content, TurnActivity) and content.error_summary:
++            return turn_status(
++                content.items,
++                content.turn,
++                escape=self._rich_escape,
++                limit=self.rich_fallback_limit(),
++                markup=self.rich_markup(),
++                error_summary=content.error_summary,
++                tool_detail=False,
++            )
++        return super().rich_fallback_text(content)
++
++    async def post_rich(
++        self,
++        channel_id: str,
++        agent_name: str,
++        content: RichContent,
++        thread_root_id: str | None = None,
++    ) -> str:
++        """Post a request card or an attention message; a turn is not posted.
++
++        A turn's message would be redrawn as the turn moves, and nothing sent
++        on WhatsApp can be. Its working state is the reaction and typing
++        indicator on the asking message (`mark_activity`), and the agent's
++        reply arrives as a message of its own. The reference returned for a
++        turn names the turn, never a WhatsApp message, and nothing is quoted
++        or reacted to with it.
++        """
++        if isinstance(content, TurnActivity) and not content.status_only:
++            return f"{_TURN_REF_PREFIX}{content.turn.turn_id}"
++        text = self.rich_fallback_text(content)
++        agent = await self.agent_rendering(agent_name)
++        try:
++            return await self._send_text(
++                channel_id, _attribute(agent.body_label, text), thread_root_id
++            )
++        except (WhatsAppGraphError, BridgeOperationError, httpx.HTTPError) as error:
++            raise RichContentFailed(
++                f"WhatsApp could not send the message in chat {channel_id}: {error}",
++                text=text,
++            ) from error
++
++    async def update_rich(
++        self,
++        channel_id: str,
++        agent_name: str,
++        message_ref: str,
++        content: RichContent,
++        thread_root_id: str | None,
++    ) -> None:
++        """Nothing is redrawn: WhatsApp cannot edit a sent message.
++
++        A request card stays as it was posted. An answer typed to it after it
++        was decided is refused with a reply saying so, which is the honest
++        signal a stale card can give. Reposting it instead would post it again
++        on every redraw, and after every restart.
++        """
++        logger.debug(
++            "Not redrawing %s in WhatsApp chat %s: WhatsApp cannot edit it",
++            message_ref,
++            channel_id,
++        )
++
++    # ── Channels and identity ────────────────────────────────────────────────
++
++    async def create_channel(
++        self,
++        name: str,
++        topic: str,
++        *,
++        channel_type: ChannelType = "channel_public",
++    ) -> str:
++        raise ChannelCreationUnsupported(
++            "WhatsApp cannot create a chat: a person starts one by writing to the "
++            "business number, and its room is made then."
++        )
++
++    async def get_channel_type(self, channel_id: str) -> ChannelType:
++        return "direct"
++
++    async def add_agents_to_channel(
++        self, channel_id: str, agent_names: list[str]
++    ) -> None:
++        """Nothing: every agent speaks as the one business number."""
++
++    async def add_users_to_channel(
++        self,
++        channel_id: str,
++        user_names: list[str],
++        user_external_ids: list[str],
++    ) -> list[str]:
++        """A WhatsApp chat is one person and the business, so nobody else can be
++        added to it."""
++        return list(user_external_ids)
++
++    async def create_agent_identity(self, agent: AgentIdentity) -> None:
++        """Nothing: agents have no identity of their own on WhatsApp."""
++
++    async def remove_agent_identity(self, agent: AgentIdentity) -> None:
++        """Nothing: agents have no identity of their own on WhatsApp."""
++
++    async def get_channel_agent_names(self, channel_id: str) -> list[str]:
++        return []
++
++    # ── Markup ───────────────────────────────────────────────────────────────
++
++    def _render_outbound(self, content: str) -> str:
++        return to_whatsapp(content)
++
++    def translate_inbound(self, raw_message: str) -> str:
++        return to_markdown(raw_message)
++
++
++def _attribute(label: str, content: str) -> str:
++    """Put the agent's name at the head of the body, as Telegram's adapter
++    does: one number posts for every agent, so without it a reader cannot tell
++    them apart. `label` is the escaped body label."""
++    name = f"*{label}*"
++    if not content:
++        return name
++    return f"{name}\n{content}" if "\n" in content else f"{name}: {content}"
++
++
++def _address(channel_id: str) -> dict[str, str]:
++    """Who a message goes to. A chat is named by the person's phone number,
++    or by the business-scoped user id WhatsApp sends instead for someone who
++    has a username, and the API takes the two in different fields."""
++    if channel_id.isdigit():
++        return {"recipient_type": "individual", "to": channel_id}
++    return {"recipient_type": "individual", "recipient": channel_id}
++
++
++def _change_values(payload: Any) -> list[dict[str, Any]]:
++    """Every `entry[].changes[].value` of a webhook body, or
++    `WebhookPayloadError` if it is not a WhatsApp Business Account webhook."""
++    if not isinstance(payload, dict) or payload.get("object") != (
++        "whatsapp_business_account"
++    ):
++        raise WebhookPayloadError("Not a WhatsApp Business Account webhook")
++    entries = payload.get("entry")
++    if not isinstance(entries, list) or not entries:
++        raise WebhookPayloadError("The webhook carries no entry")
++    values: list[dict[str, Any]] = []
++    for entry in entries:
++        changes = entry.get("changes") if isinstance(entry, dict) else None
++        if not isinstance(changes, list) or not changes:
++            raise WebhookPayloadError("A webhook entry carries no changes")
++        for change in changes:
++            value = change.get("value") if isinstance(change, dict) else None
++            if not isinstance(value, dict):
++                raise WebhookPayloadError("A webhook change carries no value")
++            values.append(value)
++    return values
++
++
++def _change_fields(payload: dict[str, Any]) -> list[str]:
++    """The webhook field each change of a body read by `_change_values` is for."""
++    return [
++        str(change.get("field"))
++        for entry in payload["entry"]
++        for change in entry["changes"]
++    ]
++
++
++def _required_str(item: Any, key: str, what: str) -> str:
++    value = item.get(key) if isinstance(item, dict) else None
++    if not value:
++        raise WebhookPayloadError(f"A WhatsApp {what} carries no {key}")
++    return str(value)
++
++
++def _describe_error(error: dict[str, Any]) -> str:
++    details = (error.get("error_data") or {}).get("details")
++    words = error.get("message") or error.get("title") or "no reason given"
++    return f"{words} (code {error.get('code')})" + (f": {details}" if details else "")
++
++
++def _digits(text: str) -> str:
++    return "".join(c for c in text if c.isdigit())
++
++
++def _profile_name(
++    contacts: list[dict[str, Any]], message: dict[str, Any]
++) -> str | None:
++    """The name the person gave their WhatsApp profile, if WhatsApp sent it."""
++    ids = {message.get("from"), message.get("from_user_id")} - {None}
++    for contact in contacts:
++        if contact.get("wa_id") in ids or contact.get("user_id") in ids:
++            profile = contact.get("profile") or {}
++            name = profile.get("name") or profile.get("username")
++            return str(name).lstrip("@") if name else None
++    return None
++
++
++def _handle(profile_name: str | None, sender: str) -> str:
++    """The handle Switch addresses this person by.
++
++    A profile name is free text and not unique, so it is joined up to survive
++    being written as `@name` and the sender's id is appended, as Telegram's
++    adapter does: two people sharing a handle would share a room identity.
++    """
++    joined = "".join((profile_name or "").split())
++    return f"{joined}_{sender}" if joined else sender
++
++
++def _parse_command(text: str) -> tuple[str, str] | None:
++    """Split a `!command args` message, the way Switch's own prefix reads."""
++    parts = text.split(None, 1)
++    name = parts[0][1:]
++    if not name:
++        return None
++    return name, parts[1].strip() if len(parts) > 1 else ""
+diff --git a/core/switch_core/bridges/collaboration/whatsapp/chunking.py b/core/switch_core/bridges/collaboration/whatsapp/chunking.py
+new file mode 100644
+index 00000000..feb497df
+--- /dev/null
++++ b/core/switch_core/bridges/collaboration/whatsapp/chunking.py
+@@ -0,0 +1,65 @@
++"""Split outbound text to fit WhatsApp's per-message character limit.
++
++The Cloud API refuses a text body over 4,096 characters rather than truncating
++it, which an agent answering a real question passes routinely. A piece is cut
++on the latest paragraph break that leaves it at least half full, then the
++latest line break, then the latest space, and only cut mid-word when there is
++none. A cut inside a code block closes the block at the end of one piece and
++reopens it at the start of the next, so neither half arrives as stray backticks
++around plain text.
++"""
++
++from __future__ import annotations
++
++MAX_MESSAGE = 4096
++
++#: A media caption is capped well below a text body.
++MAX_CAPTION = 1024
++
++_FENCE = "```"
++
++
++def _cut(text: str, limit: int) -> int:
++    """The best place to cut `text` at or before `limit`."""
++    for separator in ("\n\n", "\n", " "):
++        at = text.rfind(separator, 0, limit)
++        if at > limit // 2:
++            return at
++    return limit
++
++
++def _drop_separator(text: str) -> str:
++    """The rest of a body after the one break it was cut on.
++
++    Only that break is the seam between two messages. Stripping more would eat
++    the indentation of a code line or a blank line that is part of the body.
++    """
++    for separator in ("\n\n", "\n", " "):
++        if text.startswith(separator):
++            return text[len(separator) :]
++    return text
++
++
++def chunk_message(body: str) -> list[str]:
++    """Break a body into pieces of at most `MAX_MESSAGE` characters."""
++    limit = MAX_MESSAGE
++    if len(body) <= limit:
++        return [body]
++    chunks: list[str] = []
++    rest = body
++    reopen = ""
++    while True:
++        candidate = reopen + rest
++        if len(candidate) <= limit:
++            chunks.append(candidate)
++            return chunks
++        # Room for a closing fence, in case the cut lands inside a block.
++        budget = limit - len(_FENCE) - 1
++        cut = _cut(candidate, budget)
++        head = candidate[:cut]
++        inside_block = head.count(_FENCE) % 2 == 1
++        chunks.append(f"{head}\n{_FENCE}" if inside_block else head)
++        reopen = f"{_FENCE}\n" if inside_block else ""
++        rest = _drop_separator(candidate[cut:])
++        if not rest:
++            return chunks
+diff --git a/core/switch_core/bridges/collaboration/whatsapp/client.py b/core/switch_core/bridges/collaboration/whatsapp/client.py
+new file mode 100644
+index 00000000..96b236b2
+--- /dev/null
++++ b/core/switch_core/bridges/collaboration/whatsapp/client.py
+@@ -0,0 +1,219 @@
++"""A thin client for the parts of Meta's Graph API the WhatsApp bridge uses.
++
++Sending, uploading and downloading media, and reading the phone number back to
++check the credentials. Nothing here knows about Switch: it turns a Graph call
++into a value or a `WhatsAppGraphError`, and the adapter decides what either
++means for a room.
++
++The `httpx.AsyncClient` is handed in, so the bridge owns its lifetime and a
++test can put a `MockTransport` under it.
++"""
++
++from __future__ import annotations
++
++from typing import Any
++
++import httpx
++
++#: The one Graph API version every call is made against. Meta retires a
++#: version two years after it ships; moving off it is changing this line.
++GRAPH_API_VERSION = "v26.0"
++GRAPH_API_URL = f"https://graph.facebook.com/{GRAPH_API_VERSION}"
++
++#: The access token was rejected: expired, revoked or never valid.
++TOKEN_INVALID = 190
++#: The person last wrote more than 24 hours ago, so only an approved template
++#: may be sent until they write again.
++REENGAGEMENT_REQUIRED = 131047
++
++
++class WhatsAppGraphError(Exception):
++    """Meta refused a Graph API call, in its own words.
++
++    `code` is Meta's error code, which is what Meta says to branch on; `message`
++    and `details` are its explanation, carried so an operator reads what the
++    platform said rather than a status line.
++    """
++
++    def __init__(
++        self,
++        *,
++        status: int,
++        code: int | None,
++        error_type: str | None,
++        message: str,
++        details: str | None,
++    ) -> None:
++        super().__init__(f"{message} (code {code})" if code is not None else message)
++        self.status = status
++        self.code = code
++        self.error_type = error_type
++        self.message = message
++        self.details = details
++
++
++def graph_error(response: httpx.Response) -> WhatsAppGraphError:
++    """The `WhatsAppGraphError` a failed Graph response describes."""
++    try:
++        body = response.json()
++    except ValueError:
++        body = None
++    error = body.get("error") if isinstance(body, dict) else None
++    if not isinstance(error, dict):
++        return WhatsAppGraphError(
++            status=response.status_code,
++            code=None,
++            error_type=None,
++            message=f"Graph API answered HTTP {response.status_code}",
++            details=None,
++        )
++    error_data = error.get("error_data")
++    details = error_data.get("details") if isinstance(error_data, dict) else None
++    code = error.get("code")
++    return WhatsAppGraphError(
++        status=response.status_code,
++        code=code if isinstance(code, int) else None,
++        error_type=str(error["type"]) if error.get("type") else None,
++        message=str(error.get("message") or f"HTTP {response.status_code}"),
++        details=str(details) if details else None,
++    )
++
++
++class WhatsAppGraphClient:
++    """One business phone number's calls to the Graph API."""
++
++    def __init__(
++        self, *, http: httpx.AsyncClient, access_token: str, phone_number_id: str
++    ) -> None:
++        self._http = http
++        self._access_token = access_token
++        self._phone_number_id = phone_number_id
++
++    @property
++    def _auth(self) -> dict[str, str]:
++        return {"Authorization": f"Bearer {self._access_token}"}
++
++    def _json(self, response: httpx.Response) -> dict[str, Any]:
++        if response.is_error:
++            raise graph_error(response)
++        body = response.json()
++        if not isinstance(body, dict):
++            raise WhatsAppGraphError(
++                status=response.status_code,
++                code=None,
++                error_type=None,
++                message="Graph API answered with something other than an object",
++                details=None,
++            )
++        return body
++
++    async def phone_number(self, *, appsecret_proof: str) -> dict[str, Any]:
++        """The phone number's display number and verified name.
++
++        `appsecret_proof` is the access token signed with the app secret.
++        Graph refuses a call whose proof does not match, so a wrong app secret
++        is caught here rather than as every webhook failing its signature.
++        """
++        response = await self._http.get(
++            f"{GRAPH_API_URL}/{self._phone_number_id}",
++            params={
++                "fields": "display_phone_number,verified_name",
++                "appsecret_proof": appsecret_proof,
++            },
++            headers=self._auth,
++        )
++        return self._json(response)
++
++    async def send(self, payload: dict[str, Any]) -> str:
++        """Post one message (or status) and return the `wamid` Meta gave it."""
++        response = await self._http.post(
++            f"{GRAPH_API_URL}/{self._phone_number_id}/messages",
++            json={"messaging_product": "whatsapp", **payload},
++            headers=self._auth,
++        )
++        body = self._json(response)
++        messages = body.get("messages")
++        if isinstance(messages, list) and messages and "id" in messages[0]:
++            return str(messages[0]["id"])
++        raise WhatsAppGraphError(
++            status=response.status_code,
++            code=None,
++            error_type=None,
++            message="Graph API accepted the message without returning its id",
++            details=None,
++        )
++
++    async def mark_read(self, message_id: str, *, typing: bool) -> None:
++        """Mark a received message read, and show the typing indicator with it.
++
++        The typing indicator is tied to a received message and lasts until
++        the next reply or 25 seconds, whichever is first.
++        """
++        payload: dict[str, Any] = {
++            "messaging_product": "whatsapp",
++            "status": "read",
++            "message_id": message_id,
++        }
++        if typing:
++            payload["typing_indicator"] = {"type": "text"}
++        response = await self._http.post(
++            f"{GRAPH_API_URL}/{self._phone_number_id}/messages",
++            json=payload,
++            headers=self._auth,
++        )
++        self._json(response)
++
++    async def upload_media(self, *, filename: str, mimetype: str, data: bytes) -> str:
++        """Upload a file and return the media id a message can carry."""
++        response = await self._http.post(
++            f"{GRAPH_API_URL}/{self._phone_number_id}/media",
++            data={"messaging_product": "whatsapp", "type": mimetype},
++            files={"file": (filename, data, mimetype)},
++            headers=self._auth,
++        )
++        body = self._json(response)
++        if "id" not in body:
++            raise WhatsAppGraphError(
++                status=response.status_code,
++                code=None,
++                error_type=None,
++                message="Graph API accepted the upload without returning its id",
++                details=None,
++            )
++        return str(body["id"])
++
++    async def media_info(self, media_id: str) -> dict[str, Any]:
++        """Where a received file can be downloaded from, its type and size.
++
++        The URL it gives expires after five minutes, so it is fetched right
++        before the download rather than kept.
++        """
++        response = await self._http.get(
++            f"{GRAPH_API_URL}/{media_id}",
++            params={"phone_number_id": self._phone_number_id},
++            headers=self._auth,
++        )
++        return self._json(response)
++
++    async def download(self, url: str, *, max_bytes: int) -> bytes:
++        """The bytes at a media URL from `media_info`, refusing more than
++        `max_bytes` without reading them all."""
++        async with self._http.stream("GET", url, headers=self._auth) as response:
++            if response.is_error:
++                await response.aread()
++                raise graph_error(response)
++            data = bytearray()
++            async for chunk in response.aiter_bytes():
++                data.extend(chunk)
++                if len(data) > max_bytes:
++                    raise MediaTooLarge(len(data), max_bytes)
++            return bytes(data)
++
++
++class MediaTooLarge(Exception):
++    """A download ran past the size it was allowed."""
++
++    def __init__(self, size: int, limit: int) -> None:
++        super().__init__(f"more than {size} bytes, over the {limit} byte limit")
++        self.size = size
++        self.limit = limit
+diff --git a/core/switch_core/bridges/collaboration/whatsapp/formatting.py b/core/switch_core/bridges/collaboration/whatsapp/formatting.py
+new file mode 100644
+index 00000000..ea12d985
+--- /dev/null
++++ b/core/switch_core/bridges/collaboration/whatsapp/formatting.py
+@@ -0,0 +1,113 @@
++"""Switch Markdown to WhatsApp's markup, and back.
++
++WhatsApp has its own small markup, close to Markdown and different in the
++places that matter: `*bold*` with one star, `_italic_`, `~strike~` with one
++tilde, and code fenced with backticks as in Markdown. It has no links, headings
++or tables; a bare http(s) URL is linked by the client, and nothing else is.
++
++Code is set aside first in both directions, so nothing between backticks is
++read as markup.
++"""
++
++from __future__ import annotations
++
++import re
++from collections.abc import Callable
++
++_MD_CODE_BLOCK_RE = re.compile(r"```(?:[^\n`]*\n)?(.*?)```", re.DOTALL)
++_WA_CODE_BLOCK_RE = re.compile(r"```(.*?)```", re.DOTALL)
++_INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
++_HEADING_RE = re.compile(r"^#{1,6}[ \t]+(.+?)[ \t#]*$", re.MULTILINE)
++_STAR_BULLET_RE = re.compile(r"^([ \t]*)\*[ \t]+", re.MULTILINE)
++_MD_BOLD_ITALIC_RE = re.compile(r"\*\*\*(?!\s)(.+?)(?<!\s)\*\*\*")
++_MD_AUTOLINK_RE = re.compile(r"<((?:https?|mailto):[^>\s]+)>")
++_MD_BOLD_RE = re.compile(r"\*\*(?!\s)(.+?)(?<!\s)\*\*|__(?!\s)(.+?)(?<!\s)__")
++_MD_ITALIC_STAR_RE = re.compile(r"(?<![\w*])\*(?![\s*])([^*\n]+?)(?<!\s)\*(?![\w*])")
++_MD_STRIKE_RE = re.compile(r"~~(?!\s)(.+?)(?<!\s)~~")
++_MD_LINK_RE = re.compile(r"\[([^\]\n]*)\]\(([^)\s]+)\)")
++
++_WA_BOLD_RE = re.compile(r"(?<![\w*])\*(?![\s*])([^*\n]+?)(?<!\s)\*(?![\w*])")
++_WA_STRIKE_RE = re.compile(r"(?<![\w~])~(?![\s~])([^~\n]+?)(?<!\s)~(?![\w~])")
++
++# Stand-in for a star that is markup, so a later pass reading single stars as
++# italics cannot take it for one.
++_BOLD_MARK = "\x01"
++
++
++def _stashing() -> tuple[list[str], Callable[[str], str]]:
++    stash: list[str] = []
++
++    def keep(rendered: str) -> str:
++        stash.append(rendered)
++        return f"\x00{len(stash) - 1}\x00"
++
++    return stash, keep
++
++
++def _restore(text: str, stash: list[str]) -> str:
++    for index, rendered in enumerate(stash):
++        text = text.replace(f"\x00{index}\x00", rendered)
++    return text
++
++
++def to_whatsapp(markdown: str) -> str:
++    """Render Switch Markdown in WhatsApp's markup.
++
++    A link becomes its label with the address after it in brackets, because
++    WhatsApp shows the address or nothing: a label alone would hide where it
++    goes, and a reader can still tap the bare URL.
++    """
++    if not markdown:
++        return ""
++    stash, keep = _stashing()
++    text = _MD_CODE_BLOCK_RE.sub(
++        lambda m: keep(f"```{m.group(1).strip(chr(10))}```"), markdown
++    )
++    text = _INLINE_CODE_RE.sub(lambda m: keep(f"`{m.group(1)}`"), text)
++
++    def link(match: re.Match[str]) -> str:
++        label, href = match.group(1).strip(), match.group(2)
++        if not label or label == href:
++            return keep(href)
++        return f"{label} ({keep(href)})"
++
++    text = _MD_LINK_RE.sub(link, text)
++    text = _MD_AUTOLINK_RE.sub(lambda m: keep(m.group(1)), text)
++    text = _HEADING_RE.sub(lambda m: f"{_BOLD_MARK}{m.group(1)}{_BOLD_MARK}", text)
++    text = _STAR_BULLET_RE.sub(r"\1- ", text)
++    text = _MD_BOLD_ITALIC_RE.sub(
++        lambda m: f"{_BOLD_MARK}_{m.group(1)}_{_BOLD_MARK}", text
++    )
++    text = _MD_BOLD_RE.sub(
++        lambda m: f"{_BOLD_MARK}{m.group(1) or m.group(2)}{_BOLD_MARK}", text
++    )
++    text = _MD_ITALIC_STAR_RE.sub(r"_\1_", text)
++    text = _MD_STRIKE_RE.sub(r"~\1~", text)
++    text = text.replace(_BOLD_MARK, "*")
++    return _restore(text, stash)
++
++
++def _markdown_code(code: str) -> str:
++    """WhatsApp's monospace run as Markdown: a fenced block when it spans
++    lines, where three backticks on one line would open a fence named after
++    the first line, and an inline span otherwise."""
++    code = code.strip("\n")
++    if "\n" in code or "`" in code:
++        return f"```\n{code}\n```"
++    return f"`{code}`"
++
++
++def to_markdown(whatsapp: str) -> str:
++    """Read WhatsApp's markup as Switch Markdown.
++
++    `_italic_` and code are already spelled the same way in both, so only bold
++    and strikethrough change.
++    """
++    if not whatsapp:
++        return ""
++    stash, keep = _stashing()
++    text = _WA_CODE_BLOCK_RE.sub(lambda m: keep(_markdown_code(m.group(1))), whatsapp)
++    text = _INLINE_CODE_RE.sub(lambda m: keep(m.group(0)), text)
++    text = _WA_BOLD_RE.sub(r"**\1**", text)
++    text = _WA_STRIKE_RE.sub(r"~~\1~~", text)
++    return _restore(text, stash)
+diff --git a/core/switch_core/bridges/collaboration/whatsapp/icon.svg b/core/switch_core/bridges/collaboration/whatsapp/icon.svg
+new file mode 100644
+index 00000000..dc1b1634
+--- /dev/null
++++ b/core/switch_core/bridges/collaboration/whatsapp/icon.svg
+@@ -0,0 +1,3 @@
++<svg width="127" height="127" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
++  <path fill="#25D366" d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/>
++</svg>
+diff --git a/core/tests/switch_core/bridges/collaboration/test_whatsapp_adapter.py b/core/tests/switch_core/bridges/collaboration/test_whatsapp_adapter.py
+new file mode 100644
+index 00000000..b42777ba
+--- /dev/null
++++ b/core/tests/switch_core/bridges/collaboration/test_whatsapp_adapter.py
+@@ -0,0 +1,1171 @@
++"""The WhatsApp adapter against a Graph API mocked at the HTTP transport.
++
++Payloads are shaped as the Cloud API sends them; nothing of the adapter itself
++is replaced, so what is asserted is what would reach Meta.
++"""
++
++from __future__ import annotations
++
++import hashlib
++import hmac
++import json
++import logging
++from collections.abc import Callable
++from typing import Any
++
++import httpx
++import pytest
++from pydantic import ValidationError
++
++from switch_core.bridges.collaboration.adapter import (
++    ActivityMarkRefused,
++    TurnActivity,
++)
++from switch_core.bridges.collaboration.install import (
++    WebhookAuthenticityError,
++    WebhookPayloadError,
++    WebhookRequest,
++)
++from switch_core.bridges.collaboration.models import (
++    BridgeCredentialError,
++    BridgeOperationError,
++    ChannelCreationUnsupported,
++    InboundCommand,
++    InboundMessage,
++)
++from switch_core.bridges.collaboration.platforms import PLATFORMS
++from switch_core.bridges.collaboration.whatsapp.adapter import (
++    MAX_VIDEO_BYTES,
++    SIGNATURE_HEADER,
++    WINDOW_CLOSED,
++    WhatsAppAdapter,
++    WhatsAppConnectionConfig,
++    sign,
++)
++from switch_core.bridges.collaboration.whatsapp.client import (
++    GRAPH_API_VERSION,
++    WhatsAppGraphError,
++    graph_error,
++)
++from switch_core.sessions.contract import TurnUpsert
++
++PHONE_NUMBER_ID = "106540352242922"
++BUSINESS_NUMBER = "15550783881"
++PERSON = "16505551234"
++CONFIG = {
++    "access_token": "EAAtest-token",
++    "phone_number_id": PHONE_NUMBER_ID,
++    "app_secret": "app-secret-value",
++    "verify_token": "chosen-verify-token",
++}
++API = f"/{GRAPH_API_VERSION}"
++
++Handler = Callable[[httpx.Request], httpx.Response]
++
++
++def graph_refusal(status: int, code: int, message: str) -> httpx.Response:
++    return httpx.Response(
++        status,
++        json={
++            "error": {
++                "message": message,
++                "type": "OAuthException",
++                "code": code,
++                "error_data": {"messaging_product": "whatsapp", "details": message},
++                "fbtrace_id": "trace",
++            }
++        },
++    )
++
++
++class FakeGraph:
++    """Records every request to Graph and answers it from a route table.
++
++    A message send is answered with a fresh `wamid` unless a route says
++    otherwise, which is what the Cloud API does with an accepted message.
++    """
++
++    def __init__(self) -> None:
++        self.requests: list[httpx.Request] = []
++        self.routes: dict[tuple[str, str], Handler] = {}
++        self._sent = 0
++
++    def on(self, method: str, path: str, handler: Handler) -> None:
++        self.routes[(method, path)] = handler
++
++    def handle(self, request: httpx.Request) -> httpx.Response:
++        self.requests.append(request)
++        route = self.routes.get((request.method, request.url.path))
++        if route is not None:
++            return route(request)
++        if request.method == "POST" and request.url.path.endswith("/messages"):
++            if json.loads(request.content).get("status") == "read":
++                return httpx.Response(200, json={"success": True})
++            self._sent += 1
++            return httpx.Response(
++                200,
++                json={
++                    "messaging_product": "whatsapp",
++                    "contacts": [{"input": PERSON, "wa_id": PERSON}],
++                    "messages": [{"id": f"wamid.out{self._sent}"}],
++                },
++            )
++        return httpx.Response(404, json={"error": {"message": "no route"}})
++
++    def sends(self) -> list[dict[str, Any]]:
++        """The bodies of every message send, read receipts left out."""
++        bodies = [
++            json.loads(r.content)
++            for r in self.requests
++            if r.method == "POST" and r.url.path.endswith("/messages")
++        ]
++        return [b for b in bodies if b.get("status") != "read"]
++
++    def receipts(self) -> list[dict[str, Any]]:
++        return [
++            body
++            for r in self.requests
++            if r.method == "POST" and r.url.path.endswith("/messages")
++            for body in [json.loads(r.content)]
++            if body.get("status") == "read"
++        ]
++
++
++@pytest.fixture
++def graph(monkeypatch: pytest.MonkeyPatch) -> FakeGraph:
++    fake = FakeGraph()
++    real_client = httpx.AsyncClient
++
++    def client(**kwargs: Any) -> httpx.AsyncClient:
++        kwargs.setdefault("transport", httpx.MockTransport(fake.handle))
++        return real_client(**kwargs)
++
++    monkeypatch.setattr(httpx, "AsyncClient", client)
++    return fake
++
++
++@pytest.fixture
++async def adapter(graph: FakeGraph) -> Any:
++    adapter = WhatsAppAdapter(config=WhatsAppConnectionConfig.model_validate(CONFIG))
++    adapter.set_webhook_url("https://switch.example/messaging/bridges/b-1/events")
++    yield adapter
++    await adapter.stop()
++
++
++class Heard:
++    def __init__(self) -> None:
++        self.messages: list[InboundMessage] = []
++        self.commands: list[InboundCommand] = []
++
++    async def message(self, message: InboundMessage) -> None:
++        self.messages.append(message)
++
++    async def command(self, command: InboundCommand) -> None:
++        self.commands.append(command)
++
++
++@pytest.fixture
++async def heard(adapter: WhatsAppAdapter) -> Heard:
++    heard = Heard()
++
++    async def ignore(_: Any) -> None:
++        return None
++
++    await adapter.start(heard.message, heard.command, ignore, ignore, ignore)
++    return heard
++
++
++def envelope(value: dict[str, Any]) -> dict[str, Any]:
++    return {
++        "object": "whatsapp_business_account",
++        "entry": [
++            {
++                "id": "102290129340398",
++                "changes": [
++                    {
++                        "field": "messages",
++                        "value": {
++                            "messaging_product": "whatsapp",
++                            "metadata": {
++                                "display_phone_number": BUSINESS_NUMBER,
++                                "phone_number_id": PHONE_NUMBER_ID,
++                            },
++                            **value,
++                        },
++                    }
++                ],
++            }
++        ],
++    }
++
++
++def inbound(
++    message: dict[str, Any], *, sender: str = PERSON, name: str = "Ada Lovelace"
++) -> dict[str, Any]:
++    return envelope(
++        {
++            "contacts": [{"profile": {"name": name}, "wa_id": sender}],
++            "messages": [
++                {"from": sender, "timestamp": "1761700000", **message},
++            ],
++        }
++    )
++
++
++def text(
++    wamid: str, body: str, *, sender: str = PERSON, **extra: Any
++) -> dict[str, Any]:
++    return inbound(
++        {"id": wamid, "type": "text", "text": {"body": body}, **extra}, sender=sender
++    )
++
++
++def post(payload: dict[str, Any], secret: str = CONFIG["app_secret"]) -> WebhookRequest:
++    body = json.dumps(payload).encode()
++    return WebhookRequest(
++        method="POST",
++        headers={SIGNATURE_HEADER: sign(secret, body)},
++        query={},
++        body=body,
++    )
++
++
++async def deliver(adapter: WhatsAppAdapter, payload: dict[str, Any]) -> None:
++    request = post(payload)
++    await adapter.verify_webhook(request)
++    event = adapter.parse_webhook(request)
++    await adapter.dispatch_event(
++        envelope_type=event.envelope_type, payload=event.payload
++    )
++
++
++# ── Registration and declarations ─────────────────────────────────────────────
++
++
++class TestTheAdapterDeclaresItself:
++    def test_it_is_registered_under_its_key(self) -> None:
++        keys = {p.key: p for p in PLATFORMS}
++        assert keys["whatsapp"].adapter is WhatsAppAdapter
++        assert keys["whatsapp"].config is WhatsAppConnectionConfig
++
++    def test_it_ships_its_name_and_logo(self) -> None:
++        described = WhatsAppAdapter.describe("whatsapp")
++        assert described.display_name == "WhatsApp"
++        assert described.icon_svg is not None and "<svg" in described.icon_svg
++        assert described.docs_slug is None
++
++    def test_what_whatsapp_cannot_do_is_declared(self) -> None:
++        assert WhatsAppAdapter.receives_webhooks is True
++        assert WhatsAppAdapter.supports_channel_creation is False
++        assert WhatsAppAdapter.supports_directory_search is False
++        assert WhatsAppAdapter.renders_custom_url_schemes is False
++        assert WhatsAppAdapter.keeps_quiet_unless_listening is False
++
++    def test_one_number_is_claimed_once(self) -> None:
++        assert WhatsAppAdapter.claimed_workspace(dict(CONFIG)) == (
++            f"WhatsApp phone number {PHONE_NUMBER_ID}"
++        )
++
++
++# ── Connection config ─────────────────────────────────────────────────────────
++
++
++class TestTheConnectForm:
++    def test_a_complete_config_parses_with_whitespace_trimmed(self) -> None:
++        config = WhatsAppConnectionConfig.model_validate(
++            {**CONFIG, "access_token": "  EAAtest-token\n"}
++        )
++        assert config.access_token == "EAAtest-token"
++        assert config.phone_number_id == PHONE_NUMBER_ID
++
++    @pytest.mark.parametrize("field", sorted(CONFIG))
++    def test_a_missing_field_is_refused(self, field: str) -> None:
++        values = {k: v for k, v in CONFIG.items() if k != field}
++        with pytest.raises(ValidationError) as caught:
++            WhatsAppConnectionConfig.model_validate(values)
++        assert field in str(caught.value)
++
++    @pytest.mark.parametrize("field", sorted(CONFIG))
++    def test_a_blank_field_is_refused_by_name(self, field: str) -> None:
++        with pytest.raises(ValidationError) as caught:
++            WhatsAppConnectionConfig.model_validate({**CONFIG, field: "   "})
++        assert f"{field} is empty" in str(caught.value)
++
++    def test_a_phone_number_in_place_of_its_id_is_refused(self) -> None:
++        with pytest.raises(ValidationError) as caught:
++            WhatsAppConnectionConfig.model_validate(
++                {**CONFIG, "phone_number_id": "+1 555 078 3881"}
++            )
++        assert "not the phone number itself" in str(caught.value)
++
++    def test_a_refused_value_is_not_echoed_back(self) -> None:
++        with pytest.raises(ValidationError) as caught:
++            WhatsAppConnectionConfig.model_validate(
++                {**CONFIG, "phone_number_id": "secret-looking-value"}
++            )
++        assert "secret-looking-value" not in str(caught.value)
++
++    def test_every_field_tells_the_operator_where_to_find_it(self) -> None:
++        schema = WhatsAppConnectionConfig.model_json_schema()
++        assert sorted(schema["required"]) == sorted(CONFIG)
++        for field in CONFIG:
++            assert schema["properties"][field]["title"]
++            assert schema["properties"][field]["description"]
++
++
++# ── Credentials and failures ──────────────────────────────────────────────────
++
++
++class TestCredentialsAreCheckedBeforeSaving:
++    async def test_good_credentials_pass_with_the_app_secret_proved(
++        self, graph: FakeGraph
++    ) -> None:
++        graph.on(
++            "GET",
++            f"{API}/{PHONE_NUMBER_ID}",
++            lambda r: httpx.Response(
++                200,
++                json={
++                    "display_phone_number": "+1 555-078-3881",
++                    "verified_name": "Acme",
++                    "id": PHONE_NUMBER_ID,
++                },
++            ),
++        )
++
++        await WhatsAppAdapter.verify_credentials(dict(CONFIG))
++
++        (request,) = graph.requests
++        assert request.headers["authorization"] == f"Bearer {CONFIG['access_token']}"
++        assert (
++            request.url.params["appsecret_proof"]
++            == hmac.new(
++                CONFIG["app_secret"].encode(),
++                CONFIG["access_token"].encode(),
++                hashlib.sha256,
++            ).hexdigest()
++        )
++
++    async def test_a_bad_token_fails_with_metas_explanation(
++        self, graph: FakeGraph
++    ) -> None:
++        graph.on(
++            "GET",
++            f"{API}/{PHONE_NUMBER_ID}",
++            lambda r: graph_refusal(
++                401, 190, "Error validating access token: Session has expired"
++            ),
++        )
++
++        with pytest.raises(BridgeCredentialError) as caught:
++            await WhatsAppAdapter.verify_credentials(dict(CONFIG))
++
++        assert "Session has expired" in str(caught.value)
++        assert "code 190" in str(caught.value)
++
++    async def test_an_unreachable_graph_fails_saying_so(self, graph: FakeGraph) -> None:
++        def down(request: httpx.Request) -> httpx.Response:
++            raise httpx.ConnectError("no route", request=request)
++
++        graph.on("GET", f"{API}/{PHONE_NUMBER_ID}", down)
++
++        with pytest.raises(BridgeCredentialError, match="Could not reach"):
++            await WhatsAppAdapter.verify_credentials(dict(CONFIG))
++
++
++class TestFailuresAreClassified:
++    def _graph_error(self, status: int, code: int) -> WhatsAppGraphError:
++        return graph_error(graph_refusal(status, code, "refused"))
++
++    def test_a_rejected_token_is_an_auth_failure(self) -> None:
++        assert WhatsAppAdapter.classify_failure(self._graph_error(401, 190)) == (
++            "auth_failed"
++        )
++        assert WhatsAppAdapter.classify_failure(self._graph_error(400, 190)) == (
++            "auth_failed"
++        )
++
++    def test_an_unreachable_graph_is_the_network(self) -> None:
++        request = httpx.Request("POST", "https://graph.facebook.com/")
++        assert WhatsAppAdapter.classify_failure(
++            httpx.ConnectError("refused", request=request)
++        ) == ("network")
++
++    def test_any_other_refusal_is_the_platforms(self) -> None:
++        assert WhatsAppAdapter.classify_failure(self._graph_error(400, 131026)) == (
++            "platform_error"
++        )
++
++    def test_anything_else_is_left_to_switch(self) -> None:
++        assert WhatsAppAdapter.classify_failure(ValueError("x")) is None
++        assert WhatsAppAdapter.classify_failure(BridgeOperationError("x")) is None
++
++
++class TestStarting:
++    async def test_without_a_public_address_it_refuses_to_start(
++        self, graph: FakeGraph
++    ) -> None:
++        adapter = WhatsAppAdapter(
++            config=WhatsAppConnectionConfig.model_validate(CONFIG)
++        )
++
++        async def ignore(_: Any) -> None:
++            return None
++
++        with pytest.raises(BridgeOperationError, match="MESSAGING_PUBLIC_URL"):
++            await adapter.start(ignore, ignore, ignore, ignore, ignore)
++        await adapter.stop()
++        assert graph.requests == []
++
++
++# ── Webhooks ──────────────────────────────────────────────────────────────────
++
++
++class TestWebhooksProveThemselves:
++    async def test_a_correctly_signed_post_is_accepted(
++        self, adapter: WhatsAppAdapter
++    ) -> None:
++        await adapter.verify_webhook(post(text("wamid.in1", "hi")))
++
++    async def test_a_post_signed_with_another_secret_is_refused(
++        self, adapter: WhatsAppAdapter
++    ) -> None:
++        with pytest.raises(WebhookAuthenticityError):
++            await adapter.verify_webhook(post(text("wamid.in1", "hi"), "other"))
++
++    async def test_a_post_with_no_signature_is_refused(
++        self, adapter: WhatsAppAdapter
++    ) -> None:
++        request = post(text("wamid.in1", "hi"))
++        with pytest.raises(WebhookAuthenticityError):
++            await adapter.verify_webhook(
++                WebhookRequest(method="POST", headers={}, query={}, body=request.body)
++            )
++
++    async def test_a_body_changed_after_signing_is_refused(
++        self, adapter: WhatsAppAdapter
++    ) -> None:
++        request = post(text("wamid.in1", "hi"))
++        with pytest.raises(WebhookAuthenticityError):
++            await adapter.verify_webhook(
++                WebhookRequest(
++                    method="POST",
++                    headers=request.headers,
++                    query={},
++                    body=request.body.replace(b"hi", b"ho"),
++                )
++            )
++
++    async def test_the_address_check_is_answered_with_its_challenge(
++        self, adapter: WhatsAppAdapter
++    ) -> None:
++        request = WebhookRequest(
++            method="GET",
++            headers={},
++            query={
++                "hub.mode": "subscribe",
++                "hub.verify_token": CONFIG["verify_token"],
++                "hub.challenge": "1158201444",
++            },
++            body=b"",
++        )
++
++        await adapter.verify_webhook(request)
++        event = adapter.parse_webhook(request)
++
++        assert event.handshake == "1158201444"
++        assert event.envelope_type == "address_check"
++        assert event.answers_inline is False
++
++    @pytest.mark.parametrize(
++        "query",
++        [
++            {"hub.mode": "subscribe", "hub.verify_token": "wrong"},
++            {"hub.mode": "unsubscribe", "hub.verify_token": CONFIG["verify_token"]},
++            {},
++        ],
++    )
++    async def test_an_address_check_without_this_verify_token_is_refused(
++        self, adapter: WhatsAppAdapter, query: dict[str, str]
++    ) -> None:
++        with pytest.raises(WebhookAuthenticityError):
++            await adapter.verify_webhook(
++                WebhookRequest(
++                    method="GET",
++                    headers={},
++                    query={**query, "hub.challenge": "1"},
++                    body=b"",
++                )
++            )
++
++
++class TestWebhooksAreRead:
++    def test_a_retried_delivery_carries_the_same_event_id(
++        self, adapter: WhatsAppAdapter
++    ) -> None:
++        first = adapter.parse_webhook(post(text("wamid.in1", "hi")))
++        again = adapter.parse_webhook(post(text("wamid.in1", "hi")))
++
++        assert first.envelope_type == "message"
++        assert first.external_event_id == again.external_event_id == "wamid.in1"
++        assert first.answers_inline is False
++
++    def test_a_status_is_identified_by_its_message_and_state(
++        self, adapter: WhatsAppAdapter
++    ) -> None:
++        event = adapter.parse_webhook(
++            post(
++                envelope(
++                    {
++                        "statuses": [
++                            {
++                                "id": "wamid.out1",
++                                "status": "delivered",
++                                "timestamp": "1761700000",
++                                "recipient_id": PERSON,
++                            }
++                        ]
++                    }
++                )
++            )
++        )
++        assert event.envelope_type == "status"
++        assert event.external_event_id == "wamid.out1:delivered"
++
++    @pytest.mark.parametrize(
++        "body",
++        [
++            b"not json",
++            json.dumps({"object": "page", "entry": []}).encode(),
++            json.dumps({"object": "whatsapp_business_account", "entry": []}).encode(),
++            json.dumps(
++                {"object": "whatsapp_business_account", "entry": [{"changes": []}]}
++            ).encode(),
++            json.dumps(envelope({"messages": [{"type": "text"}]})).encode(),
++        ],
++    )
++    def test_a_body_that_is_not_a_whatsapp_event_is_refused(
++        self, adapter: WhatsAppAdapter, body: bytes
++    ) -> None:
++        with pytest.raises(WebhookPayloadError):
++            adapter.parse_webhook(
++                WebhookRequest(method="POST", headers={}, query={}, body=body)
++            )
++
++    async def test_a_field_this_bridge_does_not_read_is_accepted_and_ignored_loudly(
++        self,
++        adapter: WhatsAppAdapter,
++        heard: Heard,
++        graph: FakeGraph,
++        caplog: pytest.LogCaptureFixture,
++    ) -> None:
++        payload = envelope({"phone_number": BUSINESS_NUMBER, "event": "VERIFIED"})
++        payload["entry"][0]["changes"][0]["field"] = "account_update"
++
++        event = adapter.parse_webhook(post(payload))
++        with caplog.at_level(logging.WARNING):
++            await adapter.dispatch_event(
++                envelope_type=event.envelope_type, payload=event.payload
++            )
++
++        assert event.external_event_id is None
++        assert "account_update" in caplog.text
++        assert heard.messages == [] and graph.requests == []
++
++
++# ── Inbound ───────────────────────────────────────────────────────────────────
++
++
++class TestInboundMessages:
++    async def test_a_text_message_reaches_the_room_side_as_written(
++        self, adapter: WhatsAppAdapter, heard: Heard, graph: FakeGraph
++    ) -> None:
++        await deliver(adapter, text("wamid.in1", "*urgent*: ~old~ plan"))
++
++        (message,) = heard.messages
++        assert message.channel_id == PERSON
++        assert message.channel_type == "direct"
++        assert message.sender_id == PERSON
++        assert message.sender_name == f"AdaLovelace_{PERSON}"
++        assert message.channel_name == "Ada Lovelace"
++        assert message.content == "*urgent*: ~old~ plan"
++        assert adapter.translate_inbound(message.content) == (
++            "**urgent**: ~~old~~ plan"
++        )
++        assert message.message_ref == "wamid.in1"
++        assert message.root_id is None
++        assert graph.receipts() == [
++            {
++                "messaging_product": "whatsapp",
++                "status": "read",
++                "message_id": "wamid.in1",
++            }
++        ]
++
++    async def test_a_quote_reply_carries_the_quoted_message_as_its_root(
++        self, adapter: WhatsAppAdapter, heard: Heard
++    ) -> None:
++        await deliver(
++            adapter,
++            text(
++                "wamid.in2",
++                "A1 approve",
++                context={"from": BUSINESS_NUMBER, "id": "wamid.out7"},
++            ),
++        )
++        assert heard.messages[0].root_id == "wamid.out7"
++
++    async def test_a_photo_is_downloaded_in_two_steps(
++        self, adapter: WhatsAppAdapter, heard: Heard, graph: FakeGraph
++    ) -> None:
++        graph.on(
++            "GET",
++            f"{API}/media-1",
++            lambda r: httpx.Response(
++                200,
++                json={
++                    "url": "https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=1",
++                    "mime_type": "image/jpeg",
++                    "file_size": 4,
++                    "id": "media-1",
++                },
++            ),
++        )
++        graph.on(
++            "GET",
++            "/whatsapp_business/attachments/",
++            lambda r: httpx.Response(200, content=b"\xff\xd8\xff\xe0"),
++        )
++
++        await deliver(
++            adapter,
++            inbound(
++                {
++                    "id": "wamid.in3",
++                    "type": "image",
++                    "image": {
++                        "caption": "the *receipt*",
++                        "mime_type": "image/jpeg",
++                        "sha256": "abc",
++                        "id": "media-1",
++                    },
++                }
++            ),
++        )
++
++        (message,) = heard.messages
++        assert message.content == "the *receipt*"
++        (attachment,) = message.attachments
++        assert attachment.data == b"\xff\xd8\xff\xe0"
++        assert attachment.mimetype == "image/jpeg"
++        assert attachment.filename.startswith("image_media-1")
++        download = next(
++            r for r in graph.requests if r.url.host == "lookaside.fbsbx.com"
++        )
++        assert download.headers["authorization"] == f"Bearer {CONFIG['access_token']}"
++
++    async def test_an_oversized_file_is_disclosed_and_not_downloaded(
++        self, adapter: WhatsAppAdapter, heard: Heard, graph: FakeGraph
++    ) -> None:
++        adapter.set_max_attachment_bytes(1000)
++        graph.on(
++            "GET",
++            f"{API}/media-2",
++            lambda r: httpx.Response(
++                200,
++                json={"url": "https://lookaside.fbsbx.com/x", "file_size": 5000},
++            ),
++        )
++
++        await deliver(
++            adapter,
++            inbound(
++                {
++                    "id": "wamid.in4",
++                    "type": "document",
++                    "document": {
++                        "filename": "report.pdf",
++                        "mime_type": "application/pdf",
++                        "id": "media-2",
++                    },
++                }
++            ),
++        )
++
++        (message,) = heard.messages
++        assert message.attachments == []
++        (failure,) = message.attachment_failures
++        assert failure.filename == "report.pdf"
++        assert "5000 bytes exceeds the 1000 byte limit" in failure.reason
++        assert all(r.url.host != "lookaside.fbsbx.com" for r in graph.requests)
++
++    async def test_a_file_that_cannot_be_downloaded_is_disclosed(
++        self, adapter: WhatsAppAdapter, heard: Heard, graph: FakeGraph
++    ) -> None:
++        graph.on(
++            "GET",
++            f"{API}/media-3",
++            lambda r: graph_refusal(400, 131052, "Media download error"),
++        )
++
++        await deliver(
++            adapter,
++            inbound(
++                {
++                    "id": "wamid.in5",
++                    "type": "audio",
++                    "audio": {"mime_type": "audio/ogg", "id": "media-3", "voice": True},
++                }
++            ),
++        )
++
++        (failure,) = heard.messages[0].attachment_failures
++        assert "Media download error" in failure.reason
++
++    async def test_a_location_is_described_rather_than_dropped(
++        self, adapter: WhatsAppAdapter, heard: Heard
++    ) -> None:
++        await deliver(
++            adapter,
++            inbound(
++                {
++                    "id": "wamid.in6",
++                    "type": "location",
++                    "location": {
++                        "latitude": 51.5,
++                        "longitude": -0.12,
++                        "name": "Office",
++                    },
++                }
++            ),
++        )
++        assert "shared a location: Office" in heard.messages[0].content
++        assert "51.5,-0.12" in heard.messages[0].content
++
++    async def test_an_unsupported_message_is_disclosed(
++        self, adapter: WhatsAppAdapter, heard: Heard
++    ) -> None:
++        await deliver(
++            adapter,
++            inbound(
++                {
++                    "id": "wamid.in7",
++                    "type": "unsupported",
++                    "errors": [{"code": 131051, "title": "Message type unknown"}],
++                }
++            ),
++        )
++        assert "does not deliver to businesses" in heard.messages[0].content
++
++    async def test_a_bang_command_is_a_command(
++        self, adapter: WhatsAppAdapter, heard: Heard
++    ) -> None:
++        await deliver(adapter, text("wamid.in8", "!invite-agent reviewer"))
++
++        assert heard.messages == []
++        (command,) = heard.commands
++        assert (command.command, command.args) == ("invite-agent", "reviewer")
++        assert command.channel_id == PERSON
++        assert command.message_ref == "wamid.in8"
++
++    async def test_a_person_with_a_username_is_addressed_by_their_scoped_id(
++        self, adapter: WhatsAppAdapter, heard: Heard, graph: FakeGraph
++    ) -> None:
++        payload = envelope(
++            {
++                "contacts": [
++                    {
++                        "user_id": "US.13491208655302741918",
++                        "profile": {"username": "@ada"},
++                    }
++                ],
++                "messages": [
++                    {
++                        "from_user_id": "US.13491208655302741918",
++                        "id": "wamid.in9",
++                        "timestamp": "1761700000",
++                        "type": "text",
++                        "text": {"body": "hello"},
++                    }
++                ],
++            }
++        )
++
++        await deliver(adapter, payload)
++        await adapter.send_message("US.13491208655302741918", "helper", "hi")
++
++        assert heard.messages[0].channel_id == "US.13491208655302741918"
++        assert heard.messages[0].channel_name == "ada"
++        (sent,) = graph.sends()
++        assert sent["recipient"] == "US.13491208655302741918"
++        assert "to" not in sent
++
++    async def test_a_status_callback_dispatches_nothing(
++        self, adapter: WhatsAppAdapter, heard: Heard, graph: FakeGraph
++    ) -> None:
++        await deliver(
++            adapter,
++            envelope(
++                {
++                    "statuses": [
++                        {
++                            "id": "wamid.out1",
++                            "status": "read",
++                            "timestamp": "1761700000",
++                            "recipient_id": PERSON,
++                        }
++                    ]
++                }
++            ),
++        )
++        assert heard.messages == [] and heard.commands == []
++        assert graph.requests == []
++
++    async def test_a_send_refused_later_for_the_window_is_said_loudly(
++        self,
++        adapter: WhatsAppAdapter,
++        heard: Heard,
++        caplog: pytest.LogCaptureFixture,
++    ) -> None:
++        with caplog.at_level(logging.ERROR):
++            await deliver(
++                adapter,
++                envelope(
++                    {
++                        "statuses": [
++                            {
++                                "id": "wamid.out2",
++                                "status": "failed",
++                                "timestamp": "1761700000",
++                                "recipient_id": PERSON,
++                                "errors": [
++                                    {
++                                        "code": 131047,
++                                        "title": "Re-engagement message",
++                                        "message": "Re-engagement message",
++                                    }
++                                ],
++                            }
++                        ]
++                    }
++                ),
++            )
++        assert heard.messages == []
++        assert WINDOW_CLOSED in caplog.text
++        assert "wamid.out2" in caplog.text
++
++    async def test_the_business_numbers_own_message_is_ignored(
++        self, adapter: WhatsAppAdapter, heard: Heard
++    ) -> None:
++        await deliver(
++            adapter, text("wamid.echo", "our own words", sender=BUSINESS_NUMBER)
++        )
++        assert heard.messages == []
++
++    async def test_a_group_message_is_ignored(
++        self, adapter: WhatsAppAdapter, heard: Heard
++    ) -> None:
++        await deliver(
++            adapter, text("wamid.g1", "hi all", group_id="120363000000000000")
++        )
++        assert heard.messages == []
++
++    async def test_a_reaction_is_not_relayed_as_a_message(
++        self, adapter: WhatsAppAdapter, heard: Heard
++    ) -> None:
++        await deliver(
++            adapter,
++            inbound(
++                {
++                    "id": "wamid.r1",
++                    "type": "reaction",
++                    "reaction": {"message_id": "wamid.out1", "emoji": "👍"},
++                }
++            ),
++        )
++        assert heard.messages == []
++
++    async def test_another_numbers_event_is_ignored(
++        self, adapter: WhatsAppAdapter, heard: Heard
++    ) -> None:
++        payload = text("wamid.in10", "hi")
++        payload["entry"][0]["changes"][0]["value"]["metadata"]["phone_number_id"] = (
++            "999"
++        )
++        await deliver(adapter, payload)
++        assert heard.messages == []
++
++
++# ── Outbound ──────────────────────────────────────────────────────────────────
++
++
++class TestOutboundMessages:
++    async def test_a_reply_posts_under_the_agents_name_and_returns_the_wamid(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        ref = await adapter.send_message(
++            PERSON, "helper", adapter.translate_outbound("Done: **3** files")
++        )
++
++        assert ref == "wamid.out1"
++        (request,) = graph.requests
++        assert request.url.path == f"{API}/{PHONE_NUMBER_ID}/messages"
++        assert request.headers["authorization"] == f"Bearer {CONFIG['access_token']}"
++        assert json.loads(request.content) == {
++            "messaging_product": "whatsapp",
++            "recipient_type": "individual",
++            "to": PERSON,
++            "type": "text",
++            "text": {"body": "*helper*: Done: *3* files", "preview_url": False},
++        }
++
++    async def test_a_threaded_reply_quotes_the_message_it_answers(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        await adapter.send_message(PERSON, "helper", "yes", "wamid.in1")
++        assert graph.sends()[0]["context"] == {"message_id": "wamid.in1"}
++
++    async def test_a_thread_that_is_not_a_whatsapp_message_is_not_quoted(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        await adapter.send_message(PERSON, "helper", "yes", "turn:t-1")
++        assert "context" not in graph.sends()[0]
++
++    async def test_a_long_reply_is_split_and_the_first_part_is_its_ref(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        paragraph = "word " * 500
++        body = "\n\n".join([paragraph.strip()] * 4)
++
++        ref = await adapter.send_message(PERSON, "helper", body, "wamid.in1")
++
++        sent = graph.sends()
++        assert ref == "wamid.out1"
++        assert len(sent) > 1
++        assert all(len(s["text"]["body"]) <= 4096 for s in sent)
++        assert sent[0]["context"] == {"message_id": "wamid.in1"}
++        assert all("context" not in s for s in sent[1:])
++        assert all(s["text"]["body"].endswith("word") for s in sent)
++
++    async def test_outside_the_24_hour_window_the_send_fails_saying_why(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        graph.on(
++            "POST",
++            f"{API}/{PHONE_NUMBER_ID}/messages",
++            lambda r: graph_refusal(400, 131047, "(#131047) Re-engagement message"),
++        )
++
++        with pytest.raises(BridgeOperationError) as caught:
++            await adapter.send_message(PERSON, "helper", "late reply")
++
++        assert str(caught.value) == WINDOW_CLOSED
++        assert "24 hours" in WINDOW_CLOSED and "template" in WINDOW_CLOSED
++
++    async def test_any_other_refusal_is_raised_as_whatsapps(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        graph.on(
++            "POST",
++            f"{API}/{PHONE_NUMBER_ID}/messages",
++            lambda r: graph_refusal(400, 131026, "Message undeliverable"),
++        )
++        with pytest.raises(WhatsAppGraphError) as caught:
++            await adapter.send_message(PERSON, "helper", "hi")
++        assert caught.value.code == 131026
++
++    async def test_edits_and_deletes_reach_nothing(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        await adapter.update_message(PERSON, "wamid.out1", "changed")
++        await adapter.delete_message(PERSON, "wamid.out1")
++        assert graph.requests == []
++
++
++class TestOutboundFiles:
++    def _upload_answers(self, graph: FakeGraph) -> None:
++        graph.on(
++            "POST",
++            f"{API}/{PHONE_NUMBER_ID}/media",
++            lambda r: httpx.Response(200, json={"id": "uploaded-1"}),
++        )
++
++    async def test_a_photo_is_uploaded_then_sent_with_its_caption(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        self._upload_answers(graph)
++
++        ref = await adapter.send_attachment(
++            PERSON, "helper", "chart.png", "image/png", b"\x89PNG", "the **chart**"
++        )
++
++        upload, send = graph.requests
++        assert upload.url.path == f"{API}/{PHONE_NUMBER_ID}/media"
++        assert b'name="messaging_product"' in upload.content
++        assert b'filename="chart.png"' in upload.content
++        assert b"\x89PNG" in upload.content
++        assert json.loads(send.content)["image"] == {
++            "id": "uploaded-1",
++            "caption": "*helper*: the *chart*",
++        }
++        assert ref == "wamid.out1"
++
++    async def test_a_document_keeps_its_filename(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        self._upload_answers(graph)
++        await adapter.send_attachment(
++            PERSON, "helper", "notes.txt", "text/plain", b"hello", None
++        )
++        assert graph.sends()[0]["document"] == {
++            "id": "uploaded-1",
++            "caption": "*helper*",
++            "filename": "notes.txt",
++        }
++
++    async def test_audio_takes_its_caption_as_a_message_before_it(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        self._upload_answers(graph)
++        ref = await adapter.send_attachment(
++            PERSON, "helper", "memo.mp3", "audio/mpeg", b"ID3", "listen"
++        )
++        caption, audio = graph.sends()
++        assert caption["text"]["body"] == "*helper*: listen"
++        assert audio["audio"] == {"id": "uploaded-1"}
++        assert ref == "wamid.out1"
++
++    async def test_an_oversized_file_is_refused_visibly_in_the_chat(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        ref = await adapter.send_attachment(
++            PERSON,
++            "helper",
++            "demo.mp4",
++            "video/mp4",
++            b"\x00" * (MAX_VIDEO_BYTES + 1),
++            None,
++        )
++
++        assert all(not r.url.path.endswith("/media") for r in graph.requests)
++        (notice,) = graph.sends()
++        body = notice["text"]["body"]
++        assert "demo.mp4" in body
++        assert "16.0 MB is over WhatsApp's 16.0 MB limit for video files" in body
++        assert ref == "wamid.out1"
++
++    async def test_a_file_whatsapp_refuses_is_named_in_the_chat(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        graph.on(
++            "POST",
++            f"{API}/{PHONE_NUMBER_ID}/media",
++            lambda r: graph_refusal(400, 131053, "Media upload error"),
++        )
++        await adapter.send_attachment(
++            PERSON, "helper", "clip.mp4", "video/mp4", b"\x00", None
++        )
++        (notice,) = graph.sends()
++        assert "clip.mp4" in notice["text"]["body"]
++        assert "Media upload error" in notice["text"]["body"]
++
++
++class TestWorkingState:
++    async def test_working_reacts_and_shows_typing_on_the_asking_message(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        await adapter.mark_activity(
++            PERSON, "wamid.in1", agent_name="helper", mark="working", on=True
++        )
++        (reaction,) = graph.sends()
++        assert reaction["type"] == "reaction"
++        assert reaction["reaction"] == {"message_id": "wamid.in1", "emoji": "👀"}
++        assert graph.receipts()[0]["typing_indicator"] == {"type": "text"}
++
++    async def test_done_takes_the_reaction_off(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        await adapter.mark_activity(
++            PERSON, "wamid.in1", agent_name="helper", mark="working", on=False
++        )
++        (reaction,) = graph.sends()
++        assert reaction["reaction"] == {"message_id": "wamid.in1", "emoji": ""}
++        assert graph.receipts() == []
++
++    async def test_a_reaction_outside_the_window_is_refused_for_good(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        graph.on(
++            "POST",
++            f"{API}/{PHONE_NUMBER_ID}/messages",
++            lambda r: graph_refusal(400, 131047, "Re-engagement message"),
++        )
++        with pytest.raises(ActivityMarkRefused):
++            await adapter.mark_activity(
++                PERSON, "wamid.in1", agent_name="helper", mark="working", on=True
++            )
++
++    async def test_a_turn_is_not_posted_as_a_message(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        turn = TurnUpsert(
++            type="turn.upsert", turn_id="t-1", status="running", command_id=None
++        )
++        ref = await adapter.post_rich(PERSON, "helper", TurnActivity([], turn))
++        await adapter.update_rich(PERSON, "helper", ref, TurnActivity([], turn), None)
++
++        assert ref == "turn:t-1"
++        assert graph.requests == []
++
++    async def test_a_problem_somebody_has_to_act_on_is_posted(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        turn = TurnUpsert(
++            type="turn.upsert", turn_id="t-2", status="error", command_id=None
++        )
++        ref = await adapter.post_rich(
++            PERSON,
++            "helper",
++            TurnActivity(
++                [], turn, status_only=True, error_summary="Agent went offline"
++            ),
++        )
++        assert ref == "wamid.out1"
++        body = graph.sends()[0]["text"]["body"]
++        assert body.startswith("*helper*")
++        assert "Agent went offline" in body
++
++    async def test_an_offline_host_is_not_announced_as_working(
++        self, adapter: WhatsAppAdapter, graph: FakeGraph
++    ) -> None:
++        turn = TurnUpsert(
++            type="turn.upsert", turn_id="t-3", status="running", command_id=None
++        )
++        await adapter.post_rich(
++            PERSON,
++            "helper",
++            TurnActivity(
++                [],
++                turn,
++                status_only=True,
++                error_summary="The agent host is offline.",
++            ),
++        )
++        body = graph.sends()[0]["text"]["body"]
++        assert "The agent host is offline." in body
++        assert "Working" not in body
++
++
++class TestChannels:
++    async def test_whatsapp_chats_are_one_to_one_and_cannot_be_created(
++        self, adapter: WhatsAppAdapter
++    ) -> None:
++        assert await adapter.get_channel_type(PERSON) == "direct"
++        assert await adapter.get_channel_agent_names(PERSON) == []
++        with pytest.raises(ChannelCreationUnsupported):
++            await adapter.create_channel("room", "topic")
++
++    async def test_nobody_else_can_be_added_and_they_are_named(
++        self, adapter: WhatsAppAdapter
++    ) -> None:
++        assert await adapter.add_users_to_channel(PERSON, ["bob"], ["u-2"]) == ["u-2"]
+diff --git a/core/tests/switch_core/bridges/collaboration/test_whatsapp_markup.py b/core/tests/switch_core/bridges/collaboration/test_whatsapp_markup.py
+new file mode 100644
+index 00000000..d37729ac
+--- /dev/null
++++ b/core/tests/switch_core/bridges/collaboration/test_whatsapp_markup.py
+@@ -0,0 +1,133 @@
++"""Switch Markdown to WhatsApp markup and back, and splitting long replies."""
++
++from __future__ import annotations
++
++import pytest
++
++from switch_core.bridges.collaboration.whatsapp.adapter import (
++    WhatsAppAdapter,
++    WhatsAppConnectionConfig,
++)
++from switch_core.bridges.collaboration.whatsapp.chunking import (
++    MAX_MESSAGE,
++    chunk_message,
++)
++from switch_core.bridges.collaboration.whatsapp.formatting import (
++    to_markdown,
++    to_whatsapp,
++)
++
++
++class TestOutbound:
++    @pytest.mark.parametrize(
++        ("markdown", "whatsapp"),
++        [
++            ("**bold**", "*bold*"),
++            ("__bold__", "*bold*"),
++            ("*italic*", "_italic_"),
++            ("_italic_", "_italic_"),
++            ("***both***", "*_both_*"),
++            ("~~gone~~", "~gone~"),
++            ("# Plan", "*Plan*"),
++            ("### Step two ###", "*Step two*"),
++            ("* one\n* two", "- one\n- two"),
++            ("[the docs](https://example.com/a)", "the docs (https://example.com/a)"),
++            ("[https://example.com](https://example.com)", "https://example.com"),
++            ("<https://example.com>", "https://example.com"),
++            ("`**literal**`", "`**literal**`"),
++            ("```python\nx = **1**\n```", "```x = **1**```"),
++            ("> quoted", "> quoted"),
++        ],
++    )
++    def test_markdown_renders_in_whatsapps_markup(
++        self, markdown: str, whatsapp: str
++    ) -> None:
++        assert to_whatsapp(markdown) == whatsapp
++
++    def test_a_link_inside_bold_keeps_its_address_intact(self) -> None:
++        assert to_whatsapp("**see [a_b](https://x.y/a_b_c)**") == (
++            "*see a_b (https://x.y/a_b_c)*"
++        )
++
++    def test_a_console_link_is_rewritten_to_https_before_rendering(self) -> None:
++        adapter = WhatsAppAdapter(
++            config=WhatsAppConnectionConfig(
++                access_token="t",
++                phone_number_id="1",
++                app_secret="s",
++                verify_token="v",
++            )
++        )
++        adapter.set_gateway_public_url("https://gw.example")
++        rendered = adapter.translate_outbound(
++            "[open](switchdash://open/room/r-1) the room"
++        )
++        assert "switchdash://" not in rendered
++        assert "https://gw.example" in rendered
++
++
++class TestInbound:
++    @pytest.mark.parametrize(
++        ("whatsapp", "markdown"),
++        [
++            ("*bold*", "**bold**"),
++            ("_italic_", "_italic_"),
++            ("~gone~", "~~gone~~"),
++            ("`code`", "`code`"),
++            ("```one line```", "`one line`"),
++            ("```a\nb```", "```\na\nb\n```"),
++            ("2*3*4", "2*3*4"),
++            ("plain text", "plain text"),
++        ],
++    )
++    def test_whatsapp_markup_reaches_the_room_as_markdown(
++        self, whatsapp: str, markdown: str
++    ) -> None:
++        assert to_markdown(whatsapp) == markdown
++
++    def test_markup_inside_code_is_left_alone(self) -> None:
++        assert to_markdown("```*not bold*```") == "`*not bold*`"
++
++
++class TestRoundTrip:
++    @pytest.mark.parametrize(
++        "markdown",
++        [
++            "**bold** and _italic_ and ~~struck~~",
++            "`code` stays `code`",
++            "a plain sentence",
++            "- one\n- two",
++        ],
++    )
++    def test_markdown_survives_the_trip_through_whatsapp(self, markdown: str) -> None:
++        assert to_markdown(to_whatsapp(markdown)) == markdown
++
++
++class TestChunking:
++    def test_a_short_body_is_one_message(self) -> None:
++        assert chunk_message("hello") == ["hello"]
++
++    def test_a_long_body_splits_on_paragraphs(self) -> None:
++        paragraph = "x" * 3000
++        chunks = chunk_message(f"{paragraph}\n\n{paragraph}")
++        assert chunks == [paragraph, paragraph]
++
++    def test_without_paragraphs_it_splits_on_lines_then_words(self) -> None:
++        lines = "\n".join(["word " * 20] * 100)
++        chunks = chunk_message(lines)
++        assert all(len(c) <= MAX_MESSAGE for c in chunks)
++        assert "".join(chunks).replace("\n", "") == lines.replace("\n", "")
++
++    def test_one_unbroken_run_is_cut_hard_and_loses_nothing(self) -> None:
++        run = "y" * (MAX_MESSAGE * 2 + 10)
++        chunks = chunk_message(run)
++        assert all(len(c) <= MAX_MESSAGE for c in chunks)
++        assert "".join(chunks) == run
++
++    def test_a_code_block_cut_in_two_is_closed_and_reopened(self) -> None:
++        code = "\n".join(f"    line {i}" for i in range(600))
++        chunks = chunk_message(f"```{code}```")
++        assert len(chunks) > 1
++        assert all(len(c) <= MAX_MESSAGE for c in chunks)
++        assert all(c.count("```") == 2 for c in chunks)
++        assert chunks[1].startswith("```\n    line")
+diff --git a/core/tests/switch_core/bridges/collaboration/test_whatsapp_webhook_route.py b/core/tests/switch_core/bridges/collaboration/test_whatsapp_webhook_route.py
+new file mode 100644
+index 00000000..06728243
+--- /dev/null
++++ b/core/tests/switch_core/bridges/collaboration/test_whatsapp_webhook_route.py
+@@ -0,0 +1,189 @@
++"""A signed WhatsApp webhook through the connection's own address, end to end.
++
++The route, the receipt that makes a retried delivery count once, and the
++adapter, with only Graph mocked: what Meta would see answered, and what the
++room side of the bridge would be handed.
++"""
++
++from __future__ import annotations
++
++import json
++import uuid
++from typing import Any
++
++import httpx
++import pytest
++from fastapi import FastAPI
++from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
++
++from switch_core.bridges.collaboration.lifecycle_service import (
++    CollaborationBridgeLifecycleService,
++)
++from switch_core.bridges.collaboration.webhooks import (
++    BridgeWebhookService,
++    create_bridge_webhook_router,
++    webhook_path,
++)
++from switch_core.bridges.collaboration.whatsapp.adapter import (
++    SIGNATURE_HEADER,
++    WhatsAppAdapter,
++    WhatsAppConnectionConfig,
++    sign,
++)
++from switch_core.db.models import Client, CollaborationBridge, Tenant
++from switch_core.db.stores.messaging_event_store import MessagingEventReceiptStore
++
++from .test_lifecycle_tenant_binding import _service
++from .test_whatsapp_adapter import CONFIG, FakeGraph, Heard, envelope, graph, text
++
++__all__ = ["graph"]
++
++
++class _RunningBridge:
++    def __init__(self, adapter: WhatsAppAdapter) -> None:
++        self.adapter = adapter
++
++
++@pytest.fixture
++async def route(
++    session_factory: async_sessionmaker[AsyncSession], graph: FakeGraph
++) -> Any:
++    lifecycle: CollaborationBridgeLifecycleService = _service(session_factory)
++    lifecycle._config.messaging_public_url = "https://switch.example"
++    lifecycle.register_adapter("whatsapp", WhatsAppAdapter, WhatsAppConnectionConfig)
++    tenant = f"tenant-{uuid.uuid4().hex[:8]}"
++    async with session_factory() as session:
++        session.add(Tenant(id=tenant, slug=tenant, name=tenant))
++        await session.flush()
++        client = Client(
++            tenant_id=tenant,
++            transport_user_id=f"@bridge-{uuid.uuid4().hex[:8]}:test",
++            display_name="bridge client",
++            type="bridge",
++        )
++        session.add(client)
++        await session.flush()
++        bridge = CollaborationBridge(
++            tenant_id=tenant,
++            type="whatsapp",
++            display_name="WhatsApp",
++            client_id=client.id,
++            status="active",
++            connection_config=dict(CONFIG),
++        )
++        session.add(bridge)
++        await session.flush()
++        bridge_id = bridge.id
++        await session.commit()
++
++    adapter = WhatsAppAdapter(config=WhatsAppConnectionConfig.model_validate(CONFIG))
++    adapter.set_webhook_url(f"https://switch.example{webhook_path(bridge_id)}")
++    heard = Heard()
++
++    async def ignore(_: Any) -> None:
++        return None
++
++    await adapter.start(heard.message, heard.command, ignore, ignore, ignore)
++    lifecycle._bridges[bridge_id] = _RunningBridge(adapter)  # type: ignore[assignment]
++
++    app = FastAPI()
++    app.include_router(
++        create_bridge_webhook_router(
++            BridgeWebhookService(
++                lifecycle=lifecycle,
++                session_factory=session_factory,
++                receipts=MessagingEventReceiptStore(),
++            )
++        )
++    )
++    client = httpx.AsyncClient(
++        transport=httpx.ASGITransport(app=app), base_url="https://switch.example"
++    )
++    yield client, bridge_id, heard
++    await client.aclose()
++    await adapter.stop()
++
++
++class TestAWhatsAppWebhookEndToEnd:
++    async def test_metas_address_check_is_answered_with_the_challenge(
++        self, route: Any
++    ) -> None:
++        client, bridge_id, heard = route
++        response = await client.get(
++            webhook_path(bridge_id),
++            params={
++                "hub.mode": "subscribe",
++                "hub.verify_token": CONFIG["verify_token"],
++                "hub.challenge": "1158201444",
++            },
++        )
++        assert response.status_code == 200
++        assert response.text == "1158201444"
++        assert heard.messages == []
++
++    async def test_a_wrong_verify_token_is_refused(self, route: Any) -> None:
++        client, bridge_id, _heard = route
++        response = await client.get(
++            webhook_path(bridge_id),
++            params={
++                "hub.mode": "subscribe",
++                "hub.verify_token": "guess",
++                "hub.challenge": "1",
++            },
++        )
++        assert response.status_code == 401
++
++    async def test_a_signed_message_reaches_the_room_side_once(
++        self, route: Any
++    ) -> None:
++        client, bridge_id, heard = route
++        body = json.dumps(text("wamid.e2e1", "hello from WhatsApp")).encode()
++        headers = {SIGNATURE_HEADER: sign(CONFIG["app_secret"], body)}
++
++        first = await client.post(
++            webhook_path(bridge_id), content=body, headers=headers
++        )
++        again = await client.post(
++            webhook_path(bridge_id), content=body, headers=headers
++        )
++
++        assert (first.status_code, again.status_code) == (200, 200)
++        assert [m.content for m in heard.messages] == ["hello from WhatsApp"]
++
++    async def test_a_message_signed_with_another_secret_is_refused(
++        self, route: Any
++    ) -> None:
++        client, bridge_id, heard = route
++        body = json.dumps(text("wamid.e2e2", "forged")).encode()
++        response = await client.post(
++            webhook_path(bridge_id),
++            content=body,
++            headers={SIGNATURE_HEADER: sign("not-the-app-secret", body)},
++        )
++        assert response.status_code == 401
++        assert heard.messages == []
++
++    async def test_an_unreadable_signed_body_is_a_400(self, route: Any) -> None:
++        client, bridge_id, _heard = route
++        body = b"not json"
++        response = await client.post(
++            webhook_path(bridge_id),
++            content=body,
++            headers={SIGNATURE_HEADER: sign(CONFIG["app_secret"], body)},
++        )
++        assert response.status_code == 400
++
++    async def test_a_field_the_bridge_does_not_read_is_answered_so_meta_stops(
++        self, route: Any
++    ) -> None:
++        client, bridge_id, heard = route
++        payload = envelope({"event": "VERIFIED"})
++        payload["entry"][0]["changes"][0]["field"] = "account_update"
++        body = json.dumps(payload).encode()
++        response = await client.post(
++            webhook_path(bridge_id),
++            content=body,
++            headers={SIGNATURE_HEADER: sign(CONFIG["app_secret"], body)},
++        )
++        assert response.status_code == 200
++        assert heard.messages == []
+diff --git a/docs/messaging-platforms/whatsapp.md b/docs/messaging-platforms/whatsapp.md
+new file mode 100644
+index 00000000..78044904
+--- /dev/null
++++ b/docs/messaging-platforms/whatsapp.md
+@@ -0,0 +1,164 @@
++# WhatsApp
++
++Connect a WhatsApp Business phone number to Switch, so people who write to that
++number reach a Switch room and its agents, and the agents answer in the chat.
++
++Switch uses the **WhatsApp Business Cloud API** on **your own Meta app and
++phone number**. You create the app, add WhatsApp to it, and paste four values
++into Switch Console. Meta then delivers each message to Switch's webhook
++address for the connection.
++
++## What you need
++
++- A [Meta developer account](https://developers.facebook.com/) and a Meta
++  business portfolio (Meta creates one with the app if you have none).
++- A Switch deployment that Meta can reach over **https** (see
++  [The webhook address](#the-webhook-address)).
++- For testing: Meta's free test number, plus your own WhatsApp number added as
++  a test recipient. For production: a phone number you own that isn't already
++  registered with the WhatsApp app.
++
++## 1. Create the Meta app
++
++1. Go to [developers.facebook.com/apps](https://developers.facebook.com/apps)
++   and choose **Create app**.
++2. For the use case, pick **Connect with customers through WhatsApp** (older
++   flows: app type **Business**). Attach it to your business portfolio.
++3. In the app dashboard, open **WhatsApp → API Setup**. Meta gives the app a
++   **test phone number** and lets you add up to five recipient numbers. Add
++   your own WhatsApp number there and confirm the code Meta sends to it.
++
++## 2. Collect the four connection values
++
++| Connection field | Where to find it | Why Switch needs it |
++|---|---|---|
++| **Access token** | A permanent token: **Business settings → Users → System users**. Add a system user (Admin), assign it the app and the WhatsApp account, then **Generate new token** with `whatsapp_business_messaging` and `whatsapp_business_management`. The temporary token on **API Setup** also works but expires after 24 hours. | Sends messages, uploads and downloads files, and marks messages read. `whatsapp_business_messaging` covers sending and media; `whatsapp_business_management` lets Switch read the phone number back to check the token when you save. |
++| **Phone number ID** | **WhatsApp → API Setup**, the numeric **Phone number ID** under the *From* number. This is an ID, not the phone number itself. | Every Graph API call is made for this number. One number can be connected to Switch only once. |
++| **App secret** | **App settings → Basic → App secret** (choose *Show*). | Meta signs every webhook with it. Switch refuses any webhook that isn't signed with it, and checks the secret against the token when you save. |
++| **Verify token** | Any string you choose, for example from `openssl rand -hex 16`. | Meta sends it back when it checks the webhook address, which proves the address is yours. |
++
++Console masks the token, the secret and the verify token. Leading and trailing
++spaces are removed, and an empty field is refused before anything is saved.
++
++## 3. Connect it in Switch Console
++
++1. Open **Connect a messaging app** and choose **WhatsApp**.
++2. Fill in the four fields and connect. Switch reads the phone number back from
++   Meta with the token, signed with the app secret. A wrong token, phone
++   number ID or app secret fails here, with Meta's own explanation and error
++   code.
++3. Once connected, Console shows the connection's **webhook address**. Copy it.
++
++## The webhook address
++
++Meta delivers each message to:
++
++```
++https://<MESSAGING_PUBLIC_URL>/messaging/bridges/<bridge id>/events
++```
++
++To use it:
++
++- `MESSAGING_PUBLIC_URL` must be set to the deployment's public **https**
++  origin (scheme and host, no path). Without it the connection shows no
++  address and **refuses to start**, because no message could ever arrive.
++- The `/messaging` path has to reach switch-core (port 8000) with a
++  browser-trusted certificate. Meta refuses self-signed certificates.
++- For local development, a tunnel works: `cloudflared tunnel --url
++  http://localhost:8000` or `ngrok http 8000`. Set `MESSAGING_PUBLIC_URL` to
++  the https URL it prints, then restart switch-core.
++
++In the Meta app dashboard:
++
++1. Open **WhatsApp → Configuration → Webhook → Edit**.
++2. Set **Callback URL** to the address Console showed, and **Verify token** to
++   the same string you entered in Switch. Choose **Verify and save**. Meta
++   sends a check to the address, and Switch answers it only if the verify
++   token matches.
++3. Under **Webhook fields**, subscribe to **`messages`** only. Switch reads
++   no other field: a delivery for one is acknowledged and ignored, with a
++   warning in the switch-core log naming the field.
++
++Send a message from your WhatsApp to the business number. Its room appears in
++Switch.
++
++## How it behaves
++
++- **One chat per person.** Each person who writes to the number gets a direct
++  room. Their name in the room is their WhatsApp profile name joined up, plus
++  their WhatsApp id, so two people with the same name never share an identity.
++- **Agents reply under their name.** Every agent sends from the one business
++  number, which WhatsApp shows under the business profile's name. So the
++  agent's name is put in bold at the start of each message.
++- **Formatting is converted.** Switch Markdown becomes WhatsApp's markup:
++  `**bold**` → `*bold*`, `~~strike~~` → `~strike~`, headings → bold lines,
++  code fences → triple backticks. A link becomes `label (https://…)`, because
++  WhatsApp only links bare http(s) URLs. Incoming WhatsApp markup is converted
++  back to Markdown.
++- **Long replies are split.** A reply over WhatsApp's 4,096-character limit is
++  sent as several messages, split at paragraph, line or word breaks. A code
++  block split in two is closed and reopened.
++- **`!commands` work.** A message starting with `!` (for example `!help`) is a
++  Switch command. WhatsApp has no slash-command menu.
++- **Working state.** While an agent works on a message, Switch reacts to it
++  with 👀 and shows WhatsApp's typing indicator, which WhatsApp clears on the
++  reply or after 25 seconds. Each incoming message is also marked read (blue
++  ticks).
++- **Approvals and questions** are posted as text, naming a handle such as
++  `A1` and the answers it takes. To answer, type the handle and your answer
++  (`A1 approve`). A reply without the handle, such as a bare `yes`, isn't
++  taken as an answer, even when it quotes the card. WhatsApp's buttons aren't
++  used, and nothing in the chat confirms an answer that landed: the agent
++  carrying on is the sign.
++- **Duplicates and restarts.** Meta retries a delivery it thinks failed. Each
++  message is recognised by its WhatsApp id (`wamid`), so a retry is handled
++  once, on whichever Switch instance receives it.
++
++## Files
++
++Files are relayed both ways, as WhatsApp's own image, video, audio or document
++messages. WhatsApp's size limits:
++
++| Kind | Types | Limit |
++|---|---|---|
++| Image | JPEG, PNG | 5 MB |
++| Audio | AAC, AMR, MP3, M4A, OGG (Opus) | 16 MB |
++| Video | MP4, 3GPP (H.264 with AAC) | 16 MB |
++| Document | anything else | 100 MB |
++| Sticker (incoming only) | WebP | 100 KB static, 500 KB animated |
++
++A file over its limit is not sent. Instead the chat gets a message naming the
++file, its size and the limit. A file WhatsApp refuses (for example, an
++unsupported codec) is reported the same way, with WhatsApp's reason. An
++incoming file larger than the deployment's attachment limit, or one that can't
++be downloaded, is reported in the room rather than dropped. Audio messages take
++no caption, so the caption goes in a message just before the file.
++
++## What WhatsApp can't do
++
++- **The 24-hour customer-service window.** A business can send free-form
++  messages only within 24 hours of the person's last message. Outside that
++  window WhatsApp allows only pre-approved *template* messages, and **Switch
++  doesn't send templates**. A reply sent outside the window is refused by
++  WhatsApp (error `131047`). Switch records it as a failed send with an
++  explanation and doesn't retry it. The window reopens as soon as the person
++  writes again. Today the explanation appears in the switch-core log, not in
++  the room.
++- **No threads.** A reply in a Switch thread quotes the message it answers.
++  When someone quote-replies in WhatsApp, the quoted message is the thread
++  root.
++- **No edits or deletes.** WhatsApp can't edit or delete a sent message. An
++  edit or delete in Switch doesn't reach the chat. A request card isn't
++  updated once it's answered. If someone answers it late, the answer is
++  refused with a reply saying so.
++- **One-to-one only.** Group chats aren't bridged. Group messages are ignored
++  and logged.
++- **No channel creation.** Only the person can start a chat. Switch can't
++  create one or add people to it.
++- **No directory search.** The business knows only the people who have
++  written to it, so they can't be searched for before they write.
++- **Only http(s) links.** Links to Switch Console are rewritten to the
++  gateway's https address when `GATEWAY_PUBLIC_URL` is set.
++- **One connection per Meta app.** A Meta app has one webhook address. Connect
++  each phone number on its own app; events for a number the connection isn't
++  for are ignored and logged.
+-- 
+2.54.0.windows.1
+
+
+From 2d49ffe786fc73db1b64010e807332d317ece00d Mon Sep 17 00:00:00 2001
+From: Prakharrdev <prakhar06.work@gmail.com>
+Date: Fri, 30 Oct 2026 11:05:28 +0530
+Subject: [PATCH 2/4] Claim a WhatsApp connection by Meta app and prove every
+ Graph call
+
+Meta sets the webhook address per app, not per phone number, so two
+connections on one app (even for different numbers) would fight over
+the same callback. The connection now carries the app's App ID and is
+claimed by it. Saving checks the token was issued for that app, asked
+with the app's own id and secret, which also proves the secret.
+
+Every Graph API call now carries appsecret_proof, not only the check
+made when the connection is saved, so an app with Require App Secret
+turned on accepts sends, media and read receipts too. The media
+download itself goes to Meta's media host rather than Graph and takes
+no proof.
+---
+ .../bridges/collaboration/whatsapp/adapter.py |  70 +++++++----
+ .../bridges/collaboration/whatsapp/client.py  |  67 ++++++++--
+ .../collaboration/test_whatsapp_adapter.py    | 117 ++++++++++++++----
+ .../collaboration/test_whatsapp_markup.py     |   1 +
+ docs/messaging-platforms/whatsapp.md          |  17 +--
+ 5 files changed, 206 insertions(+), 66 deletions(-)
+
+diff --git a/core/switch_core/bridges/collaboration/whatsapp/adapter.py b/core/switch_core/bridges/collaboration/whatsapp/adapter.py
+index bf9febc4..cdbba514 100644
+--- a/core/switch_core/bridges/collaboration/whatsapp/adapter.py
++++ b/core/switch_core/bridges/collaboration/whatsapp/adapter.py
+@@ -114,13 +114,6 @@ def sign(app_secret: str, body: bytes) -> str:
+     return f"sha256={digest}"
+ 
+ 
+-def appsecret_proof(app_secret: str, access_token: str) -> str:
+-    """The access token signed with the app secret, as Graph checks it."""
+-    return hmac.new(
+-        app_secret.encode(), access_token.encode(), hashlib.sha256
+-    ).hexdigest()
+-
+-
+ class _WhatsAppMarkup(Markup):
+     """WhatsApp's spelling of the marks a card makes: one star for bold, and a
+     code span that cannot be fenced longer, so a literal holding a backtick
+@@ -147,6 +140,13 @@ class WhatsAppConnectionConfig(BridgeConnectionConfig):
+             "works, but expires after 24 hours."
+         ),
+     )
++    app_id: str = Field(
++        title="App ID",
++        description=(
++            "The numeric ID of your Meta app. App dashboard → App settings → "
++            "Basic → App ID."
++        ),
++    )
+     phone_number_id: str = Field(
+         title="Phone number ID",
+         description=(
+@@ -172,7 +172,9 @@ class WhatsAppConnectionConfig(BridgeConnectionConfig):
+         ),
+     )
+ 
+-    @field_validator("access_token", "phone_number_id", "app_secret", "verify_token")
++    @field_validator(
++        "access_token", "app_id", "phone_number_id", "app_secret", "verify_token"
++    )
+     @classmethod
+     def _not_blank(cls, value: str, info: ValidationInfo) -> str:
+         stripped = value.strip()
+@@ -191,6 +193,15 @@ class WhatsAppConnectionConfig(BridgeConnectionConfig):
+             )
+         return value
+ 
++    @field_validator("app_id")
++    @classmethod
++    def _numeric_app_id(cls, value: str) -> str:
++        if not value.isdigit():
++            raise ValueError(
++                "app_id is the numeric App ID on the app's App settings → Basic page."
++            )
++        return value
++
+ 
+ class WhatsAppAdapter(PlatformAdapter):
+     """WhatsApp collaboration bridge adapter, on the WhatsApp Business Cloud API.
+@@ -252,6 +263,7 @@ class WhatsAppAdapter(PlatformAdapter):
+         self._client = WhatsAppGraphClient(
+             http=self._http,
+             access_token=config.access_token,
++            app_secret=config.app_secret,
+             phone_number_id=config.phone_number_id,
+         )
+ 
+@@ -259,36 +271,52 @@ class WhatsAppAdapter(PlatformAdapter):
+ 
+     @classmethod
+     def claimed_workspace(cls, connection_config: dict[str, object]) -> str | None:
+-        """One business number is connected at most once: Meta delivers its
+-        events to one address, so a second bridge on it would hear nothing."""
+-        return f"WhatsApp phone number {connection_config['phone_number_id']}"
++        """One Meta app is connected at most once. Its webhook address is set
++        per app, not per number, so a second bridge on the same app (even for
++        another of its numbers) would take the callback from the first."""
++        return f"WhatsApp Meta app {connection_config['app_id']}"
+ 
+     @classmethod
+     async def verify_credentials(cls, connection_config: dict[str, object]) -> None:
+-        """Read the phone number back with the token, proved with the app secret.
++        """Check the token belongs to the app and reaches the phone number.
+ 
+-        One call checks three of the four fields: the token is accepted, it
+-        reaches this phone number, and the app secret is the app's own. The
+-        verify token is checked by Meta itself, when the address is saved.
++        `app_id` is what an app is claimed by, so it has to be the token's
++        app and not merely a value someone typed. The token is described with
++        the app's own id and secret, which proves the secret is that app's;
++        then the phone number is read back with the token. The verify token is
++        checked by Meta itself, when the address is saved.
+         """
+         config = WhatsAppConnectionConfig.model_validate(connection_config)
+         async with httpx.AsyncClient(timeout=30) as http:
+             client = WhatsAppGraphClient(
+                 http=http,
+                 access_token=config.access_token,
++                app_secret=config.app_secret,
+                 phone_number_id=config.phone_number_id,
+             )
+             try:
+-                await client.phone_number(
+-                    appsecret_proof=appsecret_proof(
+-                        config.app_secret, config.access_token
++                token = await client.token_info(app_id=config.app_id)
++                if not token.get("is_valid"):
++                    error = token.get("error")
++                    reason = error.get("message") if isinstance(error, dict) else None
++                    raise BridgeCredentialError(
++                        "WhatsApp says the access token is not valid"
++                        + (f": {reason}" if reason else "")
++                        + ". Generate a new one for the system user."
+                     )
+-                )
++                if str(token.get("app_id")) != config.app_id:
++                    raise BridgeCredentialError(
++                        f"The access token was issued for Meta app "
++                        f"{token.get('app_id')}, not app {config.app_id}. Use "
++                        "the App ID and app secret of the app the token "
++                        "belongs to."
++                    )
++                await client.phone_number()
+             except WhatsAppGraphError as exc:
+                 raise BridgeCredentialError(
+                     f"WhatsApp refused these credentials: {exc}. Check the "
+-                    "access token, the phone number ID and the app secret "
+-                    "against your Meta app."
++                    "access token, the App ID, the phone number ID and the app "
++                    "secret against your Meta app."
+                 ) from exc
+             except httpx.RequestError as exc:
+                 raise BridgeCredentialError(
+diff --git a/core/switch_core/bridges/collaboration/whatsapp/client.py b/core/switch_core/bridges/collaboration/whatsapp/client.py
+index 96b236b2..d46766da 100644
+--- a/core/switch_core/bridges/collaboration/whatsapp/client.py
++++ b/core/switch_core/bridges/collaboration/whatsapp/client.py
+@@ -11,6 +11,8 @@ test can put a `MockTransport` under it.
+ 
+ from __future__ import annotations
+ 
++import hashlib
++import hmac
+ from typing import Any
+ 
+ import httpx
+@@ -79,15 +81,34 @@ def graph_error(response: httpx.Response) -> WhatsAppGraphError:
+     )
+ 
+ 
++def appsecret_proof(app_secret: str, access_token: str) -> str:
++    """The access token signed with the app secret, as Graph checks it."""
++    return hmac.new(
++        app_secret.encode(), access_token.encode(), hashlib.sha256
++    ).hexdigest()
++
++
+ class WhatsAppGraphClient:
+-    """One business phone number's calls to the Graph API."""
++    """One business phone number's calls to the Graph API.
++
++    Every Graph call carries `appsecret_proof`, so an app that requires it
++    (App settings → Advanced → Require App Secret) accepts each of them, not
++    only the check made when the connection is saved.
++    """
+ 
+     def __init__(
+-        self, *, http: httpx.AsyncClient, access_token: str, phone_number_id: str
++        self,
++        *,
++        http: httpx.AsyncClient,
++        access_token: str,
++        app_secret: str,
++        phone_number_id: str,
+     ) -> None:
+         self._http = http
+         self._access_token = access_token
++        self._app_secret = app_secret
+         self._phone_number_id = phone_number_id
++        self._proof = {"appsecret_proof": appsecret_proof(app_secret, access_token)}
+ 
+     @property
+     def _auth(self) -> dict[str, str]:
+@@ -107,27 +128,47 @@ class WhatsAppGraphClient:
+             )
+         return body
+ 
+-    async def phone_number(self, *, appsecret_proof: str) -> dict[str, Any]:
++    async def phone_number(self) -> dict[str, Any]:
+         """The phone number's display number and verified name.
+ 
+-        `appsecret_proof` is the access token signed with the app secret.
+         Graph refuses a call whose proof does not match, so a wrong app secret
+         is caught here rather than as every webhook failing its signature.
+         """
+         response = await self._http.get(
+             f"{GRAPH_API_URL}/{self._phone_number_id}",
+-            params={
+-                "fields": "display_phone_number,verified_name",
+-                "appsecret_proof": appsecret_proof,
+-            },
++            params={"fields": "display_phone_number,verified_name", **self._proof},
+             headers=self._auth,
+         )
+         return self._json(response)
+ 
++    async def token_info(self, *, app_id: str) -> dict[str, Any]:
++        """What Graph knows about the access token: the app it was issued
++        for, whether it is still valid, and its scopes.
++
++        Asked with the app's own access token (its id and secret), so the
++        answer also proves the app secret belongs to `app_id`.
++        """
++        response = await self._http.get(
++            f"{GRAPH_API_URL}/debug_token",
++            params={"input_token": self._access_token},
++            headers={"Authorization": f"Bearer {app_id}|{self._app_secret}"},
++        )
++        data = self._json(response).get("data")
++        if not isinstance(data, dict):
++            raise WhatsAppGraphError(
++                status=response.status_code,
++                code=None,
++                error_type=None,
++                message="Graph API described the token without a data object",
++                details=None,
++            )
++        return data
++
+     async def send(self, payload: dict[str, Any]) -> str:
+         """Post one message (or status) and return the `wamid` Meta gave it."""
+         response = await self._http.post(
+             f"{GRAPH_API_URL}/{self._phone_number_id}/messages",
++            params=self._proof,
+             json={"messaging_product": "whatsapp", **payload},
+             headers=self._auth,
+         )
+@@ -158,6 +199,7 @@ class WhatsAppGraphClient:
+             payload["typing_indicator"] = {"type": "text"}
+         response = await self._http.post(
+             f"{GRAPH_API_URL}/{self._phone_number_id}/messages",
++            params=self._proof,
+             json=payload,
+             headers=self._auth,
+         )
+@@ -167,6 +209,7 @@ class WhatsAppGraphClient:
+         """Upload a file and return the media id a message can carry."""
+         response = await self._http.post(
+             f"{GRAPH_API_URL}/{self._phone_number_id}/media",
++            params=self._proof,
+             data={"messaging_product": "whatsapp", "type": mimetype},
+             files={"file": (filename, data, mimetype)},
+             headers=self._auth,
+@@ -190,14 +233,18 @@ class WhatsAppGraphClient:
+         """
+         response = await self._http.get(
+             f"{GRAPH_API_URL}/{media_id}",
+-            params={"phone_number_id": self._phone_number_id},
++            params={"phone_number_id": self._phone_number_id, **self._proof},
+             headers=self._auth,
+         )
+         return self._json(response)
+ 
+     async def download(self, url: str, *, max_bytes: int) -> bytes:
+         """The bytes at a media URL from `media_info`, refusing more than
+-        `max_bytes` without reading them all."""
++        `max_bytes` without reading them all.
++
++        The URL is Meta's media host rather than a Graph endpoint, and is
++        already signed, so it takes the token but no proof.
++        """
+         async with self._http.stream("GET", url, headers=self._auth) as response:
+             if response.is_error:
+                 await response.aread()
+diff --git a/core/tests/switch_core/bridges/collaboration/test_whatsapp_adapter.py b/core/tests/switch_core/bridges/collaboration/test_whatsapp_adapter.py
+index b42777ba..03c0d258 100644
+--- a/core/tests/switch_core/bridges/collaboration/test_whatsapp_adapter.py
++++ b/core/tests/switch_core/bridges/collaboration/test_whatsapp_adapter.py
+@@ -49,15 +49,20 @@ from switch_core.bridges.collaboration.whatsapp.client import (
+ )
+ from switch_core.sessions.contract import TurnUpsert
+ 
++APP_ID = "1234567890123456"
+ PHONE_NUMBER_ID = "106540352242922"
+ BUSINESS_NUMBER = "15550783881"
+ PERSON = "16505551234"
+ CONFIG = {
+     "access_token": "EAAtest-token",
++    "app_id": APP_ID,
+     "phone_number_id": PHONE_NUMBER_ID,
+     "app_secret": "app-secret-value",
+     "verify_token": "chosen-verify-token",
+ }
++PROOF = hmac.new(
++    CONFIG["app_secret"].encode(), CONFIG["access_token"].encode(), hashlib.sha256
++).hexdigest()
+ API = f"/{GRAPH_API_VERSION}"
+ 
+ Handler = Callable[[httpx.Request], httpx.Response]
+@@ -261,10 +266,13 @@ class TestTheAdapterDeclaresItself:
+         assert WhatsAppAdapter.renders_custom_url_schemes is False
+         assert WhatsAppAdapter.keeps_quiet_unless_listening is False
+ 
+-    def test_one_number_is_claimed_once(self) -> None:
++    def test_one_meta_app_is_claimed_once_whatever_its_number(self) -> None:
+         assert WhatsAppAdapter.claimed_workspace(dict(CONFIG)) == (
+-            f"WhatsApp phone number {PHONE_NUMBER_ID}"
++            f"WhatsApp Meta app {APP_ID}"
+         )
++        assert WhatsAppAdapter.claimed_workspace(
++            {**CONFIG, "phone_number_id": "999"}
++        ) == WhatsAppAdapter.claimed_workspace(dict(CONFIG))
+ 
+ 
+ # ── Connection config ─────────────────────────────────────────────────────────
+@@ -298,6 +306,11 @@ class TestTheConnectForm:
+             )
+         assert "not the phone number itself" in str(caught.value)
+ 
++    def test_an_app_name_in_place_of_its_id_is_refused(self) -> None:
++        with pytest.raises(ValidationError) as caught:
++            WhatsAppConnectionConfig.model_validate({**CONFIG, "app_id": "Acme Bot"})
++        assert "numeric App ID" in str(caught.value)
++
+     def test_a_refused_value_is_not_echoed_back(self) -> None:
+         with pytest.raises(ValidationError) as caught:
+             WhatsAppConnectionConfig.model_validate(
+@@ -316,58 +329,102 @@ class TestTheConnectForm:
+ # ── Credentials and failures ──────────────────────────────────────────────────
+ 
+ 
++def token_described(app_id: str = APP_ID, *, is_valid: bool = True) -> Handler:
++    data: dict[str, Any] = {
++        "app_id": app_id,
++        "type": "SYSTEM_USER",
++        "is_valid": is_valid,
++    }
++    if not is_valid:
++        data["error"] = {"code": 190, "message": "Session has expired"}
++    return lambda r: httpx.Response(200, json={"data": data})
++
++
++def phone_number_read(r: httpx.Request) -> httpx.Response:
++    return httpx.Response(
++        200,
++        json={
++            "display_phone_number": "+1 555-078-3881",
++            "verified_name": "Acme",
++            "id": PHONE_NUMBER_ID,
++        },
++    )
++
++
+ class TestCredentialsAreCheckedBeforeSaving:
+     async def test_good_credentials_pass_with_the_app_secret_proved(
+         self, graph: FakeGraph
++    ) -> None:
++        graph.on("GET", f"{API}/debug_token", token_described())
++        graph.on("GET", f"{API}/{PHONE_NUMBER_ID}", phone_number_read)
++
++        await WhatsAppAdapter.verify_credentials(dict(CONFIG))
++
++        described, read = graph.requests
++        assert described.url.params["input_token"] == CONFIG["access_token"]
++        assert described.headers["authorization"] == (
++            f"Bearer {APP_ID}|{CONFIG['app_secret']}"
++        )
++        assert read.headers["authorization"] == f"Bearer {CONFIG['access_token']}"
++        assert read.url.params["appsecret_proof"] == PROOF
++
++    async def test_a_token_from_another_app_is_refused(self, graph: FakeGraph) -> None:
++        graph.on("GET", f"{API}/debug_token", token_described("999"))
++        graph.on("GET", f"{API}/{PHONE_NUMBER_ID}", phone_number_read)
++
++        with pytest.raises(BridgeCredentialError) as caught:
++            await WhatsAppAdapter.verify_credentials(dict(CONFIG))
++
++        assert f"issued for Meta app 999, not app {APP_ID}" in str(caught.value)
++
++    async def test_an_expired_token_fails_with_metas_explanation(
++        self, graph: FakeGraph
++    ) -> None:
++        graph.on("GET", f"{API}/debug_token", token_described(is_valid=False))
++
++        with pytest.raises(BridgeCredentialError) as caught:
++            await WhatsAppAdapter.verify_credentials(dict(CONFIG))
++
++        assert "Session has expired" in str(caught.value)
++
++    async def test_a_wrong_app_secret_fails_with_metas_explanation(
++        self, graph: FakeGraph
+     ) -> None:
+         graph.on(
+             "GET",
+-            f"{API}/{PHONE_NUMBER_ID}",
+-            lambda r: httpx.Response(
+-                200,
+-                json={
+-                    "display_phone_number": "+1 555-078-3881",
+-                    "verified_name": "Acme",
+-                    "id": PHONE_NUMBER_ID,
+-                },
+-            ),
++            f"{API}/debug_token",
++            lambda r: graph_refusal(400, 101, "Error validating client secret."),
+         )
+ 
+-        await WhatsAppAdapter.verify_credentials(dict(CONFIG))
++        with pytest.raises(BridgeCredentialError) as caught:
++            await WhatsAppAdapter.verify_credentials(dict(CONFIG))
+ 
+-        (request,) = graph.requests
+-        assert request.headers["authorization"] == f"Bearer {CONFIG['access_token']}"
+-        assert (
+-            request.url.params["appsecret_proof"]
+-            == hmac.new(
+-                CONFIG["app_secret"].encode(),
+-                CONFIG["access_token"].encode(),
+-                hashlib.sha256,
+-            ).hexdigest()
+-        )
++        assert "Error validating client secret" in str(caught.value)
++        assert "code 101" in str(caught.value)
+ 
+-    async def test_a_bad_token_fails_with_metas_explanation(
++    async def test_a_number_the_token_cannot_reach_fails_with_metas_explanation(
+         self, graph: FakeGraph
+     ) -> None:
++        graph.on("GET", f"{API}/debug_token", token_described())
+         graph.on(
+             "GET",
+             f"{API}/{PHONE_NUMBER_ID}",
+             lambda r: graph_refusal(
+-                401, 190, "Error validating access token: Session has expired"
++                400, 100, "Unsupported get request. Object does not exist"
+             ),
+         )
+ 
+         with pytest.raises(BridgeCredentialError) as caught:
+             await WhatsAppAdapter.verify_credentials(dict(CONFIG))
+ 
+-        assert "Session has expired" in str(caught.value)
+-        assert "code 190" in str(caught.value)
++        assert "Object does not exist" in str(caught.value)
++        assert "code 100" in str(caught.value)
+ 
+     async def test_an_unreachable_graph_fails_saying_so(self, graph: FakeGraph) -> None:
+         def down(request: httpx.Request) -> httpx.Response:
+             raise httpx.ConnectError("no route", request=request)
+ 
+-        graph.on("GET", f"{API}/{PHONE_NUMBER_ID}", down)
++        graph.on("GET", f"{API}/debug_token", down)
+ 
+         with pytest.raises(BridgeCredentialError, match="Could not reach"):
+             await WhatsAppAdapter.verify_credentials(dict(CONFIG))
+@@ -663,6 +720,10 @@ class TestInboundMessages:
+             r for r in graph.requests if r.url.host == "lookaside.fbsbx.com"
+         )
+         assert download.headers["authorization"] == f"Bearer {CONFIG['access_token']}"
++        assert "appsecret_proof" not in download.url.params
++        graph_calls = [r for r in graph.requests if r.url.host == "graph.facebook.com"]
++        assert graph_calls
++        assert all(r.url.params["appsecret_proof"] == PROOF for r in graph_calls)
+ 
+     async def test_an_oversized_file_is_disclosed_and_not_downloaded(
+         self, adapter: WhatsAppAdapter, heard: Heard, graph: FakeGraph
+@@ -1001,6 +1062,8 @@ class TestOutboundFiles:
+ 
+         upload, send = graph.requests
+         assert upload.url.path == f"{API}/{PHONE_NUMBER_ID}/media"
++        assert upload.url.params["appsecret_proof"] == PROOF
++        assert send.url.params["appsecret_proof"] == PROOF
+         assert b'name="messaging_product"' in upload.content
+         assert b'filename="chart.png"' in upload.content
+         assert b"\x89PNG" in upload.content
+diff --git a/core/tests/switch_core/bridges/collaboration/test_whatsapp_markup.py b/core/tests/switch_core/bridges/collaboration/test_whatsapp_markup.py
+index d37729ac..de1a1f75 100644
+--- a/core/tests/switch_core/bridges/collaboration/test_whatsapp_markup.py
++++ b/core/tests/switch_core/bridges/collaboration/test_whatsapp_markup.py
+@@ -53,6 +53,7 @@ class TestOutbound:
+         adapter = WhatsAppAdapter(
+             config=WhatsAppConnectionConfig(
+                 access_token="t",
++                app_id="2",
+                 phone_number_id="1",
+                 app_secret="s",
+                 verify_token="v",
+diff --git a/docs/messaging-platforms/whatsapp.md b/docs/messaging-platforms/whatsapp.md
+index 78044904..655eb6d2 100644
+--- a/docs/messaging-platforms/whatsapp.md
++++ b/docs/messaging-platforms/whatsapp.md
+@@ -4,7 +4,7 @@ Connect a WhatsApp Business phone number to Switch, so people who write to that
+ number reach a Switch room and its agents, and the agents answer in the chat.
+ 
+ Switch uses the **WhatsApp Business Cloud API** on **your own Meta app and
+-phone number**. You create the app, add WhatsApp to it, and paste four values
++phone number**. You create the app, add WhatsApp to it, and paste five values
+ into Switch Console. Meta then delivers each message to Switch's webhook
+ address for the connection.
+ 
+@@ -28,13 +28,14 @@ address for the connection.
+    **test phone number** and lets you add up to five recipient numbers. Add
+    your own WhatsApp number there and confirm the code Meta sends to it.
+ 
+-## 2. Collect the four connection values
++## 2. Collect the five connection values
+ 
+ | Connection field | Where to find it | Why Switch needs it |
+ |---|---|---|
+ | **Access token** | A permanent token: **Business settings → Users → System users**. Add a system user (Admin), assign it the app and the WhatsApp account, then **Generate new token** with `whatsapp_business_messaging` and `whatsapp_business_management`. The temporary token on **API Setup** also works but expires after 24 hours. | Sends messages, uploads and downloads files, and marks messages read. `whatsapp_business_messaging` covers sending and media; `whatsapp_business_management` lets Switch read the phone number back to check the token when you save. |
+-| **Phone number ID** | **WhatsApp → API Setup**, the numeric **Phone number ID** under the *From* number. This is an ID, not the phone number itself. | Every Graph API call is made for this number. One number can be connected to Switch only once. |
+-| **App secret** | **App settings → Basic → App secret** (choose *Show*). | Meta signs every webhook with it. Switch refuses any webhook that isn't signed with it, and checks the secret against the token when you save. |
++| **App ID** | **App settings → Basic → App ID**. | Meta sets the webhook address per app, not per number, so one app can be connected to Switch only once. Switch checks that the token was issued for this app when you save. |
++| **Phone number ID** | **WhatsApp → API Setup**, the numeric **Phone number ID** under the *From* number. This is an ID, not the phone number itself. | Every Graph API call is made for this number. |
++| **App secret** | **App settings → Basic → App secret** (choose *Show*). | Meta signs every webhook with it. Switch refuses any webhook that isn't signed with it, and checks the secret against the token when you save. Every Graph API call carries an `appsecret_proof` made with it, so **Require App Secret** (App settings → Advanced) can be turned on. |
+ | **Verify token** | Any string you choose, for example from `openssl rand -hex 16`. | Meta sends it back when it checks the webhook address, which proves the address is yours. |
+ 
+ Console masks the token, the secret and the verify token. Leading and trailing
+@@ -43,10 +44,10 @@ spaces are removed, and an empty field is refused before anything is saved.
+ ## 3. Connect it in Switch Console
+ 
+ 1. Open **Connect a messaging app** and choose **WhatsApp**.
+-2. Fill in the four fields and connect. Switch reads the phone number back from
+-   Meta with the token, signed with the app secret. A wrong token, phone
+-   number ID or app secret fails here, with Meta's own explanation and error
+-   code.
++2. Fill in the five fields and connect. Switch asks Meta which app the token
++   was issued for, using the App ID and app secret, then reads the phone
++   number back with the token. A wrong token, App ID, phone number ID or app
++   secret fails here, with Meta's own explanation and error code.
+ 3. Once connected, Console shows the connection's **webhook address**. Copy it.
+ 
+ ## The webhook address
+-- 
+2.54.0.windows.1
+
+
+From 78f6f13cd8db2243b0c15fcd6406fd3093555fbe Mon Sep 17 00:00:00 2001
+From: Hemang Choudhary <coehemang@gmail.com>
+Date: Wed, 4 Nov 2026 11:33:34 +0530
+Subject: [PATCH 3/4] feat: draw WhatsApp request cards with reply buttons and
+ lists
+
+---
+ .../bridges/collaboration/whatsapp/adapter.py | 196 +++++++-
+ .../collaboration/test_whatsapp_cards.py      | 458 ++++++++++++++++++
+ docs/messaging-platforms/whatsapp.md          |  15 +-
+ 3 files changed, 659 insertions(+), 10 deletions(-)
+ create mode 100644 core/tests/switch_core/bridges/collaboration/test_whatsapp_cards.py
+
+diff --git a/core/switch_core/bridges/collaboration/whatsapp/adapter.py b/core/switch_core/bridges/collaboration/whatsapp/adapter.py
+index cdbba514..64ffe6a6 100644
+--- a/core/switch_core/bridges/collaboration/whatsapp/adapter.py
++++ b/core/switch_core/bridges/collaboration/whatsapp/adapter.py
+@@ -1,3 +1,4 @@
++# Changed for Foundry: request cards are drawn with reply buttons and lists.
+ from __future__ import annotations
+ 
+ import hashlib
+@@ -16,6 +17,7 @@ from switch_core.bridges.collaboration.adapter import (
+     ActivityMarkRefused,
+     AgentIdentity,
+     PlatformAdapter,
++    RequestCard,
+     RichContent,
+     RichContentFailed,
+     TurnActivity,
+@@ -38,11 +40,20 @@ from switch_core.bridges.collaboration.models import (
+     InboundAgentJoin,
+     InboundAppJoin,
+     InboundCommand,
++    InboundInteraction,
+     InboundMessage,
+     InboundUserJoin,
+ )
+-from switch_core.bridges.collaboration.session.renderers import Markup
+-from switch_core.bridges.collaboration.session.renderers.neutral import turn_status
++from switch_core.bridges.collaboration.session.renderers import (
++    Control,
++    Markup,
++    offered_controls,
++    position_action,
++)
++from switch_core.bridges.collaboration.session.renderers.neutral import (
++    render_request,
++    turn_status,
++)
+ from switch_core.bridges.collaboration.whatsapp.chunking import (
+     MAX_CAPTION,
+     MAX_MESSAGE,
+@@ -92,6 +103,15 @@ _WORKING_REACTION = "\U0001f440"
+ 
+ _TURN_REF_PREFIX = "turn:"
+ 
++# The Cloud API's limits on an interactive message.
++MAX_REPLY_BUTTONS = 3
++MAX_BUTTON_TITLE = 20
++MAX_LIST_ROWS = 10
++MAX_ROW_TITLE = 24
++MAX_INTERACTIVE_BODY = 1024
++_LIST_BUTTON = "Choose an answer"
++_PRESS_PREFIX = "switch-card"
++
+ 
+ def _media_kind(mimetype: str) -> tuple[str, int]:
+     """The message type a file goes out as, and WhatsApp's size limit for it."""
+@@ -534,6 +554,12 @@ class WhatsAppAdapter(PlatformAdapter):
+         root_id = (message.get("context") or {}).get("id")
+         text = self._text_of(message, kind)
+ 
++        if kind == "interactive" and await self._dispatch_press(
++            message, sender, sender_name
++        ):
++            await self._mark_read(str(wamid), typing=False)
++            return
++
+         if kind == "text" and text.strip().startswith("!"):
+             parsed = _parse_command(text.strip())
+             if parsed is not None and self._on_command is not None:
+@@ -578,6 +604,41 @@ class WhatsAppAdapter(PlatformAdapter):
+         )
+         await self._mark_read(str(wamid), typing=False)
+ 
++    async def _dispatch_press(
++        self, message: dict[str, Any], sender: str, sender_name: str
++    ) -> bool:
++        """Hand on a press of a control this bridge drew; False if it is not one.
++
++        Who pressed is the webhook's sender, which Meta signs. The id says only
++        which request and which option, and both are resolved against the
++        record, so a forged id is still attributed to whoever sent it.
++        """
++        interactive = message.get("interactive") or {}
++        reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
++        press = _parse_reply_id(str(reply.get("id", "")))
++        if press is None:
++            return False
++        if self._on_interaction is None:
++            logger.warning(
++                "A press on a WhatsApp card in chat %s has nowhere to go: this "
++                "bridge handles no interactions.",
++                sender,
++            )
++            return True
++        token, position = press
++        card = (message.get("context") or {}).get("id")
++        await self._on_interaction(
++            InboundInteraction(
++                channel_id=sender,
++                sender_id=sender,
++                sender_name=sender_name,
++                action_id=position_action(position),
++                value=token,
++                message_ref=str(card) if card else None,
++            )
++        )
++        return True
++
+     def _text_of(self, message: dict[str, Any], kind: str) -> str:
+         """What a message says, in WhatsApp's markup as the person wrote it;
+         the bridge core reads it as Markdown with `translate_inbound`.
+@@ -948,6 +1009,10 @@ class WhatsAppAdapter(PlatformAdapter):
+         text = self.rich_fallback_text(content)
+         agent = await self.agent_rendering(agent_name)
+         try:
++            if isinstance(content, RequestCard):
++                return await self._post_card(
++                    channel_id, agent.body_label, content, thread_root_id
++                )
+             return await self._send_text(
+                 channel_id, _attribute(agent.body_label, text), thread_root_id
+             )
+@@ -957,6 +1022,50 @@ class WhatsAppAdapter(PlatformAdapter):
+                 text=text,
+             ) from error
+ 
++    async def _post_card(
++        self,
++        channel_id: str,
++        agent_label: str,
++        content: RequestCard,
++        thread_root_id: str | None,
++    ) -> str:
++        """A card with WhatsApp's own controls where it can have them.
++
++        A card they cannot serve goes as its typed form: a settled one, one
++        with more options than a list holds, and one whose body was cut, where
++        a press would decide something the reader was never shown.
++
++        The reference returned is the message the controls sit on, because a
++        press names that message and one naming any other is refused. A body
++        too long for an interactive message goes above it in full.
++        """
++        controls = offered_controls(content.request)
++        if len(controls) > MAX_LIST_ROWS:
++            controls = []
++        drawn = render_request(
++            content.request,
++            content.reference,
++            escape=self._rich_escape,
++            limit=self.rich_fallback_limit(),
++            markup=self.rich_markup(),
++            responder=None,
++            unavailable_reason=content.unavailable_reason,
++            control_label_limit=_label_room(len(controls)) if controls else None,
++        )
++        text = _attribute(agent_label, drawn.text)
++        if not controls or not drawn.answerable:
++            return await self._send_text(channel_id, text, thread_root_id)
++        body = text
++        if len(text) > MAX_INTERACTIVE_BODY:
++            await self._send_text(channel_id, text, thread_root_id)
++            body = _attribute(agent_label, f"Answer {content.reference.handle} here.")
++            thread_root_id = None
++        payload = {
++            "type": "interactive",
++            "interactive": _interactive(body, controls, content.reference.token),
++        }
++        return await self._send(channel_id, payload, thread_root_id)
++
+     async def update_rich(
+         self,
+         channel_id: str,
+@@ -967,8 +1076,9 @@ class WhatsAppAdapter(PlatformAdapter):
+     ) -> None:
+         """Nothing is redrawn: WhatsApp cannot edit a sent message.
+ 
+-        A request card stays as it was posted. An answer typed to it after it
+-        was decided is refused with a reply saying so, which is the honest
++        A request card stays as it was posted, its controls included. An answer
++        typed or pressed after it was decided is refused with a reply saying so,
++        which is the honest
+         signal a stale card can give. Reposting it instead would post it again
+         on every redraw, and after every restart.
+         """
+@@ -1038,6 +1148,84 @@ def _attribute(label: str, content: str) -> str:
+     return f"{name}\n{content}" if "\n" in content else f"{name}: {content}"
+ 
+ 
++def _reply_id(token: str, position: int) -> str:
++    return f"{_PRESS_PREFIX}:{token}:{position}"
++
++
++def _parse_reply_id(reply_id: str) -> tuple[str, int] | None:
++    """The request and control a press names, or None if it is not ours.
++
++    Read as strictly as it is written: this bridge's prefix, a token, and a
++    count in ASCII digits from one.
++    """
++    prefix, _, rest = reply_id.partition(":")
++    token, _, digits = rest.rpartition(":")
++    if prefix != _PRESS_PREFIX or not token:
++        return None
++    if not digits.isascii() or not digits.isdecimal():
++        return None
++    position = int(digits)
++    return (token, position) if position > 0 else None
++
++
++def _title_limit(count: int) -> int:
++    return MAX_BUTTON_TITLE if count <= MAX_REPLY_BUTTONS else MAX_ROW_TITLE
++
++
++def _label_room(count: int) -> int:
++    """How much of a label fits on a control after its number."""
++    return _title_limit(count) - len(f"{count}. ")
++
++
++def _control_title(control: Control, limit: int) -> str:
++    """The option's number and as much of it as fits.
++
++    Numbered because a typed answer names the same number, and because WhatsApp
++    refuses two buttons with one title, which two labels cut short could be.
++    """
++    title = f"{control.position}. {' '.join(control.label.split())}"
++    return title if len(title) <= limit else f"{title[: limit - 1]}…"
++
++
++def _interactive(body: str, controls: list[Control], token: str) -> dict[str, Any]:
++    limit = _title_limit(len(controls))
++    if len(controls) <= MAX_REPLY_BUTTONS:
++        return {
++            "type": "button",
++            "body": {"text": body},
++            "action": {
++                "buttons": [
++                    {
++                        "type": "reply",
++                        "reply": {
++                            "id": _reply_id(token, control.position),
++                            "title": _control_title(control, limit),
++                        },
++                    }
++                    for control in controls
++                ]
++            },
++        }
++    return {
++        "type": "list",
++        "body": {"text": body},
++        "action": {
++            "button": _LIST_BUTTON,
++            "sections": [
++                {
++                    "rows": [
++                        {
++                            "id": _reply_id(token, control.position),
++                            "title": _control_title(control, limit),
++                        }
++                        for control in controls
++                    ]
++                }
++            ],
++        },
++    }
++
++
+ def _address(channel_id: str) -> dict[str, str]:
+     """Who a message goes to. A chat is named by the person's phone number,
+     or by the business-scoped user id WhatsApp sends instead for someone who
+diff --git a/core/tests/switch_core/bridges/collaboration/test_whatsapp_cards.py b/core/tests/switch_core/bridges/collaboration/test_whatsapp_cards.py
+new file mode 100644
+index 00000000..8275477e
+--- /dev/null
++++ b/core/tests/switch_core/bridges/collaboration/test_whatsapp_cards.py
+@@ -0,0 +1,458 @@
++"""A request card's own controls on WhatsApp, against a mocked Graph API.
++
++The buttons and lists are what would reach Meta, and a press is what Meta would
++send back, so these hold the adapter to the Cloud API's limits on both sides.
++"""
++
++# ruff: noqa: F401, F811
++
++from __future__ import annotations
++
++from typing import Any
++
++import httpx
++import pytest
++
++from switch_core.bridges.collaboration.adapter import RequestCard, RichContentFailed
++from switch_core.bridges.collaboration.models import InboundInteraction
++from switch_core.bridges.collaboration.session.renderers import (
++    RequestReference,
++    position_action,
++)
++from switch_core.bridges.collaboration.whatsapp.adapter import WhatsAppAdapter
++from switch_core.sessions.contract import (
++    ApprovalContent,
++    ApprovalOption,
++    Question,
++    QuestionOption,
++    QuestionsContent,
++)
++
++from .session_fixtures import open_request
++from .test_whatsapp_adapter import (
++    PERSON,
++    FakeGraph,
++    Heard,
++    adapter,
++    deliver,
++    graph,
++    graph_refusal,
++    heard,
++    inbound,
++)
++
++
++def approval(*labels: str) -> ApprovalContent:
++    return ApprovalContent(
++        kind="approval",
++        title="Sign off the report",
++        detail="Row 2 wiring is done.",
++        options=[
++            ApprovalOption(option_id=f"o{i}", label=label, decision="accept")
++            for i, label in enumerate(labels)
++        ],
++    )
++
++
++def question(*labels: str, multi_select: bool = False) -> QuestionsContent:
++    return QuestionsContent(
++        kind="questions",
++        title="One question",
++        questions=[
++            Question(
++                question_id="q",
++                title="Which electrician?",
++                prompt="Which electrician came to Palm Court?",
++                options=[
++                    QuestionOption(option_id=f"o{i}", label=label, description=None)
++                    for i, label in enumerate(labels)
++                ],
++                multi_select=multi_select,
++                allow_custom_answer=False,
++            )
++        ],
++    )
++
++
++def card(content: Any, *, state: str = "open", **kwargs: Any) -> RequestCard:
++    request = open_request().model_copy(update={"state": state, "content": content})
++    return RequestCard(request, RequestReference(token="tok-1", handle="A7"), **kwargs)
++
++
++def options(count: int) -> list[str]:
++    return [f"Option {n}" for n in range(1, count + 1)]
++
++
++def press(
++    reply_id: str,
++    *,
++    title: str = "1. Approve",
++    reply_type: str = "button_reply",
++    on: str | None = "wamid.out1",
++) -> dict[str, Any]:
++    message: dict[str, Any] = {
++        "id": "wamid.press",
++        "type": "interactive",
++        "interactive": {
++            "type": reply_type,
++            reply_type: {"id": reply_id, "title": title},
++        },
++    }
++    if on:
++        message["context"] = {"from": "15550783881", "id": on}
++    return inbound(message)
++
++
++@pytest.fixture
++async def pressed(adapter: WhatsAppAdapter, heard: Heard) -> list[InboundInteraction]:
++    seen: list[InboundInteraction] = []
++
++    async def handler(interaction: InboundInteraction) -> None:
++        seen.append(interaction)
++
++    adapter.set_interaction_handler(handler)
++    return seen
++
++
++class TestACardIsDrawnWithWhatsAppControls:
++    async def test_two_options_are_reply_buttons(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        await adapter.post_rich(
++            PERSON, "foundry-desk", card(approval("Approve", "Ask for changes"))
++        )
++
++        sent = graph.sends()[0]
++        assert sent["type"] == "interactive"
++        assert sent["interactive"]["type"] == "button"
++        buttons = sent["interactive"]["action"]["buttons"]
++        assert [b["reply"]["title"] for b in buttons] == [
++            "1. Approve",
++            "2. Ask for changes",
++        ]
++        assert all(b["type"] == "reply" for b in buttons)
++
++    async def test_the_body_names_the_agent_and_keeps_the_typed_answer(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        await adapter.post_rich(PERSON, "foundry-desk", card(approval("Approve", "No")))
++
++        body = graph.sends()[0]["interactive"]["body"]["text"]
++        assert body.startswith("*foundry-desk*")
++        assert "Row 2 wiring is done." in body
++        assert "A7" in body
++
++    async def test_a_question_with_three_options_is_still_buttons(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        await adapter.post_rich(PERSON, "foundry-desk", card(question(*options(3))))
++
++        interactive = graph.sends()[0]["interactive"]
++        assert interactive["type"] == "button"
++        assert len(interactive["action"]["buttons"]) == 3
++        assert "Which electrician came to Palm Court?" in interactive["body"]["text"]
++
++    async def test_four_options_are_a_list(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        await adapter.post_rich(PERSON, "foundry-desk", card(question(*options(4))))
++
++        interactive = graph.sends()[0]["interactive"]
++        assert interactive["type"] == "list"
++        assert len(interactive["action"]["button"]) <= 20
++        rows = interactive["action"]["sections"][0]["rows"]
++        assert [row["title"] for row in rows] == [
++            "1. Option 1",
++            "2. Option 2",
++            "3. Option 3",
++            "4. Option 4",
++        ]
++
++    async def test_ten_options_is_the_longest_list(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        await adapter.post_rich(PERSON, "foundry-desk", card(question(*options(10))))
++
++        rows = graph.sends()[0]["interactive"]["action"]["sections"][0]["rows"]
++        assert len(rows) == 10
++
++    async def test_more_options_than_a_list_holds_are_answered_by_typing(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        await adapter.post_rich(PERSON, "foundry-desk", card(question(*options(11))))
++
++        sent = graph.sends()[0]
++        assert sent["type"] == "text"
++        assert "Option 11" in sent["text"]["body"]
++        assert "A7" in sent["text"]["body"]
++
++    async def test_a_long_label_is_cut_on_the_button_and_kept_in_the_body(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        long_label = "Electrician A from the second contractor"
++        await adapter.post_rich(
++            PERSON, "foundry-desk", card(approval(long_label, "Electrician B"))
++        )
++
++        interactive = graph.sends()[0]["interactive"]
++        titles = [b["reply"]["title"] for b in interactive["action"]["buttons"]]
++        assert all(len(title) <= 20 for title in titles)
++        assert titles[0].endswith("…")
++        assert long_label in interactive["body"]["text"]
++
++    async def test_labels_cut_to_the_same_words_stay_different_buttons(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        shared = "The electrician from the"
++        await adapter.post_rich(
++            PERSON,
++            "foundry-desk",
++            card(approval(f"{shared} north gate", f"{shared} south gate")),
++        )
++
++        titles = [
++            b["reply"]["title"]
++            for b in graph.sends()[0]["interactive"]["action"]["buttons"]
++        ]
++        assert len(set(titles)) == 2
++
++    async def test_a_card_too_long_for_a_body_is_sent_in_full_above_its_controls(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        content = approval("Approve", "Ask for changes")
++        content = content.model_copy(update={"detail": "Row 2 wiring. " * 70})
++        await adapter.post_rich(PERSON, "foundry-desk", card(content))
++
++        first, second = graph.sends()
++        assert first["type"] == "text"
++        assert "Row 2 wiring." in first["text"]["body"]
++        assert second["type"] == "interactive"
++        assert len(second["interactive"]["body"]["text"]) <= 1024
++        assert "A7" in second["interactive"]["body"]["text"]
++
++    async def test_the_card_is_the_message_its_controls_sit_on(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        """A press names that message, and one naming any other is refused."""
++        content = approval("Approve", "Ask for changes")
++        content = content.model_copy(update={"detail": "Row 2 wiring. " * 70})
++
++        ref = await adapter.post_rich(PERSON, "foundry-desk", card(content))
++
++        assert ref == "wamid.out2"
++
++    async def test_a_card_cut_short_of_its_detail_has_no_controls(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        """A press would decide something the reader was never shown."""
++        content = approval("Approve", "Ask for changes")
++        content = content.model_copy(update={"detail": "Row 2 wiring. " * 400})
++        await adapter.post_rich(PERSON, "foundry-desk", card(content))
++
++        assert [sent["type"] for sent in graph.sends()] == ["text"]
++
++    async def test_a_settled_card_has_no_controls(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        await adapter.post_rich(
++            PERSON, "foundry-desk", card(approval("Approve", "No"), state="closed")
++        )
++
++        assert graph.sends()[0]["type"] == "text"
++
++    async def test_a_card_that_cannot_be_answered_here_has_no_controls(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        await adapter.post_rich(
++            PERSON,
++            "foundry-desk",
++            card(approval("Approve", "No"), unavailable_reason="Open it in Console."),
++        )
++
++        sent = graph.sends()[0]
++        assert sent["type"] == "text"
++        assert "Open it in Console." in sent["text"]["body"]
++
++    async def test_a_question_with_several_answers_has_no_controls(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        await adapter.post_rich(
++            PERSON, "foundry-desk", card(question("A", "B", multi_select=True))
++        )
++
++        assert graph.sends()[0]["type"] == "text"
++
++    async def test_a_refused_card_lets_the_publisher_fall_back(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        graph.on(
++            "POST",
++            f"/v26.0/{adapter._config.phone_number_id}/messages",
++            lambda _: graph_refusal(400, 131009, "Parameter value is not valid"),
++        )
++
++        with pytest.raises(RichContentFailed) as failed:
++            await adapter.post_rich(
++                PERSON, "foundry-desk", card(approval("Approve", "No"))
++            )
++
++        assert "Row 2 wiring is done." in failed.value.text
++
++    async def test_a_transport_failure_on_a_card_is_reported_too(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++    ) -> None:
++        def down(_: httpx.Request) -> httpx.Response:
++            raise httpx.ConnectError("no route")
++
++        graph.on("POST", f"/v26.0/{adapter._config.phone_number_id}/messages", down)
++
++        with pytest.raises(RichContentFailed):
++            await adapter.post_rich(
++                PERSON, "foundry-desk", card(approval("Approve", "No"))
++            )
++
++
++class TestAPressIsAnAnswer:
++    async def _drawn_id(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++        content: Any,
++        position: int,
++    ) -> str:
++        await adapter.post_rich(PERSON, "foundry-desk", card(content))
++        interactive = graph.sends()[-1]["interactive"]
++        if interactive["type"] == "button":
++            return interactive["action"]["buttons"][position - 1]["reply"]["id"]
++        return interactive["action"]["sections"][0]["rows"][position - 1]["id"]
++
++    async def test_a_button_press_names_the_request_and_the_control(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++        heard: Heard,
++        pressed: list[InboundInteraction],
++    ) -> None:
++        reply_id = await self._drawn_id(
++            adapter, graph, approval("Approve", "Ask for changes"), 2
++        )
++
++        await deliver(adapter, press(reply_id))
++
++        assert pressed == [
++            InboundInteraction(
++                channel_id=PERSON,
++                sender_id=PERSON,
++                sender_name=pressed[0].sender_name,
++                action_id=position_action(2),
++                value="tok-1",
++                message_ref="wamid.out1",
++            )
++        ]
++        assert heard.messages == []
++
++    async def test_a_list_choice_is_a_press_too(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++        heard: Heard,
++        pressed: list[InboundInteraction],
++    ) -> None:
++        reply_id = await self._drawn_id(adapter, graph, question(*options(5)), 4)
++
++        await deliver(adapter, press(reply_id, reply_type="list_reply"))
++
++        assert pressed[0].action_id == position_action(4)
++        assert pressed[0].value == "tok-1"
++        assert heard.messages == []
++
++    async def test_a_press_is_marked_read(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++        pressed: list[InboundInteraction],
++    ) -> None:
++        reply_id = await self._drawn_id(adapter, graph, approval("Approve", "No"), 1)
++
++        await deliver(adapter, press(reply_id))
++
++        assert [r["message_id"] for r in graph.receipts()] == ["wamid.press"]
++
++    async def test_a_reply_to_a_control_we_did_not_draw_stays_a_message(
++        self,
++        adapter: WhatsAppAdapter,
++        heard: Heard,
++        pressed: list[InboundInteraction],
++    ) -> None:
++        await deliver(adapter, press("someone-elses-button", title="Book a visit"))
++
++        assert pressed == []
++        assert [m.content for m in heard.messages] == ["Book a visit"]
++
++    @pytest.mark.parametrize(
++        "reply_id",
++        [
++            "switch-card:tok-1:0",
++            "switch-card:tok-1:two",
++            "switch-card:tok-1:٣",
++            "switch-card::1",
++            "switch-card:tok-1",
++            "other:tok-1:1",
++        ],
++    )
++    async def test_an_id_that_is_not_the_shape_we_wrote_is_not_a_press(
++        self,
++        adapter: WhatsAppAdapter,
++        heard: Heard,
++        pressed: list[InboundInteraction],
++        reply_id: str,
++    ) -> None:
++        await deliver(adapter, press(reply_id))
++
++        assert pressed == []
++        assert len(heard.messages) == 1
++
++    async def test_a_press_with_no_handler_is_not_relayed_as_chat(
++        self,
++        adapter: WhatsAppAdapter,
++        graph: FakeGraph,
++        heard: Heard,
++    ) -> None:
++        """The room would read an option's label as something the person said."""
++        reply_id = await self._drawn_id(adapter, graph, approval("Approve", "No"), 1)
++
++        await deliver(adapter, press(reply_id))
++
++        assert heard.messages == []
+diff --git a/docs/messaging-platforms/whatsapp.md b/docs/messaging-platforms/whatsapp.md
+index 655eb6d2..eb7697a6 100644
+--- a/docs/messaging-platforms/whatsapp.md
++++ b/docs/messaging-platforms/whatsapp.md
+@@ -1,3 +1,4 @@
++<!-- Changed for Foundry: approvals and questions, reply buttons and lists. -->
+ # WhatsApp
+ 
+ Connect a WhatsApp Business phone number to Switch, so people who write to that
+@@ -105,12 +106,14 @@ Switch.
+   with 👀 and shows WhatsApp's typing indicator, which WhatsApp clears on the
+   reply or after 25 seconds. Each incoming message is also marked read (blue
+   ticks).
+-- **Approvals and questions** are posted as text, naming a handle such as
+-  `A1` and the answers it takes. To answer, type the handle and your answer
+-  (`A1 approve`). A reply without the handle, such as a bare `yes`, isn't
+-  taken as an answer, even when it quotes the card. WhatsApp's buttons aren't
+-  used, and nothing in the chat confirms an answer that landed: the agent
+-  carrying on is the sign.
++- **Approvals and questions** come with WhatsApp's own controls: reply buttons
++  for up to 3 options, a list for up to 10. Tap one to answer. Typing the handle
++  and your answer (`A1 1`) works too, and is the only way to answer a card with
++  more than 10 options or a question that takes several answers. A reply without
++  the handle, such as a bare `yes`, isn't taken as an answer, even when it
++  quotes the card. A button can't be taken off a sent message, so a tap on a card
++  already decided is refused with a reply saying so. Nothing in the chat confirms
++  an answer that landed: the agent carrying on is the sign.
+ - **Duplicates and restarts.** Meta retries a delivery it thinks failed. Each
+   message is recognised by its WhatsApp id (`wamid`), so a retry is handled
+   once, on whichever Switch instance receives it.
+-- 
+2.54.0.windows.1
+
+
+From 20cc538309f40cf932831d05994d2b484f62cda4 Mon Sep 17 00:00:00 2001
+From: Hemang Choudhary <coehemang@gmail.com>
+Date: Wed, 4 Nov 2026 12:05:27 +0530
+Subject: [PATCH 4/4] docs: mark platforms.py as changed for the WhatsApp
+ adapter
+
+---
+ core/switch_core/bridges/collaboration/platforms.py | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/core/switch_core/bridges/collaboration/platforms.py b/core/switch_core/bridges/collaboration/platforms.py
+index aa22b3cf..4db4845c 100644
+--- a/core/switch_core/bridges/collaboration/platforms.py
++++ b/core/switch_core/bridges/collaboration/platforms.py
+@@ -1,3 +1,4 @@
++# Changed for Foundry: registers the WhatsApp adapter.
+ """Every messaging platform this build ships.
+ 
+ Adding a platform is one line in `PLATFORMS`: its key, its adapter and its
+-- 
+2.54.0.windows.1
+
