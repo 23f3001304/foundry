@@ -43,6 +43,7 @@ WHAT = {
     "message": "said",
     "voice_corrected": "corrected what was heard",
     "item_answer": "answered",
+    "item_reason": "gave a reason",
     "item_passed_on": "passed on an answer",
     "revision_notes": "asked for changes",
     "report_approved": "is in the approved report",
