@@ -56,7 +56,9 @@ def main(mode: str, name: str, slug: str) -> None:
     inside = (rooms[f"{name}-studio"], rooms[f"{name}-review"]) if mode == "agency" else (rooms[f"{name}-projects"],) * 2
     entry = f"{rooms[name]}:{inside[0]}:{inside[1]}"
     current = os.environ.get("FOUNDRY_ROOMS", "")
-    save({"FOUNDRY_ROOMS": f"{current},{entry}" if current else entry})
+    packs = os.environ.get("FOUNDRY_PACKS", "")
+    pack = f"{rooms[name]}:{slug}"
+    save({"FOUNDRY_ROOMS": f"{current},{entry}" if current else entry, "FOUNDRY_PACKS": f"{packs},{pack}" if packs else pack})
     print(f"Created {', '.join(rooms)} and saved their ids in {ENV_FILE}")
 
 

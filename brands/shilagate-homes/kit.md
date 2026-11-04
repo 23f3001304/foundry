@@ -21,4 +21,4 @@ Put the logo on the paper colour, never on the blue or on a photo. Leave clear s
 
 `hero.png` shows a finished home and `site.png` shows a site in progress. Use them as they are. Do not add text on top of them.
 
-Give measurements in square feet and dates as day, month and year, like 14 November 2026. Name the site and the stage in every update. Avoid words like "luxurious", "world-class" and "dream home".
+Give measurements in square feet and dates as day, month and year, like Nov 14, 2026. Name the site and the stage in every update. Avoid words like "luxurious", "world-class" and "dream home".

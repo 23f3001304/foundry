@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 PROMPT = """You sort messages from a business's work chat.
 
 Reply with one word:
-REQUEST if the message asks someone to make, write, design or change something.
+{report_line}REQUEST if the message asks someone to make, write, design or change something.
 CONTEXT if the message only shares information or is ordinary conversation.
 UNSURE if you cannot tell which it is.
 
@@ -29,20 +29,24 @@ class Kind(Enum):
     CONTEXT = "context"
     REQUEST = "request"
     UNSURE = "unsure"
+    REPORT = "report"
 
 
-def classify(text: str, llm: Callable[[str], str]) -> Kind:
+def classify(text: str, llm: Callable[[str], str], update_rule: str = "") -> Kind:
+    report_line = f"REPORT if the message is an update that fits this rule: {update_rule}\n" if update_rule else ""
     try:
-        answer = llm(PROMPT.format(text=text))
+        answer = llm(PROMPT.format(text=text, report_line=report_line))
     except anthropic.APIError as error:
         logger.error("Classifier failed, treating the message as unsure: %s", error)
         return Kind.UNSURE
-    return {kind.name: kind for kind in Kind}.get(answer.strip().rstrip(".").upper(), Kind.UNSURE)
+    kind = {kind.name: kind for kind in Kind}.get(answer.strip().rstrip(".").upper(), Kind.UNSURE)
+    # With no rule, this business has no reports, whatever the model says.
+    return Kind.CONTEXT if kind is Kind.REPORT and not update_rule else kind
 
 
-def cli_llm() -> Callable[[str], str]:
+def cli_llm(model: str | None = None) -> Callable[[str], str]:
     # For a team on a Claude subscription with no API key. No tools, because the prompt holds people's words.
-    model = os.environ.get("FOUNDRY_CLASSIFIER_MODEL", "claude-haiku-5-5")
+    model = model or os.environ.get("FOUNDRY_CLASSIFIER_MODEL", "claude-haiku-5-5")
     command = ["claude", "-p", "--model", model, "--tools", "", "--no-session-persistence", "--strict-mcp-config", "--disable-slash-commands"]
 
     def call(prompt: str) -> str:
@@ -55,18 +59,18 @@ def cli_llm() -> Callable[[str], str]:
     return call
 
 
-def default_llm() -> Callable[[str], str]:
-    return claude_llm() if os.environ.get("ANTHROPIC_API_KEY") else cli_llm()
+def default_llm(model: str | None = None) -> Callable[[str], str]:
+    return claude_llm(model) if os.environ.get("ANTHROPIC_API_KEY") else cli_llm(model)
 
 
-def claude_llm() -> Callable[[str], str]:
+def claude_llm(model: str | None = None) -> Callable[[str], str]:
     client = anthropic.Anthropic()
-    model = os.environ.get("FOUNDRY_CLASSIFIER_MODEL", "claude-haiku-5-5")
+    model = model or os.environ.get("FOUNDRY_CLASSIFIER_MODEL", "claude-haiku-5-5")
 
     def call(prompt: str) -> str:
         response = client.messages.create(
             model=model,
-            max_tokens=1024,
+            max_tokens=4096,
             output_config={"effort": "low"},
             messages=[{"role": "user", "content": prompt}],
         )

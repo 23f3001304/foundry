@@ -5,23 +5,26 @@ import logging
 import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 
 from foundry.buffer import Burst, MessageBuffer
-from foundry.delivery import deliver
+from foundry.cleanup import CleanupFailed, ReportStore, clean_note, signoff_detail
+from foundry.delivery import deliver, deliver_report
 from foundry.gates import Decision, Gate, parse_reply, resolve_approver
 from foundry.intake import Kind, classify
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
+from foundry.pack import Pack, load_pack
 from foundry.stickers import sticker_for
 from foundry.switch_client import Outcome, SwitchClient
 from foundry.voice import Transcript, VoiceError, transcribe
 
 logger = logging.getLogger(__name__)
 
+BRANDS = Path(__file__).resolve().parents[2] / "brands"
 AGENT_SENDER_PREFIX = "@switch-agent-"
 BRIEF_AGENT = "foundry-brief"
 MAKERS = ("foundry-deck", "foundry-visual")
@@ -45,6 +48,9 @@ NOTHING_MADE = "Nobody made a file for this job. Make what the brief asks for."
 ASK_WHAT_THEY_NEED = "Do you want something made from this? If so, tell me what you need."
 USE_THE_BUTTONS = "More than one approval is waiting on you here. Please use the buttons on the card you mean."
 RESEND_VOICE = "I couldn't read that voice note. Please resend it in under 30 seconds, or type it."
+NO_REPORT = "I couldn't write that up just now. Send any reply to try again."
+# A question left this long is dropped, so tomorrow's note isn't read as its answer.
+QUESTION_WINDOW = timedelta(hours=24)
 DECISION_EVENTS = {
     (State.BRIEF_PENDING, Decision.APPROVE): "brief_approved",
     (State.BRIEF_PENDING, Decision.REVISE): "brief_revised",
@@ -95,6 +101,12 @@ class Settings:
     workrooms: dict[str, Workrooms] = field(default_factory=dict)
     sticker_mode: str = "subtle"
     work_timeout_minutes: int = 30
+    packs: dict[str, Pack] = field(default_factory=dict)
+    reports_path: Path | str = "foundry-reports.db"
+    utc_offset_minutes: int = 330
+
+    def pack_for(self, room_id: str) -> Pack:
+        return self.packs.get(room_id, Pack())
 
     def workrooms_for(self, room_id: str) -> Workrooms:
         return self.workrooms.get(room_id, Workrooms(room_id, room_id))
@@ -114,6 +126,9 @@ class Settings:
             workrooms=_rooms_from(os.environ.get("FOUNDRY_ROOMS", "")),
             sticker_mode=os.environ.get("FOUNDRY_STICKER_MODE", "subtle"),
             work_timeout_minutes=int(os.environ.get("FOUNDRY_WORK_TIMEOUT_MINUTES", "30")),
+            packs=_packs_from(os.environ.get("FOUNDRY_PACKS", "")),
+            reports_path=os.environ.get("FOUNDRY_REPORTS_DB", "foundry-reports.db"),
+            utc_offset_minutes=int(os.environ.get("FOUNDRY_UTC_OFFSET_MINUTES", "330")),
         )
 
 
@@ -121,6 +136,12 @@ def _rooms_from(text: str) -> dict[str, Workrooms]:
     # outside:studio:review, comma-separated. Internal mode names its projects room twice.
     parts = [entry.strip().split(":") for entry in text.split(",") if entry.strip()]
     return {outside: Workrooms(studio, review) for outside, studio, review in parts}
+
+
+def _packs_from(text: str) -> dict[str, Pack]:
+    # room:brand-slug, comma-separated.
+    parts = [entry.strip().split(":") for entry in text.split(",") if entry.strip()]
+    return {room: load_pack(BRANDS / slug) for room, slug in parts}
 
 
 class Desk:
@@ -132,6 +153,7 @@ class Desk:
         llm: Callable[[str], str],
         settings: Settings,
         transcriber: Callable[[bytes, str], Transcript] = transcribe,
+        cleanup_llm: Callable[[str], str] | None = None,
     ) -> None:
         self.clock = lambda: datetime.now(UTC)
         self.client = client
@@ -140,7 +162,9 @@ class Desk:
         self.llm = llm
         self.settings = settings
         self.transcriber = transcriber
+        self.cleanup_llm = cleanup_llm
         self.buffer = MessageBuffer(settings.buffer_path, settings.quiet_seconds)
+        self.reports = ReportStore(settings.reports_path)
 
     def handle(self, event: dict | Outcome) -> None:
         if isinstance(event, Outcome):
@@ -162,7 +186,7 @@ class Desk:
     def _stop_quiet_jobs(self, now: datetime) -> None:
         limit = timedelta(minutes=self.settings.work_timeout_minutes)
         for job in self.store.all():
-            if not job.asked_at or now - datetime.fromisoformat(job.asked_at) <= limit:
+            if job.kind != "work" or not job.asked_at or now - datetime.fromisoformat(job.asked_at) <= limit:
                 continue
             if job.state is State.RECEIVED:
                 # No brief has been approved, so there is nothing a person could restart yet.
@@ -210,7 +234,7 @@ class Desk:
     def _job_waiting(self, room_id: str, state: State, room_kind: str, tag: str | None) -> Job | None:
         for job in self.store.all():
             in_room = getattr(self.settings.workrooms_for(job.room_id), room_kind) == room_id
-            if job.state is state and in_room and (not tag or job.id.startswith(tag)):
+            if job.kind == "work" and job.state is state and in_room and (not tag or job.id.startswith(tag)):
                 return job
         return None
 
@@ -263,6 +287,8 @@ class Desk:
         if job.state is State.BLOCKED:
             self.gate.ask(job, f"Stuck: {self._title(job)}", STUCK, self._approval_room(job))
             self._sticker(self._approval_room(job), "blocked")
+        elif job.kind == "report":
+            self._clean_report(job)
         else:
             self._ask_makers(job)
 
@@ -310,10 +336,20 @@ class Desk:
     def _deliver(self, job: Job) -> None:
         clean_run = job.revision_rounds == 0
         self._sticker(job.room_id, "approved")
-        deliver(job, self.client, job.room_id)
+        if job.kind == "report":
+            deliver_report(job, self.client, self._report_rooms(job))
+            self.reports.add(job.room_id, job.report)
+        else:
+            deliver(job, self.client, job.room_id)
         self._sticker(job.room_id, "shipped")
         if clean_run:
             self._sticker(job.room_id, "celebrate")
+
+    def _report_rooms(self, job: Job) -> list[str]:
+        rooms = self.settings.workrooms_for(job.room_id)
+        named = self.settings.pack_for(job.room_id).report_room
+        other = {"studio": rooms.studio, "review": rooms.review}.get(named, named)
+        return list(dict.fromkeys(room for room in (job.room_id, other) if room))
 
     def _sticker(self, room_id: str, event: str) -> None:
         path = sticker_for(event, self.settings.sticker_mode)
@@ -363,6 +399,9 @@ class Desk:
                 return True
         if parse_reply(text, self.gate.extra_words) is Decision.NONE:
             return False
+        at = datetime.fromtimestamp(event["payload"]["timestamp"] / 1000, UTC)
+        if not theirs and self._open_question(room_id, sender, at):
+            return False
         if len(theirs) > 1:
             self.client.post_message(room_id, USE_THE_BUTTONS)
         elif theirs or waiting:
@@ -386,6 +425,8 @@ class Desk:
         if event == "brief_revised":
             self._sticker(self._approval_room(job), "revise")
             self._ask_for_brief(job)
+        elif event == "unblock" and job.kind == "report":
+            self._clean_report(job)
         elif event in ("brief_approved", "unblock"):
             self._sticker(self._approval_room(job), "working")
             self._ask_makers(job, retry=event == "unblock")
@@ -397,8 +438,16 @@ class Desk:
         self.store.save(job)
 
     def _take_burst(self, burst: Burst) -> None:
-        kind = classify(burst.text, self.llm)
-        if kind is Kind.REQUEST:
+        asked = self._open_question(burst.room_id, burst.sender, burst.first_at)
+        if asked:
+            asked.brief += f"\nAnswered: {burst.text}"
+            self._clean_report(asked)
+            self.store.save(asked)
+            return
+        kind = classify(burst.text, self.llm, self.settings.pack_for(burst.room_id).update_rule)
+        if kind is Kind.REPORT:
+            self._start_report(burst)
+        elif kind is Kind.REQUEST:
             job = self.store.create(burst.room_id, burst.sender, resolve_approver(burst.sender, self.settings.approver))
             job.brief = burst.text
             self.store.save(job)
@@ -407,6 +456,46 @@ class Desk:
             self.store.save(job)
         elif kind is Kind.UNSURE:
             self.client.post_message(burst.room_id, ASK_WHAT_THEY_NEED)
+
+    def _open_question(self, room_id: str, sender: str, now: datetime) -> Job | None:
+        for job in reversed(self.store.in_room(room_id)):
+            if job.kind == "report" and job.requester == sender and job.asked_at and now - datetime.fromisoformat(job.asked_at) <= QUESTION_WINDOW:
+                return job
+        return None
+
+    def _start_report(self, burst: Burst) -> None:
+        job = self.store.create(burst.room_id, burst.sender, resolve_approver(burst.sender, self.settings.approver))
+        local = timezone(timedelta(minutes=self.settings.utc_offset_minutes))
+        job.kind, job.brief, job.sent_at = "report", burst.text, burst.first_at.astimezone(local).isoformat()
+        self.store.save(job)
+        self._sticker(burst.room_id, "brief_received")
+        self._clean_report(job)
+        self.store.save(job)
+
+    def _clean_report(self, job: Job) -> None:
+        if job.revision_notes:
+            job.brief += f"\n\nThe approver asked for these changes:\n{job.revision_notes}"
+            job.revision_notes = None
+        pack = self.settings.pack_for(job.room_id)
+        earlier = "\n".join([pack.sources.get("reports", ""), *self.reports.recent(job.room_id)])
+        try:
+            result = clean_note(job.brief, datetime.fromisoformat(job.sent_at), replace(pack, sources={**pack.sources, "reports": earlier}), self.cleanup_llm or self.llm)
+        except CleanupFailed as error:
+            logger.warning("Could not clean up the note for job %s: %s", job.id, error)
+            job.asked_at = self.clock().isoformat()
+            self.client.post_message(job.room_id, NO_REPORT)
+            return
+        if result.questions:
+            question = "\n".join(result.questions)
+            job.brief += f"\n\nAsked: {question}"
+            job.asked_at = self.clock().isoformat()
+            self.client.post_message(job.room_id, quiet(question))
+            return
+        job.report, job.asked_at = quiet(result.text), None
+        advance(job, "report_drafted")
+        room = self._approval_room(job)
+        self.gate.ask(job, f"Report: {headline(result.text)}", quiet(signoff_detail(result)), room)
+        self._sticker(room, "needs_input")
 
     def _ask_for_brief(self, job: Job) -> None:
         job.asked_at = self.clock().isoformat()

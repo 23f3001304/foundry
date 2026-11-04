@@ -19,7 +19,8 @@ def main() -> None:
         raise SystemExit("Set FOUNDRY_ROOMS first. tools/create_rooms.py writes it for you.")
     client = SwitchClient(os.environ["SWITCH_URL"], os.environ["FOUNDRY_DESK_ID"], os.environ["FOUNDRY_DESK_KEY"])
     store = JobStore(os.environ.get("FOUNDRY_JOBS_DB", "foundry-jobs.db"))
-    desk = Desk(client, store, CardGate(client), default_llm(), settings)
+    cleanup_llm = default_llm(os.environ.get("FOUNDRY_CLEANUP_MODEL", "claude-sonnet-5-5"))
+    desk = Desk(client, store, CardGate(client), default_llm(), settings, cleanup_llm=cleanup_llm)
     asyncio.run(run(desk, settings.all_rooms()))
 
 
