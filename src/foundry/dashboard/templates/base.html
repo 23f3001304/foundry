@@ -6,9 +6,11 @@
 <title>{{ title }} - Foundry</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
+<body class="{{ 'shell' if user else 'bare' }}">
+<a class="skip" href="#main">Skip to the page</a>
 <header class="bar">
-  <a class="mark" href="/"><img src="/static/team/smith.png" alt="" width="40" height="40">Foundry</a>
+  <div class="bar-inner">
+  <a class="mark" href="/">Foundry</a>
   {% if user %}
   <nav aria-label="Pages">
     <a href="/"{% if page == "overview" %} aria-current="page"{% endif %}>Overview</a>
@@ -23,8 +25,9 @@
     <button class="quiet" type="submit">Sign out</button>
   </form>
   {% endif %}
+  </div>
 </header>
-<main>
+<main id="main">
 {% block main %}{% endblock %}
 </main>
 </body>

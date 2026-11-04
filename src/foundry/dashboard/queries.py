@@ -84,7 +84,8 @@ EVENTS = {
     "revision_notes": "asked for changes",
 }
 MOST_TEXT = 240
-TONES = {State.BLOCKED: "stuck", State.DELIVERED: "done", State.DROPPED: "done"}
+TONES = {State.BLOCKED: "stuck", State.DELIVERED: "done", State.DROPPED: "done", State.BRIEF_PENDING: "waiting", State.COLLECTING: "waiting", State.SIGNOFF_PENDING: "waiting"}
+WORKING = "working"
 # A page that grows with every job would soon be too long to read, so it shows the newest and says what it left out.
 MOST_PAST_CARDS = 200
 MOST_TIMELINES = 20
@@ -167,7 +168,7 @@ class JobRow:
     sprite: str
     owes: str
     waiting: list[str]
-    # How the stage reads at a glance: stuck, done, or neither.
+    # How the stage reads at a glance: stuck, done, waiting on a person, or working.
     tone: str
 
 
@@ -239,6 +240,7 @@ class WorkJob:
     title: str
     stage: str
     files: list[WorkFile]
+    tone: str
 
 
 @dataclass
@@ -259,6 +261,7 @@ class JobLog:
     moments: list[Moment]
     files: list[FileRow]
     can_flag: bool
+    tone: str
 
 
 @dataclass
@@ -298,6 +301,10 @@ def title_of(job: Job) -> str:
 def stage_of(job: Job) -> tuple[str, str]:
     stage, sprite = STAGES[job.state]
     return (REPORT_STAGES.get(job.state, stage) if job.kind == "report" else stage), sprite
+
+
+def tone_of(job: Job) -> str:
+    return TONES.get(job.state, WORKING)
 
 
 def squeeze(text: str) -> str:
@@ -406,7 +413,7 @@ class Reader:
         owes = status_line(asked) if asked else ""
         if len(items) > len(asked):
             owes = f"{owes}, {len(items) - len(asked)} not asked yet" if owes else NOBODY_ASKED
-        return JobRow(job.id, job.bucket, bucket_name(job.bucket), title_of(job), stage, sprite, owes, self._waiting(job, cards, known), TONES.get(job.state, ""))
+        return JobRow(job.id, job.bucket, bucket_name(job.bucket), title_of(job), stage, sprite, owes, self._waiting(job, cards, known), tone_of(job))
 
     def job_rows(self, user: User) -> list[JobRow]:
         if not user.businesses:
@@ -551,7 +558,7 @@ class Reader:
                         status += f" {FILE_GONE}"
                     versions.append(Version(number, entry.id, name_of(entry, known[job.bucket]), self.when(entry.at), status, newest and here and Path(path).suffix.lower() in MEDIA))
                 files.append(WorkFile(Path(path).name, Path(path).suffix.lower() in PICTURES, versions[::-1]))
-            found.append(WorkJob(job.id, bucket_name(job.bucket), title_of(job), stage, files))
+            found.append(WorkJob(job.id, bucket_name(job.bucket), title_of(job), stage, files, tone_of(job)))
         return found
 
     def file_for(self, user: User, entry_id: int) -> tuple[Path, str] | None:
@@ -585,7 +592,7 @@ class Reader:
         for job in shown:
             entries = [entry for entry in self.entries_of(job) if not (entry.kind == "file_made" and not is_made_file(entry))]
             moments = [self._moment(entry, known[job.bucket], user.businesses[job.bucket] == job.approver) for entry in entries]
-            found.append(JobLog(job.id, bucket_name(job.bucket), title_of(job), stage_of(job)[0], moments, self._files(entries), user.businesses[job.bucket] == job.approver))
+            found.append(JobLog(job.id, bucket_name(job.bucket), title_of(job), stage_of(job)[0], moments, self._files(entries), user.businesses[job.bucket] == job.approver, tone_of(job)))
         return found, only is None and len(jobs) > MOST_TIMELINES
 
     def _moment(self, entry: Entry, known: dict[str, str], can_flag: bool) -> Moment:

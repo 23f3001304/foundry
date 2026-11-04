@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block main %}
-<h1>Not done</h1>
+<header class="page-head">
+  <h1>Not done</h1>
+</header>
 <p class="problem" role="alert">{{ message }}</p>
 <p><a href="{{ '/' if user else '/login' }}">{{ 'Back to the overview' if user else 'Back to sign in' }}</a></p>
 {% endblock %}

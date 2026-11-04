@@ -1,28 +1,41 @@
 {% extends "base.html" %}
 {% block main %}
-<h1>Generated work</h1>
+<header class="page-head">
+  <h1>Generated work</h1>
+</header>
 {% if not jobs %}
-<p class="note">Nothing has been made yet.</p>
+<p class="empty">Nothing has been made yet.</p>
 {% endif %}
 {% for job in jobs %}
 <section>
-  <h2><a href="/jobs/{{ job.id }}">{{ job.title }}</a></h2>
-  <p class="small">{{ job.stage }}{% if user.businesses|length > 1 %}. {{ job.client }}{% endif %}</p>
-  {% for file in job.files %}
-  <div class="file">
-    <h3>{{ file.name }}</h3>
-    {% if file.picture and file.versions[0].served %}<a href="/work/files/{{ file.versions[0].entry_id }}"><img src="/work/files/{{ file.versions[0].entry_id }}" class="preview" alt="Preview of {{ file.name }}"></a>{% endif %}
-    <ul class="plain versions">
-      {% for version in file.versions %}
-      <li>
-        <span class="strong">Version {{ version.number }}</span>, made by {{ version.made_by }}, {{ version.made_at }}.
-        {{ version.status }}
-        {% if version.served %}<a class="button" href="/work/files/{{ version.entry_id }}?download=1">Download</a>{% endif %}
-      </li>
-      {% endfor %}
-    </ul>
+  <div class="section-head">
+    <h2><a class="row-link" href="/jobs/{{ job.id }}">{{ job.title }}</a></h2>
+    <p class="page-meta"><span class="stage {{ job.tone }}">{{ job.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.client }}</span>{% endif %}</p>
   </div>
-  {% endfor %}
+  <div class="scroll">
+  <table class="list work-table">
+    <thead><tr><th>File</th><th>Version</th><th>Made by</th><th>When</th><th>Where it stands</th><th aria-label="Download"></th></tr></thead>
+    {% for file in job.files %}
+    <tbody>
+      {% for version in file.versions %}
+      <tr>
+        {% if loop.first %}
+        <td class="title-cell" rowspan="{{ file.versions|length }}">
+          <span class="file-name">{{ file.name }}</span>
+          {% if file.picture and version.served %}<a class="preview-link" href="/work/files/{{ version.entry_id }}"><img src="/work/files/{{ version.entry_id }}" class="preview" alt="Preview of {{ file.name }}"></a>{% endif %}
+        </td>
+        {% endif %}
+        <td class="version-cell">Version {{ version.number }}</td>
+        <td data-label="Made by">{{ version.made_by }}</td>
+        <td data-label="When">{{ version.made_at }}</td>
+        <td data-label="Where it stands">{{ version.status }}</td>
+        <td>{% if version.served %}<a class="button small" href="/work/files/{{ version.entry_id }}?download=1">Download</a>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    {% endfor %}
+  </table>
+  </div>
 </section>
 {% endfor %}
 {% endblock %}

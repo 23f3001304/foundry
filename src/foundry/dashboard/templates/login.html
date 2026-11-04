@@ -1,13 +1,19 @@
 {% extends "base.html" %}
 {% block main %}
-<h1>Sign in</h1>
-<p class="lead">Use your Switch login. Foundry passes your password to Switch and doesn't keep it.</p>
-{% if error %}<p class="problem" role="alert">{{ error }}</p>{% endif %}
-<form class="stack" method="post" action="/login">
-  <label for="login">Login</label>
-  <input id="login" name="login" type="text" autocomplete="username" autocapitalize="none" required>
-  <label for="password">Password</label>
-  <input id="password" name="password" type="password" autocomplete="current-password" required>
-  <div><button class="primary" type="submit">Sign in</button></div>
-</form>
+<div class="sign-in">
+  <h1>Sign in</h1>
+  <p class="lead">Use your Switch login. Foundry passes your password to Switch and doesn't keep it.</p>
+  {% if error %}<p class="problem" role="alert">{{ error }}</p>{% endif %}
+  <form class="stack" method="post" action="/login">
+    <div class="field">
+      <label for="login">Login</label>
+      <input id="login" name="login" type="text" autocomplete="username" autocapitalize="none" required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button class="primary" type="submit">Sign in</button>
+  </form>
+</div>
 {% endblock %}

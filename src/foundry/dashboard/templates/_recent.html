@@ -2,7 +2,7 @@
 <section class="recent">
   <h2>Your recent actions</h2>
   <p class="small">The desk applies these within a few seconds.</p>
-  <ul class="plain">
+  <ul class="rows">
     {% for action in recent %}
     <li>{{ action.what }}. <span class="{{ 'problem' if action.failed else 'status' }}">{{ action.status }}</span></li>
     {% endfor %}

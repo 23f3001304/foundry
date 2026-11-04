@@ -1,18 +1,34 @@
 {% extends "base.html" %}
 {% block main %}
-<h1>Overview</h1>
+<header class="page-head">
+  <h1>Overview</h1>
+</header>
 {% if not figures %}
-<p class="note">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
+<p class="empty">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
 {% endif %}
 {% for f in figures %}
 <section id="client-{{ f.bucket }}">
-  <h2>{{ f.client }}</h2>
+  <div class="section-head">
+    <h2>{{ f.client }}</h2>
+    <a href="/jobs">See the jobs</a>
+  </div>
   <dl class="figures">
-    <div><dt>Cards waiting</dt><dd>{{ f.waiting }}</dd><p class="small">{{ f.in_chat }} open in chat, {{ f.queued }} queued</p></div>
-    <div><dt>Open items</dt><dd>{{ f.open_items }}</dd><p class="small">Inputs people were asked for and haven't given</p></div>
-    <div><dt>Stuck jobs</dt><dd>{{ f.stuck }}</dd><p class="small">Waiting for someone to restart them</p></div>
+    <div>
+      <dt>Cards waiting</dt>
+      <dd>{{ f.waiting }}</dd>
+      <dd class="small">{{ f.in_chat }} open in chat, {{ f.queued }} queued</dd>
+    </div>
+    <div>
+      <dt>Open items</dt>
+      <dd>{{ f.open_items }}</dd>
+      <dd class="small">Inputs people were asked for and haven't given</dd>
+    </div>
+    <div{% if f.stuck %} class="is-stuck"{% endif %}>
+      <dt>Stuck jobs</dt>
+      <dd>{{ f.stuck }}</dd>
+      <dd class="small">Waiting for someone to restart them</dd>
+    </div>
   </dl>
-  <p><a href="/jobs">See the jobs</a></p>
 </section>
 {% endfor %}
 {% endblock %}
