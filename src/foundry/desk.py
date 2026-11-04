@@ -773,6 +773,10 @@ class Desk:
             self._note_fix_after_sign_off(job, fix, job.room_id)
         elif job.kind == "report":
             self._fix_report(job, fix, spoken)
+        elif job.state is State.COLLECTING:
+            # The makers haven't started, so there is nothing to re-make and no card to open. The fix goes in the brief they will get, and the people already asked are left alone.
+            # It is added, never swapped in, because this brief was approved and nothing drafts it again.
+            job.brief = self._corrected_note(job, fix, spoken=False)
         elif job.state in (State.RECEIVED, State.BRIEF_PENDING):
             self._fix_brief(job, fix, spoken)
         else:
