@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 CARD_LIFETIME = timedelta(hours=23)
 MAX_TITLE_CHARS = 500
+QUESTION_CARD_TITLE = "Your note"
 QUESTION_TITLE = "One question"
 MAX_DETAIL_CHARS = 4000
 CARD_OPTIONS = [
@@ -111,7 +112,7 @@ class SwitchClient:
             "request_id": request_id,
             "turn_id": request_id,
             "kind": "questions",
-            "title": QUESTION_TITLE,
+            "title": QUESTION_CARD_TITLE,
             "detail": None,
             "options": [],
             "questions": [{
