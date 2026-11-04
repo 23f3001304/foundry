@@ -14,6 +14,8 @@
   {% if user %}
   <nav aria-label="Pages">
     <a href="/"{% if page == "overview" %} aria-current="page"{% endif %}>Overview</a>
+    <a href="/connections"{% if page == "connections" %} aria-current="page"{% endif %}>Connections</a>
+    <a href="/data"{% if page == "data" %} aria-current="page"{% endif %}>Data</a>
     <a href="/jobs"{% if page == "jobs" %} aria-current="page"{% endif %}>Jobs</a>
     <a href="/work"{% if page == "work" %} aria-current="page"{% endif %}>Generated work</a>
     <a href="/responses"{% if page == "responses" %} aria-current="page"{% endif %}>Responses</a>

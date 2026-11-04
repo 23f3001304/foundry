@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block main %}
+{% if row %}
+<h1>Remove {{ row.name }}</h1>
+{% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
+{% set count = row.rooms|length %}
+<p class="problem">Removing this connection deletes every room on it, {{ count }} {{ 'room' if count == 1 else 'rooms' }} in all, with the conversations in them. That can't be undone, and connecting the same chat app again does not bring them back.</p>
+<ul class="plain">
+  {% for room in row.rooms %}<li>{{ room }}</li>{% endfor %}
+</ul>
+<p>Foundry works in these rooms for {{ row.clients }}, so its jobs there would lose their chat.</p>
+{% if row.removable %}
+<form class="stack" method="post" action="/connections/{{ row.link }}/remove">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="rooms" value="{{ count }}">
+  <div class="buttons">
+    <button class="primary" type="submit">Delete the connection and its {{ 'room' if count == 1 else 'rooms' }}</button>
+    <a class="button" href="/connections">Keep it</a>
+  </div>
+</form>
+{% else %}
+<p class="status">{{ row.why_not }}</p>
+<p><a href="/connections">Back to the connections</a></p>
+{% endif %}
+{% else %}
+<h1>Remove a connection</h1>
+{% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
+<p><a href="/connections">Back to the connections</a></p>
+{% endif %}
+{% endblock %}

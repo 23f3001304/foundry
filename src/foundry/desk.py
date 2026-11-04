@@ -31,10 +31,12 @@ from foundry.commands import (
     JOB_APPROVALS,
     LABELS,
     LOG_ANSWERED,
+    LOG_CHANGED,
     LOG_FLAGGED,
     LOG_RELOADED,
     LOG_RESTARTED,
     NO_DUE_CARD,
+    NO_PACK_TO_READ,
     NO_SUCH_CARD,
     NOT_A_CHOICE,
     NOT_FOR_YOU,
@@ -51,6 +53,7 @@ from foundry.commands import (
     Command,
     CommandStore,
     Refused,
+    is_data_file,
     outcome_for,
     still_waits_on,
 )
@@ -1605,13 +1608,19 @@ class Desk:
 
     def _reload_pack(self, command: Command) -> None:
         bucket = str(command.payload.get("bucket", ""))
-        rooms = [room for room in self.settings.rooms_in(bucket) if room in self.settings.packs and room in self.settings.brands]
+        # Only a client's own rooms count. A bucket the desk doesn't have, or one with no brand folder to read, would load nothing and still say it had.
+        rooms = [room for room in self.settings.packs if room in self.settings.brands and self.settings.bucket_for(room) == bucket]
+        if not rooms:
+            raise Refused(NO_PACK_TO_READ)
         try:
             fresh = {room: load_pack(BRANDS / self.settings.brands[room]) for room in rooms}
         except PackError as error:
             raise Refused(str(error)) from None
         self.settings.packs.update(fresh)
-        self._log_dashboard(command, bucket, self.settings.home_room(bucket), LOG_RELOADED.format(via=VIA_DASHBOARD), None, None)
+        # The file is named only when it is one the dashboard can change, since it came in a command.
+        file = command.payload.get("file")
+        text = LOG_CHANGED.format(file=file, via=VIA_DASHBOARD) if is_data_file(file) else LOG_RELOADED.format(via=VIA_DASHBOARD)
+        self._log_dashboard(command, bucket, self.settings.home_room(bucket), text, None, None)
 
     def _job_named(self, command: Command) -> Job:
         try:

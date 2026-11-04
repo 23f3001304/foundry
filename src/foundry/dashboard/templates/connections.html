@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Connections</h1>
+<p class="lead">The chat apps Switch is connected to, and whether each one is working. Foundry asks Switch as you and keeps none of it.</p>
+{% if notice %}<p class="status" role="status">{{ notice }}</p>{% endif %}
+{% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
+{% if not user.businesses %}
+<p class="note">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
+{% else %}
+{% if not problem %}
+<section>
+  <h2>Your connections</h2>
+  {% if rows %}
+  <ul class="rows">
+    {% for row in rows %}
+    <li class="response">
+      <h3>{{ row.name }}</h3>
+      <p class="small">Type: {{ row.kind }}. {{ row.rooms|length }} {{ 'room' if row.rooms|length == 1 else 'rooms' }}.{% if user.businesses|length > 1 %} Serves {{ row.clients }}.{% endif %}</p>
+      <p class="{{ 'status' if row.healthy else 'problem' }}">{{ row.state }}</p>
+      {% if row.removable %}
+      <p><a class="button" href="/connections/{{ row.link }}/remove">Remove</a></p>
+      {% else %}
+      <p class="small">{{ row.why_not }}</p>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="note">No connection to show.</p>
+  {% endif %}
+  <p class="small">A connection is listed only when it has a room of a business you manage and no room of anyone else's. It is then taken to be yours. A new connection has no rooms yet, so it appears here once a room of yours uses it.</p>
+</section>
+<section>
+  <h2>Add a connection</h2>
+  <p>Connect another chat app to Switch. You are asked for the details Switch needs, and they go straight to Switch.</p>
+  <p><a class="button" href="/connections/add">Add a connection</a></p>
+</section>
+{% endif %}
+<section>
+  <h2>Anything else</h2>
+  <p>To see every connection, change one, or work with a connection that isn't listed here, use <a href="{{ gateway_link }}">Switch's Gateway</a>.</p>
+</section>
+{% endif %}
+{% endblock %}

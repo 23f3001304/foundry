@@ -6,13 +6,16 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, ONE_BY_ONE, OPEN, QUEUED, Card, Trigger, _card, _latest_slot, _waiting_since
 from foundry.cards import COLUMNS as CARD_COLUMNS
 from foundry.checks import shown_words
 from foundry.chain import LINK_MARK, SAID, NotFlagged, Step, chain_for, name_of, names
-from foundry.commands import CLAIMED, DUE_ACTIONS, JOB_APPROVALS, LABELS, Command, CommandStore, still_waits_on
+from foundry.commands import CLAIMED, DUE_ACTIONS, JOB_APPROVALS, LABELS, Command, CommandStore, is_data_file, still_waits_on
+from foundry.dashboard import data as brand_data
 from foundry.dashboard.auth import User
+from foundry.dashboard.gateway import Bridge, Room
 from foundry.desk import Settings, approving_confirms_voice
 from foundry.items import Item, ItemState, _item, status_line
 from foundry.items import COLUMNS as ITEM_COLUMNS
@@ -108,6 +111,12 @@ DONE = "Done"
 DIDNT_DO = "Foundry didn't do it: {error}"
 # Taken by the desk with no result written, so it may or may not have happened.
 NOT_RECORDED = "Foundry has this, outcome not recorded"
+RUNNING = "Running"
+NEEDS_ATTENTION = "Needs attention: {what}"
+NOT_RUNNING = "Not running (Switch says: {status})"
+NO_CONNECTION = "No connection to show."
+NOT_ALL_YOURS = "It also has rooms Foundry doesn't link to a business, and removing it would delete those too. Use Switch's Gateway if you mean to."
+CANT_SEE_ALL = "Foundry can only see some of the rooms on it, so it can't say what removing it would delete. Use Switch's Gateway if you mean to."
 
 
 # How long a page waits for a database the desk is writing. Short, so a locked file shows a plain page and doesn't hold everything else up.
@@ -287,6 +296,51 @@ class Recent:
     what: str
     status: str
     failed: bool
+
+
+@dataclass
+class ConnectionRow:
+    id: str
+    # The id as it goes in an address.
+    link: str
+    name: str
+    kind: str
+    state: str
+    healthy: bool
+    rooms: list[str]
+    # The businesses it serves, as buckets and as the names shown.
+    serves: tuple[str, ...]
+    clients: str
+    removable: bool
+    # Why it can't be removed here, when it can't.
+    why_not: str
+
+
+@dataclass
+class DataFile:
+    file: str
+    kind: str
+    changed: datetime
+
+
+@dataclass
+class ClientData:
+    bucket: str
+    client: str
+    link: str
+    has_folder: bool
+    files: list[DataFile]
+
+
+@dataclass
+class DataView:
+    bucket: str
+    client: str
+    link: str
+    file: str
+    kind: str
+    text: str
+    cut: bool
 
 
 def bucket_name(bucket: str) -> str:
@@ -622,6 +676,68 @@ class Reader:
         flagged = Flagged(entry.id, entry.text, name_of(entry, known), self.when(entry.at), bucket_name(entry.bucket))
         return ChainPage(flagged, steps, entry.job_id or "", title_of(_job(job[0])) if job else NO_BRIEF, via)
 
+    # Connections
+
+    def _business_of(self, room_id: str) -> str:
+        # A client's studio and review rooms are the client's, whether or not they are named in a pack.
+        inside = {room: outside for outside, rooms in self.settings.workrooms.items() for room in (rooms.studio, rooms.review)}
+        return self.settings.bucket_for(inside.get(room_id, room_id))
+
+    def connections(self, user: User, bridges: list[Bridge], rooms: list[Room]) -> list[ConnectionRow]:
+        # A connection belongs to no business by itself, so it is told from the rooms on it. It is this login's only when it has a room of one of its businesses and none of anyone else's.
+        known = set(self.settings.brands) | set(self.settings.packs) | set(self.settings.all_rooms())
+        found = []
+        for bridge in bridges:
+            on = [room for room in rooms if room.bridge_id == bridge.id]
+            owners = {room.id: self._business_of(room.id) for room in on if room.id in known}
+            mine = [room for room in on if owners.get(room.id) in user.businesses]
+            if not mine or any(room.id in owners and owners[room.id] not in user.businesses for room in on):
+                continue
+            # Removing it deletes every room on it, so it can only be removed when every one of them is this login's and Foundry can see all of them.
+            unlinked = any(room.id not in owners for room in on)
+            why_not = NOT_ALL_YOURS if unlinked else CANT_SEE_ALL if bridge.rooms != len(on) else ""
+            healthy = bridge.status == "active" and not bridge.attention
+            serves = tuple(dict.fromkeys(owners[room.id] for room in mine))
+            if bridge.attention:
+                state = NEEDS_ATTENTION.format(what=bridge.attention)
+            else:
+                state = RUNNING if healthy else NOT_RUNNING.format(status=bridge.status or "unknown")
+            found.append(ConnectionRow(bridge.id, quote(bridge.id, safe=""), bridge.name, bridge.type or "unknown", state, healthy, [room.name for room in on], serves, ", ".join(bucket_name(bucket) for bucket in serves), not why_not, why_not))
+        return found
+
+    def health(self, user: User, rows: list[ConnectionRow]) -> dict[str, str]:
+        found = {}
+        for bucket in user.businesses:
+            theirs = [row for row in rows if bucket in row.serves]
+            running = sum(row.healthy for row in theirs)
+            if not theirs:
+                found[bucket] = NO_CONNECTION
+                continue
+            found[bucket] = f"{len(theirs)} {'connection' if len(theirs) == 1 else 'connections'}: {running} running" + (f", {len(theirs) - running} needing attention" if running < len(theirs) else "")
+        return found
+
+    # Data
+
+    def data(self, user: User) -> list[ClientData]:
+        found = []
+        for bucket in user.businesses:
+            folder = brand_data.folder_for(self.settings, bucket)
+            files = [DataFile(item.file, item.kind, item.changed) for item in brand_data.items(folder)] if folder else []
+            found.append(ClientData(bucket, bucket_name(bucket), quote(bucket, safe=""), folder is not None, files))
+        return found
+
+    def data_folder(self, user: User, bucket: str) -> Path | None:
+        # Another client's folder is not found, so nobody can tell it exists.
+        return brand_data.folder_for(self.settings, bucket) if bucket in user.businesses else None
+
+    def data_view(self, user: User, bucket: str, file: str) -> DataView | None:
+        folder = self.data_folder(user, bucket)
+        item = brand_data.find(folder, file) if folder else None
+        if item is None:
+            return None
+        text, cut = brand_data.read(item)
+        return DataView(bucket, bucket_name(bucket), quote(bucket, safe=""), item.file, item.kind, text, cut)
+
     # What this login asked for lately
 
     def recent(self, commands: CommandStore, login: str) -> list[Recent]:
@@ -643,7 +759,8 @@ class Reader:
             choice = payload.get("choice", "")
             return f"Answered {card.title if card else 'a card'} with {LABELS.get(choice, choice)}"
         if command.action == "reload_pack":
-            return "Read the business's pack again"
+            file = payload.get("file")
+            return f"Changed {file} and read the business's pack again" if is_data_file(file) else "Read the business's pack again"
         rows = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", str(payload.get("job_id", "")))
         job = title_of(_job(rows[0])) if rows else "a job"
         what = {"restart": "Restart", "flag": "Flag something in"}.get(command.action) or DUE_ACTIONS[command.action]

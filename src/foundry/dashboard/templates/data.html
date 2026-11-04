@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Data</h1>
+<p class="lead">Each business's brand kit and source documents, which the desk and the makers read. Replace a file or add a source here, and the desk reads it again within a few seconds. Jobs that start after that use it.</p>
+{% if notice %}<p class="status" role="status">{{ notice }}</p>{% endif %}
+{% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
+{% if not clients %}
+<p class="note">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
+{% endif %}
+{% for c in clients %}
+<section id="data-{{ c.bucket }}">
+  <h2>{{ c.client }}</h2>
+  {% if not c.has_folder %}
+  <p class="note">This business has no brand folder on this machine, so there is nothing to show or change.</p>
+  {% else %}
+  {% if c.files %}
+  <ul class="rows">
+    {% for f in c.files %}
+    <li class="response">
+      <h3><a href="/data/{{ c.link }}/{{ f.file|urlencode }}">{{ f.file }}</a></h3>
+      <p class="small">{{ f.kind }}. Changed {{ f.changed|when }}.</p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="note">This folder has no kit or source documents yet.</p>
+  {% endif %}
+  <form class="stack" method="post" action="/data/{{ c.link }}/add" enctype="multipart/form-data">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="add-{{ c.bucket }}">Add a source document</label>
+    <input id="add-{{ c.bucket }}" name="upload" type="file" accept=".md,text/markdown,text/plain" required>
+    <p class="small">A text file whose name ends in .md. If a source with that name is already there, this file replaces it.</p>
+    <div class="buttons"><button class="primary" type="submit">Add the file</button></div>
+  </form>
+  {% endif %}
+</section>
+{% endfor %}
+{% if clients %}
+<p class="small">Logos, pictures and fonts are not changed here. The pack, pack.md, says who may use this dashboard, so it is only changed on the machine the desk runs on. Replacing a file can't be undone here.</p>
+{% endif %}
+{% include "_recent.html" %}
+{% endblock %}

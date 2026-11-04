@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block main %}
+<h1>Add a connection</h1>
+{% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
+{% if chosen %}
+<p class="lead">Adding a {{ chosen.name }} connection. Anything secret you type here goes straight to Switch. Foundry does not keep it, log it or show it again, so if Switch says no, enter it again.</p>
+<form class="stack" method="post" action="/connections/add" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="type" value="{{ chosen.key }}">
+  <label for="display_name">Name</label>
+  <input id="display_name" name="display_name" type="text" autocomplete="off" maxlength="80" required>
+  {% for field in chosen.fields %}
+  {% if field.boolean %}
+  <label for="field-{{ field.key }}"><input id="field-{{ field.key }}" name="field.{{ field.key }}" type="checkbox"{% if field.ticked %} checked{% endif %}> {{ field.label }}</label>
+  {% if field.hint %}<span class="small">{{ field.hint }}</span>{% endif %}
+  {% else %}
+  <label for="field-{{ field.key }}">{{ field.label }}{% if not field.required %} (optional){% endif %}</label>
+  {% if field.hint %}<span class="small">{{ field.hint }}</span>{% endif %}
+  <input id="field-{{ field.key }}" name="field.{{ field.key }}" type="{{ 'password' if field.secret else 'text' }}" autocomplete="off"{% if field.required %} required{% endif %}>
+  {% endif %}
+  {% endfor %}
+  <div class="buttons">
+    <button class="primary" type="submit">Add the connection</button>
+    <a class="button" href="/connections/add">Choose another kind</a>
+  </div>
+</form>
+{% elif kinds %}
+<p class="lead">Which chat app do you want to connect?</p>
+<ul class="plain">
+  {% for kind in kinds %}<li><a href="/connections/add?type={{ kind.key|urlencode }}">{{ kind.name }}</a></li>{% endfor %}
+</ul>
+{% endif %}
+<p><a href="/connections">Back to the connections</a></p>
+<p class="small">Other kinds of change are made in <a href="{{ gateway_link }}">Switch's Gateway</a>.</p>
+{% endblock %}

@@ -29,6 +29,7 @@
       <dd class="small">Waiting for someone to restart them</dd>
     </div>
   </dl>
+  {% if f.bucket in health %}<p class="status">{{ health[f.bucket] }} <a href="/connections">See the connections</a></p>{% endif %}
 </section>
 {% endfor %}
 {% endblock %}

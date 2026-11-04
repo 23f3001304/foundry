@@ -1,6 +1,7 @@
 """What the dashboard asks the desk to do. The dashboard only writes these, and the desk applies them, so jobs and cards never have a second writer."""
 
 import json
+import re
 import sqlite3
 from contextlib import closing
 from dataclasses import dataclass
@@ -38,6 +39,7 @@ NOT_IN_THIS_JOB = "That isn't part of this job."
 NOT_STUCK = "That job isn't stuck."
 NO_DUE_CARD = "No due-time card is open for that job."
 NOT_THE_APPROVER = "Only the person who approves this job can flag things in it."
+NO_PACK_TO_READ = "Foundry has no pack to read again for that client."
 COULD_NOT = "Foundry couldn't do that. Try again in a moment."
 # What a command holds from the moment the desk takes it until the desk says how it went. A command that keeps it was taken and never finished, or finished and not recorded.
 CLAIMED = "claimed"
@@ -47,8 +49,25 @@ LOG_ANSWERED = "Answered {title} with {choice} {via}"
 LOG_RESTARTED = "Restarted the job {via}"
 LOG_FLAGGED = "{flagged} {via}"
 LOG_RELOADED = "Read the pack again {via}"
+LOG_CHANGED = "Changed {file}, then read the pack again {via}"
+
+# The files in a business's brand folder that the dashboard may change: its kit, and its source documents. The pack is not one of them, because it says who may use the dashboard.
+KIT = "kit.md"
+SOURCES = "sources"
+SOURCE_NAME = re.compile(r"[A-Za-z0-9_-]{1,60}\.md")
+# Names a source can't take: the files beside it, and the names Windows keeps for its devices.
+RESERVED_NAMES = {"kit", "pack", "con", "prn", "aux", "nul", *(f"com{number}" for number in range(1, 10)), *(f"lpt{number}" for number in range(1, 10))}
 
 COLUMNS = ("id", "action", "payload", "login", "acts_as", "created_at", "done_at", "error")
+
+
+def is_source_name(name: object) -> bool:
+    return isinstance(name, str) and bool(SOURCE_NAME.fullmatch(name)) and name.removesuffix(".md").casefold() not in RESERVED_NAMES
+
+
+def is_data_file(file: object) -> bool:
+    # As a command names it: kit.md, or sources/<name>.md.
+    return file == KIT or (isinstance(file, str) and file.startswith(f"{SOURCES}/") and is_source_name(file.removeprefix(f"{SOURCES}/")))
 
 
 class Refused(Exception):
