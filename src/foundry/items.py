@@ -48,6 +48,8 @@ class Item:
     reminded_at: datetime | None
     reachable: bool
     confirmed: bool
+    # The item that took this one's place when the asker, or the owner, said to ask someone else.
+    handed_to: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,16 +95,23 @@ def _names(names: list[str]) -> str:
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
 
 
-def _handed_over(item: Item, items: list[Item]) -> bool:
-    # Skipped because someone else was asked for the same input, so it is neither owed nor gone without.
-    same = (item.job_id, item.input, item.measure)
-    return item.state is ItemState.SKIPPED and any(other.state is not ItemState.SKIPPED and (other.job_id, other.input, other.measure) == same for other in items)
+def _handed_over(item: Item) -> bool:
+    # Skipped because someone else was asked in its place, so it is neither owed nor gone without. Two owners asked for the same input are not each other's.
+    return item.state is ItemState.SKIPPED and item.handed_to is not None
+
+
+def going_without(items: list[Item]) -> list[Item]:
+    return [item for item in items if item.state is ItemState.SKIPPED and not _handed_over(item)]
 
 
 def status_line(items: list[Item]) -> str:
     # Built by code from the list, and everything people wrote in it is quieted here.
-    items = [item for item in items if not _handed_over(item, items)]
+    items = [item for item in items if not _handed_over(item)]
     parts = [f"{sum(item.state in IN for item in items)} of {len(items)} in"]
+    # An answer that came in by voice and was never confirmed is in, and the work used it, but nobody has said it is right.
+    unsure = [quiet(item.owner_name) for item in items if item.state in IN and not item.confirmed]
+    if unsure:
+        parts[0] += f" (not confirmed: {_names(list(dict.fromkeys(unsure)))})"
     open_items = [item for item in items if item.state is ItemState.OPEN]
     # A voice answer nobody has confirmed yet is neither silence nor an answer.
     heard = [item for item in open_items if item.answer is not None and not item.confirmed]
@@ -118,7 +127,7 @@ def status_line(items: list[Item]) -> str:
     return ", ".join(parts)
 
 
-COLUMNS = ("id", "job_id", "bucket", "owner", "owner_name", "room_id", "input", "measure", "due_at", "state", "reason", "answer", "answer_entry", "asked_at", "reminded_at", "reachable", "confirmed")
+COLUMNS = ("id", "job_id", "bucket", "owner", "owner_name", "room_id", "input", "measure", "due_at", "state", "reason", "answer", "answer_entry", "asked_at", "reminded_at", "reachable", "confirmed", "handed_to")
 
 
 class ItemStore:
@@ -131,7 +140,8 @@ class ItemStore:
                 """CREATE TABLE IF NOT EXISTS items (
                     id TEXT PRIMARY KEY, job_id TEXT NOT NULL, bucket TEXT NOT NULL, owner TEXT NOT NULL, owner_name TEXT NOT NULL,
                     room_id TEXT NOT NULL, input TEXT NOT NULL, measure TEXT NOT NULL, due_at TEXT NOT NULL, state TEXT NOT NULL,
-                    reason TEXT, answer TEXT, answer_entry INTEGER, asked_at TEXT, reminded_at TEXT, reachable INTEGER NOT NULL, confirmed INTEGER NOT NULL)"""
+                    reason TEXT, answer TEXT, answer_entry INTEGER, asked_at TEXT, reminded_at TEXT, reachable INTEGER NOT NULL, confirmed INTEGER NOT NULL,
+                    handed_to TEXT)"""
             )
 
     def create(self, job_id: str, bucket: str, owner: str, owner_name: str, room_id: str, input: str, measure: str, due_at: datetime, reachable: bool = True) -> Item:
@@ -170,7 +180,7 @@ class ItemStore:
                     ON CONFLICT(id) DO UPDATE SET {", ".join(f"{name} = excluded.{name}" for name in COLUMNS[1:])}""",
                 (
                     item.id, item.job_id, item.bucket, item.owner, item.owner_name, item.room_id, item.input, item.measure, item.due_at.isoformat(), item.state.value,
-                    item.reason, item.answer, item.answer_entry, _stamp(item.asked_at), _stamp(item.reminded_at), int(item.reachable), int(item.confirmed),
+                    item.reason, item.answer, item.answer_entry, _stamp(item.asked_at), _stamp(item.reminded_at), int(item.reachable), int(item.confirmed), item.handed_to,
                 ),
             )
 
@@ -189,4 +199,4 @@ def _when(text: str | None) -> datetime | None:
 
 
 def _item(row: tuple) -> Item:
-    return Item(*row[:8], datetime.fromisoformat(row[8]), ItemState(row[9]), *row[10:13], _when(row[13]), _when(row[14]), bool(row[15]), bool(row[16]))
+    return Item(*row[:8], datetime.fromisoformat(row[8]), ItemState(row[9]), *row[10:13], _when(row[13]), _when(row[14]), bool(row[15]), bool(row[16]), row[17])

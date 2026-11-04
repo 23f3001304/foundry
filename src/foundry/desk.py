@@ -135,6 +135,8 @@ DECISION_EVENTS = {
 }
 # These answers reach a job the way they always have. The rest have no job gate and go to _take_card_answer.
 JOB_CARDS = {Trigger.BRIEF, Trigger.FINAL_WORK, Trigger.STUCK, Trigger.QUESTION}
+# The reminder, the due card and the "Already told" card are answered by the coordinator, which owns the list of who owes what.
+ITEM_CARDS = {Trigger.REMINDER, Trigger.DUE, Trigger.ALREADY_TOLD}
 
 
 def sender_kind(payload: dict) -> str:
@@ -334,6 +336,7 @@ class Desk:
                     # Not acknowledged, so Switch hands it over again next tick. The ones behind it still get their turn.
                     logger.exception("Could not handle the outcome for %s, so it comes round again on the next tick.", outcome.request_id)
             self._stop_quiet_jobs(now)
+            self.coordinator.tick(now)
         finally:
             # One job's trouble must not stop everyone else's cards and set times.
             self.cards.pump()
@@ -503,6 +506,8 @@ class Desk:
             f"When you finish, start your reply with {WORK_READY} #{tag}, then the absolute path of each file on its own line. If the brief needs nothing from you, reply with {WORK_READY} #{tag} alone.",
             f"Brief:\n{quiet(job.brief)}",
         ]
+        if inputs := self.coordinator.inputs_for(job):
+            lines.append(inputs)
         if job.revision_notes:
             lines.append(f"Changes to make:\n{quiet(job.revision_notes)}")
         elif retry:
@@ -1106,6 +1111,8 @@ class Desk:
             self._take_late_fix_answer(card, outcome.chosen_from(card.choices))
         elif card.is_merged:
             self._take_routine_answer(card, outcome)
+        elif card.trigger in ITEM_CARDS:
+            self.coordinator.take_card_answer(card, outcome)
         else:
             self.cards.finish(card.request_id, ANSWERED)
 
@@ -1126,6 +1133,9 @@ class Desk:
         if card.trigger is Trigger.VOICE:
             # When it ran out, so a word long after can be told from one that is about this card.
             self.cards.note(card.request_id, ran_out_at=self.clock().isoformat())
+            if card.item_id:
+                # Nobody said Right or Wrong, and work doesn't stop for that: the item closes with the value marked unconfirmed.
+                self.coordinator.keep_unconfirmed(card)
         if card.trigger in HOLDS_JOB:
             self.client.post_message(card.room_id, CARD_RAN_OUT.format(title=card.title))
         if card.trigger is Trigger.LATE_FIX:
