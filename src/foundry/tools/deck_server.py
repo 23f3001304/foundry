@@ -377,8 +377,9 @@ def _print_sources(slide, brand: Brand, links: list[Link], layout: str) -> None:
 
 
 @mcp.tool()
-def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, highlight: str = "", sources: list[dict] | None = None) -> str:
-    """Build an on-brand .pptx and return its absolute path. The title slide comes first, from title.
+def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, highlight: str = "", sources: list[dict] | None = None, subtitle: str = "") -> str:
+    """Build an on-brand .pptx and return its absolute path. The title slide comes first, from title, with subtitle as a smaller line under it when you give one,
+    such as a line the brand kit wants on the first slide. Keep the title to its own words.
 
     Each slide is one of:
     {"layout": "content", "title": "...", "bullets": ["...", "..."]}
@@ -398,7 +399,7 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     deck = Presentation()
     deck.slide_width, deck.slide_height = Pt(WIDTH), Pt(HEIGHT)
     _apply_theme(deck, brand)
-    _title_slide(deck, brand, title, "", highlight)
+    _title_slide(deck, brand, title, subtitle, highlight)
     links = _sources_of({"title": title, "sources": sources}, 1)
     if links:
         _print_sources(deck.slides[-1], brand, links, "title")
