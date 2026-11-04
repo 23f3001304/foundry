@@ -1,35 +1,155 @@
 {% extends "base.html" %}
 {% block main %}
-<header class="page-head">
+<header class="page-head board-title">
   <h1>Overview</h1>
 </header>
 {% if not figures %}
-<p class="empty">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
+<div class="card empty-card">
+  <span class="tile tile-needs" aria-hidden="true"></span>
+  <p class="empty">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
+</div>
 {% endif %}
 {% for f in figures %}
-<section id="client-{{ f.bucket }}">
-  <div class="section-head">
+{% set b = boards[f.bucket] %}
+<section id="client-{{ f.bucket }}" class="board">
+  <div class="board-head">
     <h2>{{ f.client }}</h2>
     <a href="/jobs">See the jobs</a>
+    {% if f.bucket in health %}<p class="status">{{ health[f.bucket] }} <a href="/connections">See the connections</a></p>{% endif %}
   </div>
-  <dl class="figures">
-    <div>
-      <dt>Cards waiting</dt>
-      <dd>{{ f.waiting }}</dd>
-      <dd class="small">{{ f.in_chat }} open in chat, {{ f.queued }} queued</dd>
+  <div class="bento">
+    <div class="card needs{% if b.needs %} has-needs{% endif %}">
+      <div class="card-head">
+        <span class="tile tile-needs" aria-hidden="true"></span>
+        <h3>Needs you now</h3>
+        <span class="pill">{{ b.needs|length + b.needs_more }}</span>
+      </div>
+      {% if b.needs %}
+      <ul class="need-list">
+        {% for need in b.needs %}
+        <li>
+          <span class="stage {{ need.tone }}"><a class="need-title" href="{{ need.href }}">{{ need.title }}</a></span>
+          <span class="need-why">{{ need.why }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% if b.needs_more %}<p class="card-foot"><a href="/responses">{{ b.needs_more }} more</a></p>{% endif %}
+      {% else %}
+      <p class="need-none">Nothing is stuck, and no card is waiting for you.</p>
+      {% endif %}
     </div>
-    <div>
-      <dt>Open items</dt>
-      <dd>{{ f.open_items }}</dd>
-      <dd class="small">Inputs people were asked for and haven't given</dd>
+
+    <dl class="figures">
+      <div class="tile-card">
+        <dt>Cards waiting</dt>
+        <dd>{{ f.waiting }}</dd>
+        <dd class="small">{{ f.in_chat }} open in chat, {{ f.queued }} queued</dd>
+        <dd class="chart-slot">{{ charts.sparkline(b.opened, b.days, "Cards opened per day") }}</dd>
+      </div>
+      <div class="tile-card">
+        <dt>Open items</dt>
+        <dd>{{ f.open_items }}</dd>
+        <dd class="small">Inputs people were asked for and haven't given</dd>
+        <dd class="chart-slot">{{ charts.sparkline(b.asked, b.days, "Inputs asked for per day") }}</dd>
+      </div>
+      <div class="tile-card{% if f.stuck %} is-stuck{% endif %}">
+        <dt>Stuck jobs</dt>
+        <dd>{{ f.stuck }}</dd>
+        <dd class="small">Waiting for someone to restart them</dd>
+        <dd class="chart-slot">{{ charts.sparkline(b.went_stuck, b.days, "Jobs that went stuck per day", "stuck" if f.stuck else "") }}</dd>
+      </div>
+      <div class="tile-card">
+        <dt>Delivered</dt>
+        <dd>{{ b.delivered_total }}</dd>
+        <dd class="small"><span class="pill">last 14d</span>{% if b.delivered_change %} {{ b.delivered_change }}{% endif %}</dd>
+        <dd class="chart-slot">{{ charts.sparkline(b.delivered, b.days, "Work delivered per day", "accent") }}</dd>
+      </div>
+    </dl>
+
+    <div class="card pipeline">
+      <div class="card-head">
+        <h3>Jobs through the stages</h3>
+        <span class="pill">now</span>
+      </div>
+      <div class="flow-wrap">
+        <div class="flow-main">
+          <ol class="flow-stages">
+            {% for key, name, count in b.stages[:-1] %}
+            <li class="flow-stage">
+              <span class="tile tile-{{ key }}" aria-hidden="true"></span>
+              <span class="flow-name">{{ name }}</span>
+              <span class="flow-count">{{ count }}</span>
+              <span class="flow-meter">{{ charts.meter(count, b.stages[:-1]|map(attribute=2)|max, name) }}</span>
+            </li>
+            {% endfor %}
+          </ol>
+          <div class="flow-band-wrap">{{ charts.flow(b.stages[:-1], "Open jobs at each stage") }}</div>
+        </div>
+        <div class="flow-exits">
+          <a class="flow-exit" href="/jobs?stage=delivered">
+            <span class="flow-exit-name"><span class="tile tile-delivered" aria-hidden="true"></span>Delivered <span class="pill">last 14d</span></span>
+            <span class="flow-count">{{ b.delivered_total }}</span>
+          </a>
+          <a class="flow-exit{% if b.stuck %} has-stuck{% endif %}" href="/jobs?stage=stuck">
+            <span class="flow-exit-name"><span class="stage {{ 'stuck' if b.stuck else 'idle' }}">Stuck</span></span>
+            <span class="flow-count">{{ b.stuck }}</span>
+          </a>
+        </div>
+      </div>
     </div>
-    <div{% if f.stuck %} class="is-stuck"{% endif %}>
-      <dt>Stuck jobs</dt>
-      <dd>{{ f.stuck }}</dd>
-      <dd class="small">Waiting for someone to restart them</dd>
+
+    <div class="card inputs">
+      <div class="card-head">
+        <h3>Inputs on open jobs</h3>
+        <span class="pill">now</span>
+      </div>
+      <div class="inputs-body">
+        <div class="donut-slot">{{ charts.donut([("In", "part-in", b.inputs_in), ("Still owed", "part-owed", b.inputs_owed), ("Not asked yet", "part-unasked", b.inputs_not_asked), ("Going without", "part-without", b.inputs_without)], "Inputs on open jobs", b.inputs_in|string, "of " ~ b.inputs_total ~ " in") }}</div>
+        <ul class="legend">
+          <li><span class="chip chip-in" aria-hidden="true"></span>In<b>{{ b.inputs_in }}</b></li>
+          <li><span class="chip chip-owed" aria-hidden="true"></span>Still owed<b>{{ b.inputs_owed }}</b></li>
+          <li><span class="chip chip-unasked" aria-hidden="true"></span>Not asked yet<b>{{ b.inputs_not_asked }}</b></li>
+          <li><span class="chip chip-without" aria-hidden="true"></span>Going without<b>{{ b.inputs_without }}</b></li>
+        </ul>
+      </div>
     </div>
-  </dl>
-  {% if f.bucket in health %}<p class="status">{{ health[f.bucket] }} <a href="/connections">See the connections</a></p>{% endif %}
+
+    <div class="card took">
+      <div class="card-head">
+        <h3>Request to delivery</h3>
+        <span class="pill">last 14d</span>
+      </div>
+      {% if b.took_jobs %}
+      <p class="big-figure">{{ b.took_median }}</p>
+      <p class="small">Median of {{ b.took_jobs }} jobs</p>
+      <ul class="thin-bars">
+        {% for name, count in b.took %}
+        <li>
+          <span class="thin-name">{{ name }}</span><span class="thin-value">{{ count }}</span>
+          {{ charts.meter(count, b.took_jobs, name) }}
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="big-figure faint">0</p>
+      <p class="small">No job with a logged request was delivered in the last 14 days.</p>
+      {% endif %}
+    </div>
+
+    <div class="card activity">
+      <div class="card-head">
+        <h3>Activity per day</h3>
+        <span class="pill">last 14d</span>
+      </div>
+      <ul class="legend legend-row">
+        <li><span class="chip chip-opened" aria-hidden="true"></span>Cards opened<b>{{ b.opened|sum }}</b></li>
+        <li><span class="chip chip-answered" aria-hidden="true"></span>Cards answered<b>{{ b.answered|sum }}</b></li>
+        <li><span class="chip chip-delivered" aria-hidden="true"></span>Delivered<b>{{ b.delivered_total }}</b></li>
+      </ul>
+      {{ charts.bars(b.days, [("Cards opened", "bar-opened", b.opened), ("Cards answered", "bar-answered", b.answered), ("Delivered", "bar-delivered", b.delivered)], "Activity per day") }}
+      {% if b.seeded %}<p class="small">Part of this history was seeded for a demo.</p>{% endif %}
+    </div>
+  </div>
 </section>
 {% endfor %}
 {% endblock %}

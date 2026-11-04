@@ -26,8 +26,8 @@ from starlette.templating import Jinja2Templates
 
 from foundry.chain import SAID
 from foundry.commands import DUE_ACTIONS, KIT, CommandStore
+from foundry.dashboard import charts, gateway
 from foundry.dashboard import data as brand_data
-from foundry.dashboard import gateway
 from foundry.dashboard.auth import COOKIE, LIFETIME, REFUSED, User, csrf_ok, current_user, end_session, find_session, start_session, switch_login
 from foundry.dashboard.queries import MEDIA, PICTURES, ConnectionRow, Reader, is_made_file
 from foundry.desk import Settings
@@ -215,7 +215,8 @@ async def overview(request: Request, user: User) -> Response:
             health = request.app.state.reader.health(user, await connection_rows(request, user, gateway.READ_TIMEOUT))
         except gateway.SwitchProblem as trouble:
             health = dict.fromkeys(user.businesses, trouble.message)
-    return render(request, "overview.html", user, title="Overview", page="overview", figures=figures, health=health)
+    boards = await run_in_threadpool(request.app.state.reader.boards, user)
+    return render(request, "overview.html", user, title="Overview", page="overview", figures=figures, health=health, boards=boards)
 
 
 # Connections
@@ -412,7 +413,7 @@ def data_add(request: Request, user: User, form: FormData) -> Response:
 
 @signed_in
 def jobs(request: Request, user: User) -> Response:
-    return render(request, "jobs.html", user, title="Jobs", page="jobs", rows=request.app.state.reader.job_rows(user))
+    return render(request, "jobs.html", user, title="Jobs", page="jobs", board=request.app.state.reader.job_board(user, request.query_params.get("stage", "")))
 
 
 @signed_in
@@ -590,6 +591,7 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
     reader = Reader(settings)
     environment = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     environment.filters["when"] = reader.when
+    environment.globals["charts"] = charts
     app.state.settings, app.state.reader, app.state.commands = settings, reader, CommandStore(settings.commands_path)
     app.state.templates = Jinja2Templates(env=environment)
     # Without a secret from the environment each run has its own, so a restart signs everyone out.

@@ -6,7 +6,7 @@
 <title>{{ title }} - Foundry</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
-<body class="{{ 'shell' if user else 'bare' }}">
+<body class="{{ 'shell' if user else 'bare' }}{% if page %} page-{{ page }}{% endif %}">
 <a class="skip" href="#main">Skip to the page</a>
 <header class="bar">
   <div class="bar-inner">

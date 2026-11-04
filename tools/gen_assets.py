@@ -62,6 +62,12 @@ LOGO_STYLE = (
     "readable at small sizes, centred on a plain white background with nothing else in the frame."
 )
 
+DASHBOARD_ART = (
+    "Abstract art on a completely flat pure black background #000000. One large smooth organic form with a crisp clean edge, filled "
+    "with a soft rich colour blend and a fine matte grain, and everything else in the frame stays pure black. "
+    "No glow around the form, no shadows, no reflections, no text, letters, numbers, logos, people or objects."
+)
+
 ASSETS = {
     **{
         name: {
@@ -122,6 +128,25 @@ ASSETS = {
         "with scaffolding and neatly stacked materials, wide empty sky at the top. No people, no text, no signage, no logos.",
         "aspect": "16:9",
         "out": "brands/shilagate-homes/site.png",
+    },
+    "dashboard-molten": {
+        "prompt": DASHBOARD_ART + " The form looks like a slow pour of molten glass: it enters from the bottom-left corner and rises "
+        "in three overlapping rounded swells of different sizes. Colour runs from magenta pink at the crests through hot coral and orange "
+        "to pale peach where it meets the corner.",
+        "out": "src/foundry/dashboard/static/art/molten.webp",
+        "cut": "art",
+    },
+    "dashboard-tide": {
+        "prompt": DASHBOARD_ART + " The form is one wide smooth sweeping arc that enters from the top-right corner, curves down and to the left like a dune, and ends in a smooth rounded tip well inside the frame, with pure black all around the tip, so that it touches only the top and right edges. "
+        "Colour runs from pale ice blue along its edge to clear sky blue and a deeper cornflower blue in the corner.",
+        "out": "src/foundry/dashboard/static/art/tide.webp",
+        "cut": "art",
+    },
+    "dashboard-ember": {
+        "prompt": DASHBOARD_ART + " The form is a single soft rounded lobe, like a drop of hot metal just starting to fall, that enters "
+        "from the top-right corner. Colour runs from warm orange at the edge through coral to a deep rose in the corner.",
+        "out": "src/foundry/dashboard/static/art/ember.webp",
+        "cut": "art",
     },
 }
 
@@ -219,12 +244,22 @@ def pixelate(image: Image.Image) -> Image.Image:
     return canvas
 
 
+def cut_art(image: Image.Image) -> Image.Image:
+    """The model can't give transparency, so the black becomes it: how bright a pixel is sets its alpha, and its colour is restored."""
+    rgb = np.asarray(image.convert("RGB"), dtype=np.float32) / 255
+    bright = rgb.max(axis=2)
+    alpha = np.clip((bright - 0.05) / 0.2, 0, 1)
+    colour = np.clip(rgb / np.maximum(alpha, 0.05)[..., None], 0, 1)
+    cut = np.dstack((np.where(alpha[..., None] > 0, colour, 0), alpha))
+    return Image.fromarray((cut * 255).astype(np.uint8), "RGBA")
+
+
 def finish(name: str, spec: dict) -> Path:
     out = ROOT / spec["out"]
     out.parent.mkdir(parents=True, exist_ok=True)
     image = Image.open(RAW / f"{name}.png")
-    cut = {"logo": cut_logo, "pixel": pixelate}.get(spec.get("cut"))
-    (cut(image) if cut else image.convert("RGB")).save(out, optimize=True)
+    cut = {"logo": cut_logo, "pixel": pixelate, "art": cut_art}.get(spec.get("cut"))
+    (cut(image) if cut else image.convert("RGB")).save(out, optimize=True, quality=72, method=6)
     return out
 
 

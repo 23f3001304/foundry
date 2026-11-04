@@ -17,7 +17,7 @@ from foundry.dashboard import data as brand_data
 from foundry.dashboard.auth import User
 from foundry.dashboard.gateway import Bridge, Room
 from foundry.desk import Settings, approving_confirms_voice
-from foundry.items import Item, ItemState, _item, desk_wrote, status_line
+from foundry.items import IN, Item, ItemState, _item, desk_wrote, status_line
 from foundry.items import COLUMNS as ITEM_COLUMNS
 from foundry.jobs import Job, State, _job
 from foundry.jobs import COLUMNS as JOB_COLUMNS
@@ -181,6 +181,14 @@ class Figures:
 
 
 @dataclass
+class JobStep:
+    key: str
+    name: str
+    # past, now or next, or skipped for a stage this job never uses.
+    state: str
+
+
+@dataclass
 class JobRow:
     id: str
     bucket: str
@@ -192,6 +200,76 @@ class JobRow:
     waiting: list[str]
     # How the stage reads at a glance: stuck, done, waiting on a person, or working.
     tone: str
+    # Where it sits on the way through, and how many inputs are in. Inputs count the way the words beside them do.
+    step: str = ""
+    steps: list[JobStep] = field(default_factory=list)
+    inputs_in: int = 0
+    inputs_total: int = 0
+    # A card about this job is addressed to this login.
+    yours: bool = False
+
+
+@dataclass
+class Need:
+    tone: str
+    title: str
+    why: str
+    href: str
+
+
+@dataclass
+class Board:
+    """What a business's charts draw. Everything is by day, by stage or by job, and nothing here is by person."""
+
+    days: list[str]
+    delivered: list[int]
+    opened: list[int]
+    answered: list[int]
+    asked: list[int]
+    went_stuck: list[int]
+    # Delivered in the 14 days before those. None when there were none, because that may only mean the log is that new.
+    delivered_before: int | None
+    stages: list[tuple[str, str, int]]
+    stuck: int
+    inputs_in: int
+    inputs_owed: int
+    inputs_not_asked: int
+    inputs_without: int
+    took: list[tuple[str, int]]
+    took_median: str
+    took_jobs: int
+    needs: list[Need]
+    needs_more: int
+    # Some of this history was written by the demo seeding script, not by Foundry at work.
+    seeded: bool
+
+    @property
+    def delivered_total(self) -> int:
+        return sum(self.delivered)
+
+    @property
+    def delivered_change(self) -> str:
+        if self.delivered_before is None:
+            return ""
+        change = self.delivered_total - self.delivered_before
+        return f"{change:+d} on the 14 days before" if change else "Same as the 14 days before"
+
+    @property
+    def inputs_total(self) -> int:
+        return self.inputs_in + self.inputs_owed + self.inputs_not_asked + self.inputs_without
+
+
+@dataclass
+class JobBoard:
+    rows: list[JobRow]
+    # A chip for each stage: its key, its name, how many jobs are there, and whether it is the one showing.
+    chips: list[tuple[str, str, int, bool]]
+    total: int
+    open_jobs: int
+    stuck: int
+    yours: int
+    inputs_in: int
+    inputs_total: int
 
 
 @dataclass
@@ -383,6 +461,64 @@ def tone_of(job: Job) -> str:
     return TONES.get(job.state, NO_TONE)
 
 
+STEPS = (("brief", "Brief"), ("collecting", "Collecting"), ("made", "Being made"), ("review", "Review"), ("signoff", "Sign-off"), ("delivered", "Delivered"))
+STEP_NAMES = dict(STEPS)
+STUCK_STEP = "stuck"
+# A stuck job stopped while it was being made or checked. Those are the only ways into that state, so it sits at the first of them.
+STEP_OF = {
+    State.RECEIVED: "brief",
+    State.BRIEF_PENDING: "brief",
+    State.COLLECTING: "collecting",
+    State.MAKING: "made",
+    State.BLOCKED: "made",
+    State.REVIEWING: "review",
+    State.SIGNOFF_PENDING: "signoff",
+    State.APPROVED: "signoff",
+    State.DROPPED: "signoff",
+    State.DELIVERED: "delivered",
+}
+# A day's report is written and signed off, so it never goes through the stages between.
+NOT_FOR_REPORTS = ("collecting", "review")
+DAYS_SHOWN = 14
+TOOK_BANDS = (("Under 1 hour", 1), ("1 to 4 hours", 4), ("4 to 24 hours", 24), ("1 to 3 days", 72), ("Over 3 days", None))
+MOST_NEEDS = 5
+MOST_WHY = 110
+
+
+def steps_of(job: Job, has_items: bool) -> list[JobStep]:
+    current = STEP_OF.get(job.state)
+    keys = [key for key, _ in STEPS]
+    here = keys.index(current) if current else -1
+    steps = []
+    for place, key in enumerate(keys):
+        state = "now" if place == here else "past" if place < here else "next"
+        if key != current and ((job.kind != "work" and key in NOT_FOR_REPORTS) or (key == "collecting" and state == "past" and not has_items) or (job.state is State.DROPPED and key == "delivered")):
+            state = "skipped"
+        steps.append(JobStep(key, STEP_NAMES[key], state))
+    return steps
+
+
+def inputs_counted(items: list[Item]) -> list[Item]:
+    # The same items the words about them count: asked about, and not handed over to someone else.
+    return [item for item in items if item.asked_at is not None and not (item.state is ItemState.SKIPPED and item.handed_to)]
+
+
+def _took_words(hours: float) -> str:
+    if hours < 1:
+        return f"{max(round(hours * 60), 1)}min"
+    return f"{hours:.1f}h" if hours < 48 else f"{hours / 24:.1f}d"
+
+
+def _middle(values: list[float]) -> float:
+    ordered, half = sorted(values), len(values) // 2
+    return ordered[half] if len(values) % 2 else (ordered[half - 1] + ordered[half]) / 2
+
+
+def _short(text: str) -> str:
+    line = " ".join(text.split())
+    return line if len(line) <= MOST_WHY else line[:MOST_WHY].rsplit(" ", 1)[0] + "..."
+
+
 def squeeze(text: str) -> str:
     text = " ".join(text.split())
     return text if len(text) <= MOST_TEXT else f"{text[:MOST_TEXT].rstrip()}..."
@@ -473,6 +609,90 @@ class Reader:
             for bucket in user.businesses
         ]
 
+    # What the charts draw
+
+    def boards(self, user: User) -> dict[str, Board]:
+        if not user.businesses:
+            return {}
+        cards, jobs = self.cards(user.businesses), self.jobs(user.businesses)
+        return {bucket: self._board(bucket, person, [card for card in cards if card.bucket == bucket], [job for job in jobs if job.bucket == bucket]) for bucket, person in user.businesses.items()}
+
+    def _board(self, bucket: str, person: str, cards: list[Card], jobs: list[Job]) -> Board:
+        now = self.clock()
+        today = now.astimezone(self.zone).date()
+        dates = [today - timedelta(days=back) for back in range(DAYS_SHOWN - 1, -1, -1)]
+        since = datetime(dates[0].year, dates[0].month, dates[0].day, tzinfo=self.zone)
+        entries = self.log.between(bucket, since, now, kinds=("delivered", "card_opened", "card_answered", "item_asked"))
+
+        def per_day(found: list[datetime]) -> list[int]:
+            days = [moment.astimezone(self.zone).date() for moment in found]
+            return [days.count(date) for date in dates]
+
+        def of(kind: str) -> list[datetime]:
+            return [entry.at for entry in entries if entry.kind == kind]
+
+        before = [entry for entry in self.log.between(bucket, since - timedelta(days=DAYS_SHOWN), since, kinds=("delivered",)) if entry.at < since]
+        delivered = [entry for entry in entries if entry.kind == "delivered"]
+        counts = {key: sum(STEP_OF.get(job.state) == key and job.state not in (State.BLOCKED, State.DROPPED) for job in jobs) for key, _ in STEPS}
+        counts["delivered"] = len(delivered)
+        took = self._took(bucket, delivered)
+        bands, floor = [], 0.0
+        for name, ceiling in TOOK_BANDS:
+            bands.append((name, sum(hours >= floor and (ceiling is None or hours < ceiling) for hours in took)))
+            floor = ceiling or floor
+        items = [item for job in jobs if job.state not in (State.DELIVERED, State.DROPPED) for item in self.items(job.id) if not (item.state is ItemState.SKIPPED and item.handed_to)]
+        needs = self._needs(person, cards, jobs)
+        return Board(
+            [f"{date.day} {date:%b}" for date in dates],
+            per_day([entry.at for entry in delivered]), per_day(of("card_opened")), per_day(of("card_answered")), per_day(of("item_asked")),
+            per_day([card.created_at for card in cards if card.trigger is Trigger.STUCK]),
+            len(before) or None,
+            [(key, name, counts[key]) for key, name in STEPS],
+            sum(job.state is State.BLOCKED for job in jobs),
+            sum(item.state in IN for item in items),
+            sum(item.state is ItemState.OPEN and item.asked_at is not None for item in items),
+            sum(item.state is ItemState.OPEN and item.asked_at is None for item in items),
+            sum(item.state is ItemState.SKIPPED for item in items),
+            bands, _took_words(_middle(took)) if took else "", len(took),
+            needs[:MOST_NEEDS], max(len(needs) - MOST_NEEDS, 0),
+            any(entry.seeded for entry in entries),
+        )
+
+    def _took(self, bucket: str, delivered: list[Entry]) -> list[float]:
+        # From the request being logged to the work going out. A job with no request in the log can't say, so it isn't counted.
+        hours = []
+        for entry in delivered:
+            opening = next((other for other in self.log.for_job(bucket, entry.job_id) if other.kind == "job_opened"), None) if entry.job_id else None
+            if opening is not None:
+                hours.append(max((entry.at - opening.at).total_seconds() / 3600, 0))
+        return hours
+
+    def _needs(self, person: str, cards: list[Card], jobs: list[Job]) -> list[Need]:
+        stuck = [Need("stuck", title_of(job), _short(job.attention[0]) if job.attention else "Waiting for someone to restart it", f"/jobs/{job.id}") for job in jobs if job.state is State.BLOCKED]
+        waiting = [
+            Need("waiting", card.title, CARD_KINDS.get(card.trigger, "Card"), f"/jobs/{card.job_id}" if card.job_id else "/responses")
+            for card in cards
+            if card.person == person and card.state in (OPEN, QUEUED)
+        ]
+        noted = [Need("working", title_of(job), _short(job.attention[0]), f"/jobs/{job.id}") for job in jobs if job.attention and job.state not in (State.BLOCKED, State.DELIVERED, State.DROPPED)]
+        return stuck + waiting + noted
+
+    def job_board(self, user: User, stage: str = "") -> JobBoard:
+        rows = self.job_rows(user)
+        mine = {card.job_id for card in self.cards(user.businesses) if card.person == user.businesses.get(card.bucket) and card.state in (OPEN, QUEUED)} if user.businesses else set()
+        for row in rows:
+            row.yours = row.id in mine
+        # What stands out comes first. Everything else keeps the newest-first order.
+        rows.sort(key=lambda row: (row.tone != "stuck", not row.yours))
+        known = {key for key, _ in STEPS} | {STUCK_STEP}
+        shown = stage if stage in known else ""
+        counted = {key: sum(row.step == key and row.tone != "stuck" for row in rows) for key, _ in STEPS}
+        chips = [("", "All", len(rows), not shown)] + [(key, name, counted[key], shown == key) for key, name in STEPS] + [(STUCK_STEP, "Stuck", sum(row.tone == "stuck" for row in rows), shown == STUCK_STEP)]
+        open_jobs = sum(row.tone not in ("done", "idle") for row in rows)
+        kept = [row for row in rows if not shown or (row.tone == "stuck" if shown == STUCK_STEP else row.step == shown and row.tone != "stuck")]
+        active = [row for row in rows if row.tone != "done"]
+        return JobBoard(kept, chips, len(rows), open_jobs, sum(row.tone == "stuck" for row in rows), sum(row.yours for row in rows), sum(row.inputs_in for row in active), sum(row.inputs_total for row in active))
+
     def _waiting(self, job: Job, cards: list[Card], known: dict[str, str]) -> list[str]:
         lines = []
         for card in cards:
@@ -484,12 +704,16 @@ class Reader:
     def _row(self, job: Job, cards: list[Card], known: dict[str, str]) -> JobRow:
         stage, sprite = stage_of(job)
         items = self.items(job.id)
+        counted = inputs_counted(items)
         # Nobody can have gone quiet on a request Foundry hasn't made yet, so only the people it asked count.
         asked = [item for item in items if item.asked_at is not None]
         owes = status_line(asked) if asked else ""
         if len(items) > len(asked):
             owes = f"{owes}, {len(items) - len(asked)} not asked yet" if owes else NOBODY_ASKED
-        return JobRow(job.id, job.bucket, bucket_name(job.bucket), title_of(job), stage, sprite, owes, self._waiting(job, cards, known), tone_of(job))
+        return JobRow(
+            job.id, job.bucket, bucket_name(job.bucket), title_of(job), stage, sprite, owes, self._waiting(job, cards, known), tone_of(job),
+            "" if job.state is State.DROPPED else STEP_OF.get(job.state, ""), steps_of(job, bool(items)), sum(item.state in IN for item in counted), len(counted),
+        )
 
     def job_rows(self, user: User) -> list[JobRow]:
         if not user.businesses:
