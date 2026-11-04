@@ -140,6 +140,12 @@ def _label(action: dict) -> str:
     return NUMBERED.sub("", action.get("name", ""), count=1).strip()
 
 
+def _printable(line: str) -> str:
+    # A redirected stdout on Windows is cp1252, and one tick in a post must not stop a scene.
+    encoding = sys.stdout.encoding or "utf-8"
+    return line.encode(encoding, "backslashreplace").decode(encoding)
+
+
 class Stage:
     """The channels of one scene, and everyone signed in. It prints every post once, so a run leaves a timeline behind it."""
 
@@ -170,7 +176,7 @@ class Stage:
 
     def say(self, line: str) -> None:
         elapsed = int((datetime.now(UTC) - self.start).total_seconds())
-        print(f"{datetime.now():%H:%M:%S} +{elapsed // 60:02d}:{elapsed % 60:02d} {line}", flush=True)
+        print(_printable(f"{datetime.now():%H:%M:%S} +{elapsed // 60:02d}:{elapsed % 60:02d} {line}"), flush=True)
 
     def posts(self, room: str) -> list[dict]:
         found = self.admin.get(f"/channels/{self._channel(room)}/posts", params={"per_page": MOST_POSTS}).raise_for_status().json()
