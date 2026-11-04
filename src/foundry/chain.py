@@ -439,8 +439,8 @@ class _Trail:
         self._add(last, DELIVERED, f"{last.text or 'the report'} to {self._room_of(last.room_id)}", DIRECT)
 
     def _room_of(self, room_id: str) -> str:
-        # A room's id means nothing to a person, so a room goes by who spoke in it on this job.
-        people = dict.fromkeys(name_of(entry, self.known) for entry in self.job if entry.room_id == room_id and entry.kind in SAID)
+        # A room's id means nothing to a person, so a room goes by who asked or spoke in it on this job. The desk opens a day's report itself, and nobody calls it the desk's room.
+        people = dict.fromkeys(name_of(entry, self.known) for entry in self.job if entry.room_id == room_id and entry.kind in (*SAID, "job_opened") and entry.sender != DESK_NAME)
         return ROOM_OF.format(people=" and ".join(people)) if people else ROOM_SET_FOR_IT
 
 
