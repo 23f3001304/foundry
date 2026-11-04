@@ -6,7 +6,7 @@ import os
 
 import httpx
 from foundry.desk import Desk, Settings, run
-from foundry.gates import CardGate
+from foundry.gates import QueuedCardGate
 from foundry.intake import default_llm
 from foundry.jobs import JobStore
 from foundry.switch_client import SwitchClient
@@ -21,7 +21,7 @@ def main() -> None:
     client = SwitchClient(os.environ["SWITCH_URL"], os.environ["FOUNDRY_DESK_ID"], os.environ["FOUNDRY_DESK_KEY"])
     store = JobStore(os.environ.get("FOUNDRY_JOBS_DB", "foundry-jobs.db"))
     cleanup_llm = default_llm(os.environ.get("FOUNDRY_CLEANUP_MODEL", "claude-sonnet-5-5"))
-    desk = Desk(client, store, CardGate(client), default_llm(), settings, cleanup_llm=cleanup_llm)
+    desk = Desk(client, store, QueuedCardGate(client), default_llm(), settings, cleanup_llm=cleanup_llm)
     try:
         asyncio.run(run(desk, settings.all_rooms()))
     except httpx.HTTPStatusError as error:

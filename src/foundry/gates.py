@@ -8,7 +8,8 @@ from enum import Enum
 
 import httpx
 
-from foundry.jobs import Job
+from foundry.cards import ANSWERED, CARD_LIMIT, READ_ABOVE, CardQueue, Trigger, fit_detail  # noqa: F401
+from foundry.jobs import Job, State
 from foundry.switch_client import Outcome, SwitchClient
 
 logger = logging.getLogger(__name__)
@@ -27,8 +28,6 @@ REVISE_PATTERN = re.compile(r"\s*revise\s*:(.*)", re.IGNORECASE | re.DOTALL)
 HOW_TO_ANSWER = "Reply yes to approve, or revise: <what to change>."
 ASK_FOR_NOTES = "What should change? Reply with your notes."
 ONLY_APPROVER = "Only the approver can answer this, so it is still waiting."
-CARD_LIMIT = 700
-READ_ABOVE = "The full text is just above this card."
 
 
 def _clean(text: str) -> str:
@@ -136,11 +135,7 @@ class Gate:
 
 class CardGate(Gate):
     def _show(self, job: Job) -> None:
-        detail = job.approval["detail"]
-        if len(detail) > CARD_LIMIT:
-            # Switch takes the buttons off a card it cannot show in full.
-            self.client.post_message(job.approval_room, detail)
-            detail = READ_ABOVE
+        detail = fit_detail(self.client, job.approval_room, job.approval["detail"])
         self.client.open_card(job.approval_room, job.approval["request_id"], job.approval["title"], detail)
 
     def _close(self, job: Job) -> None:
@@ -154,6 +149,22 @@ class CardGate(Gate):
 
     def _refuse(self, job: Job) -> None:
         self.client.post_message(job.approval_room, ONLY_APPROVER)
+
+
+class QueuedCardGate(CardGate):
+    """Approvals wait their turn in the queue, under the same request id. The desk hands it the queue."""
+
+    cards: CardQueue
+
+    def _show(self, job: Job) -> None:
+        approval = job.approval
+        trigger = {State.BRIEF_PENDING: Trigger.BRIEF, State.BLOCKED: Trigger.STUCK}.get(job.state, Trigger.FINAL_WORK)
+        self.cards.submit(trigger, job.approver, job.bucket, job.approval_room, approval["title"], approval["detail"], job_id=job.id, request_id=approval["request_id"])
+
+    def _close(self, job: Job) -> None:
+        super()._close(job)
+        if self.cards.get(job.approval["request_id"]) is not None:
+            self.cards.finish(job.approval["request_id"], ANSWERED)
 
 
 class ReplyGate(Gate):

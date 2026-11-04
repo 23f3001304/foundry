@@ -15,11 +15,12 @@ from pathlib import Path
 import httpx
 
 from foundry.buffer import Burst, MessageBuffer
+from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, OPEN, SHOW_NEEDS, Card, CardQueue, Trigger
 from foundry.checks import file_text, needs_attention, people_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date, signoff_detail
 from foundry.brand import HEX_COLOUR, BrandError
 from foundry.delivery import DELIVERED, deliver, deliver_report
-from foundry.gates import Decision, Gate, parse_reply, resolve_approver
+from foundry.gates import Decision, Gate, QueuedCardGate, parse_reply, resolve_approver
 from foundry.intake import Kind, classify
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
 from foundry.log import Entry, Log
@@ -61,9 +62,17 @@ RETRY = "A person asked to try this job again. If your file is still right, repl
 NOTHING_MADE = "Nobody made a file for this job. Make what the brief asks for."
 ASK_WHAT_THEY_NEED = "Do you want something made from this? If so, tell me what you need."
 USE_THE_BUTTONS = "More than one approval is waiting on you here. Please use the buttons on the card you mean."
+ROUTINE_USE_THE_BUTTONS = "A typed answer can't count on this card. Please use its buttons."
+RAN_OUT_OPENED_AGAIN = "More than one approval here ran out, so I've opened them again, one at a time. Please answer each on its card."
+ROUTINE_ONLY_THE_PERSON = "Only the person this card is for can answer it, so it comes back at the next set time."
+ROUTINE_STILL_WAITING = "Still waiting on you: {count}. They come back at the next set time."
+ROUTINE_NOTHING_NEEDS_YOU = "Nothing here needs you. These come back at the next set time."
+CARD_RAN_OUT = "The card for {title} ran out, so this job is on hold."
 # Switch reads a typed card answer like "A1 2" itself, and the same text still arrives here as a message.
 CARD_ANSWER = re.compile(r"[Aa]\d+\s+\S+")
 CARD_AND_QUESTION = "A card and a question are both waiting on you here. Please press the button on the card, or answer the question in words."
+NOTES_AND_CARD = "A card and a request for notes are both waiting on you here. Please press the button on the card, or write your notes in words."
+WORD_BEFORE_CARD = "That answer came before this card opened, so it doesn't count for it. Please answer the card now."
 RESEND_VOICE = "I couldn't read that voice note. Please resend it in under 30 seconds, or type it."
 NO_REPORT = "I couldn't write that up just now. Send any reply to try again."
 ONLY_THE_SENDER = "Only the person who sent the note can answer this, so it is still waiting."
@@ -80,6 +89,8 @@ DECISION_EVENTS = {
     (State.BLOCKED, Decision.APPROVE): "unblock",
     (State.BLOCKED, Decision.REVISE): "unblock",
 }
+# These answers reach a job the way they always have. The rest have no job gate and go to _take_card_answer.
+JOB_CARDS = {Trigger.BRIEF, Trigger.FINAL_WORK, Trigger.STUCK, Trigger.QUESTION}
 
 
 def sender_kind(payload: dict) -> str:
@@ -106,6 +117,12 @@ def deliverable(path: str) -> bool:
 
 def file_paths(text: str) -> list[str]:
     return [path for line in text.splitlines() for path in ([line.strip()] if deliverable(line.strip()) else line.split())]
+
+
+def _state_after(card: Card, outcome: Outcome) -> str:
+    if outcome.state == "expired":
+        return EXPIRED
+    return ANSWERED if outcome.state == "answered" and outcome.answered_by == card.person else CLOSED
 
 
 @contextmanager
@@ -230,6 +247,10 @@ class Desk:
         self.translator = translator
         self.buffer = MessageBuffer(settings.buffer_path, settings.quiet_seconds)
         self.log = Log(settings.log_path)
+        # Asks for the desk's clock each time, so the queue never runs on a different one.
+        self.cards = CardQueue(settings.work_path, client, self.log, lambda: self.clock())
+        if isinstance(gate, QueuedCardGate):
+            gate.cards = self.cards
 
     def handle(self, event: dict | Outcome) -> None:
         if isinstance(event, Outcome):
@@ -248,6 +269,11 @@ class Desk:
         for outcome in self.client.outcomes():
             self._handle_outcome(outcome)
         self._stop_quiet_jobs(now)
+        self.cards.pump()
+        # Every bucket every time, even with nothing waiting, so a set time that passes empty isn't taken for one still to come.
+        for bucket in dict.fromkeys([*map(self.settings.bucket_for, self.settings.all_rooms()), *self.cards.known_buckets()]):
+            pack = self.settings.pack_for(self.settings.home_room(bucket))
+            self.cards.run_set_times(bucket, pack.set_times, self.settings.utc_offset_minutes, now)
 
     def _stop_quiet_jobs(self, now: datetime) -> None:
         limit = timedelta(minutes=self.settings.work_timeout_minutes)
@@ -565,40 +591,121 @@ class Desk:
             self.tick(at)
 
     def _answers_an_approval(self, event: dict, text: str) -> bool:
-        room_id, sender = event["room_id"], event["payload"]["sender"]
-        waiting = [job for job in self.store.all() if job.approval and job.approval_room == room_id]
-        theirs = [job for job in waiting if job.approver == sender]
-        for job in theirs:
-            if job.approval["awaiting_notes"]:
+        room_id, sender, at = event["room_id"], event["payload"]["sender"], self._sent_at(event["payload"])
+        asking = [job for job in self.store.all() if job.approval and job.approval_room == room_id]
+        waiting = self._a_word_can_answer(asking, at)
+        theirs = self._a_word_can_answer([job for job in asking if job.approver == sender], at)
+        is_decision = parse_reply(text, self.gate.extra_words) is not Decision.NONE
+        for job in asking:
+            if job.approver == sender and job.approval["awaiting_notes"]:
+                if is_decision and any(other is not job for other in theirs):
+                    # The person may mean the card in front of them, so this word can't count as the notes.
+                    self.client.post_message(room_id, NOTES_AND_CARD)
+                    return True
                 self._decide(job, event)
                 return True
-        if parse_reply(text, self.gate.extra_words) is Decision.NONE:
+        if not is_decision:
             return False
-        at = datetime.fromtimestamp(event["payload"]["timestamp"] / 1000, UTC)
         asked = self._open_question(room_id, sender, at)
         if asked and not theirs:
             return False
         if asked:
             self.client.post_message(room_id, CARD_AND_QUESTION)
+        elif self._routine_card_is_up(sender, room_id):
+            self.client.post_message(room_id, ROUTINE_USE_THE_BUTTONS)
         elif len(theirs) > 1:
-            self.client.post_message(room_id, USE_THE_BUTTONS)
+            self._refuse_word_for_several(theirs, room_id)
+        elif not theirs and any(job.approver == sender and self.cards.is_open(job.approval["request_id"]) for job in asking):
+            self.client.post_message(room_id, WORD_BEFORE_CARD)
         elif theirs or waiting:
             job = theirs[0] if theirs else waiting[-1]
             self._decide(job, event)
+            self.cards.pump()
         return True
 
+    def _a_word_can_answer(self, jobs: list[Job], at: datetime) -> list[Job]:
+        # The card in front of the person, or failing that one that ran out, which still takes a typed answer. A gate with no queue has no card to wait for.
+        cards = {job.id: self.cards.get(job.approval["request_id"]) for job in jobs}
+        shown = [job for job in jobs if cards[job.id] is None or cards[job.id].state == OPEN]
+        if not shown:
+            return [job for job in jobs if cards[job.id] is not None and cards[job.id].state == EXPIRED]
+        # Switch sends a typed yes twice, as an answer and as a message, and the next card can open between the two. A word sent before a card opened isn't its answer.
+        return [job for job in shown if cards[job.id] is None or cards[job.id].opened_at <= at]
+
+    def _routine_card_is_up(self, person: str, room_id: str) -> bool:
+        card = self.cards.open_for(person, self.settings.bucket_for(room_id))
+        return card is not None and card.is_routine and card.room_id == room_id
+
+    def _refuse_word_for_several(self, jobs: list[Job], room_id: str) -> None:
+        if self.cards.is_open(jobs[0].approval["request_id"]) or self.cards.get(jobs[0].approval["request_id"]) is None:
+            self.client.post_message(room_id, USE_THE_BUTTONS)
+            return
+        # A card that ran out has no buttons left, so these would stay stuck.
+        self.client.post_message(room_id, RAN_OUT_OPENED_AGAIN)
+        for job in jobs:
+            self.gate.ask(job, job.approval["title"], job.approval["detail"], job.approval_room)
+            self.store.save(job)
+
     def _handle_outcome(self, outcome: Outcome) -> None:
+        card = self.cards.get(outcome.request_id)
+        if card is None or card.trigger in JOB_CARDS:
+            # Finished first, so the log has the answer ahead of what it causes and a card it asks again for opens in this turn.
+            if card is not None:
+                self.cards.finish(card.request_id, _state_after(card, outcome))
+            self._take_job_answer(outcome)
+        elif card.state == OPEN:
+            # A press on a card already closed or returned to the queue changes nothing.
+            with _give_up_if_room_is_gone(f"card {card.request_id}"):
+                self._take_card_answer(card, outcome)
+        self.client.ack_outcome(outcome.session_id, outcome.request_id)
+        self.cards.pump()
+
+    def _take_job_answer(self, outcome: Outcome) -> None:
         try:
             job = self.store.get(outcome.request_id.rsplit("-", 1)[0])
         except KeyError:
             logger.warning("Answer for an unknown job: %s", outcome.request_id)
+            return
+        with _give_up_if_room_is_gone(f"job {job.id}"):
+            if job.question and outcome.request_id == job.question["request_id"]:
+                self._take_pressed_answer(job, outcome)
+            else:
+                self._apply(job, self.gate.check(job, outcome))
+
+    def _take_card_answer(self, card: Card, outcome: Outcome) -> None:
+        # One branch per trigger. Voice and late-fix cards, who-owes-what cards and the daily report add theirs here.
+        # Until then, a card with no branch is only marked answered, and nothing acts on the answer.
+        if outcome.state != "answered":
+            self._card_ran_out(card)
+        elif card.is_merged:
+            self._take_routine_answer(card, outcome)
         else:
-            with _give_up_if_room_is_gone(f"job {job.id}"):
-                if job.question and outcome.request_id == job.question["request_id"]:
-                    self._take_pressed_answer(job, outcome)
-                else:
-                    self._apply(job, self.gate.check(job, outcome))
-        self.client.ack_outcome(outcome.session_id, outcome.request_id)
+            self.cards.finish(card.request_id, ANSWERED)
+
+    def _card_ran_out(self, card: Card) -> None:
+        if card.is_routine:
+            self.cards.requeue_routine(card.request_id)
+            return
+        self.cards.finish(card.request_id, EXPIRED)
+        if card.trigger in HOLDS_JOB:
+            self.client.post_message(card.room_id, CARD_RAN_OUT.format(title=card.title))
+
+    def _take_routine_answer(self, card: Card, outcome: Outcome) -> None:
+        if outcome.answered_by != card.person:
+            self.cards.requeue_routine(card.request_id)
+            self.client.post_message(card.room_id, ROUTINE_ONLY_THE_PERSON)
+            return
+        choice = outcome.chosen_from(card.choices)
+        if choice is None:
+            logger.warning("Routine card %s had an answer naming no known choice: %s", card.request_id, outcome.answers)
+        approved = self.cards.answer_routine(card.request_id, choice)
+        left = len(card.data["items"]) - len(approved)
+        if choice == APPROVE_CLEAN and left:
+            self.client.post_message(card.room_id, ROUTINE_STILL_WAITING.format(count=left))
+        elif choice == SHOW_NEEDS and self.cards.open_for(card.person, card.bucket) is None:
+            self.client.post_message(card.room_id, ROUTINE_NOTHING_NEEDS_YOU)
+        for item in approved:
+            self._take_card_answer(item, replace(outcome, request_id=item.request_id, answer="approve"))
 
     def _take_pressed_answer(self, job: Job, outcome: Outcome) -> None:
         asked, choices = job.question["text"], job.question["choices"]
@@ -661,9 +768,13 @@ class Desk:
 
     def _open_question(self, room_id: str, sender: str, now: datetime) -> Job | None:
         for job in reversed(self.store.in_room(room_id)):
-            if job.kind == "report" and job.requester == sender and job.asked_at and now - datetime.fromisoformat(job.asked_at) <= QUESTION_WINDOW:
+            if job.kind == "report" and job.requester == sender and job.asked_at and now - datetime.fromisoformat(job.asked_at) <= QUESTION_WINDOW and self._question_was_put(job):
                 return job
         return None
+
+    def _question_was_put(self, job: Job) -> bool:
+        # A question that is only on a card still in the queue hasn't reached anyone, so nothing they say answers it yet.
+        return not job.question or bool(job.language) or self.cards.is_open(job.question["request_id"])
 
     def _open_job(self, burst: Burst) -> Job:
         job = self.store.create(burst.room_id, burst.sender, self._approver_for(burst), self.settings.bucket_for(burst.room_id))
@@ -691,7 +802,7 @@ class Desk:
     def _offer_choices(self, job: Job, question: str, choices: list[str]) -> None:
         request_id = f"{job.id}-{uuid.uuid4().hex[:8]}"
         try:
-            self.client.open_question_card(job.room_id, request_id, question, choices)
+            self.cards.submit(Trigger.QUESTION, job.requester, job.bucket, job.room_id, question, "", choices, job_id=job.id, request_id=request_id)
         except httpx.HTTPError as error:
             logger.warning("Could not open a question card for job %s: %s", job.id, error)
             if not job.language:
@@ -707,6 +818,7 @@ class Desk:
             self.client.close_card(job.question["request_id"])
         except httpx.HTTPError as error:
             logger.warning("Could not close the question card for job %s: %s", job.id, error)
+        self.cards.finish(job.question["request_id"], ANSWERED)
         job.question = None
         self.client.post_message(job.room_id, HEARD_THE_ANSWER)
 
