@@ -1,5 +1,5 @@
 /*
-  Foundry's dashboard. A neutral page, near-black for the main action, one blue for links and focus, and four plain status marks.
+  Foundry's dashboard. A neutral page, near-black for the main action, one blue for links and focus, and five plain status marks.
   Colours, type and spacing are tokens on :root. Every rule below names them, so a new page only needs these classes:
 
   Page       .bar  .page-head  .crumb  .page-meta  .section-head  .section-foot  .split  .panel  .confirm  .empty
@@ -113,7 +113,7 @@ h2 { margin: 0; font-size: var(--text-h2); line-height: 1.35; font-weight: 600; 
 h3 { margin: 0; font-size: var(--text); line-height: 1.4; font-weight: 600; }
 p { margin: 0.5rem 0; max-width: var(--measure); }
 /* A long link or a name with no spaces in it wraps, so it can't push a phone's screen wider. */
-h1, h2, h3, p, li, dt, dd, pre, label, table.list td, table.list th { overflow-wrap: anywhere; }
+h1, h2, h3, p, li, dt, dd, pre, label, .small, table.list td, table.list th { overflow-wrap: anywhere; }
 
 .lead { color: var(--ink-soft); text-wrap: pretty; }
 .small { font-size: var(--text-small); color: var(--ink-soft); }
@@ -130,7 +130,8 @@ p.status[role="status"] { padding: 0.625rem 0.875rem; color: var(--ink); backgro
 .page-head + p[role]:has(+ form.panel) { max-width: 34rem; }
 main > p[role] + * { margin-top: 1.25rem; }
 .split-main > p[role] { max-width: none; margin: 0 0 0.75rem; }
-.row-link { color: var(--ink); font-weight: 500; text-decoration: none; }
+.row-link { color: var(--ink); font-weight: 500; text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: var(--rule-strong); text-underline-offset: 0.15em; }
+.row-link:hover { text-decoration-color: currentColor; }
 
 pre.text {
   margin: 0;
@@ -235,7 +236,10 @@ main > .section-foot { margin-top: 2rem; }
 section > .note { margin: 0; padding: 0.625rem 0; max-width: none; border-block: 1px solid var(--rule); }
 section > .rows + .note { margin-top: 0.75rem; border: 0; padding: 0; }
 
-/* What state something is in: a small mark and plain words. The shape says it too, so it doesn't rest on colour. */
+/*
+  What state something is in: a small mark and plain words. Each state has its own shape, so the mark doesn't rest on colour.
+  They are drawn with borders alone, because forced-colours mode drops backgrounds and keeps borders.
+*/
 
 .stage { position: relative; display: inline-block; padding-left: 1rem; color: var(--ink); }
 .stage::before {
@@ -243,17 +247,13 @@ section > .rows + .note { margin-top: 0.75rem; border: 0; padding: 0; }
   position: absolute;
   left: 0;
   top: 0.4375em;
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--ink-faint);
 }
-.stage.done::before { background: var(--ok); }
-.stage.working::before { background: var(--accent); }
-.stage.waiting::before { background: none; border: 2px solid var(--warn); }
-.stage.idle::before { background: none; border: 1.5px solid var(--ink-faint); }
+.stage.done::before { border: 0.25rem solid var(--ok); border-radius: 50%; }
+.stage.working::before { left: 1px; top: 0.5em; border: 0.1875rem solid var(--accent); transform: rotate(45deg); }
+.stage.waiting::before { width: 0.5rem; height: 0.5rem; border: 2px solid var(--warn); border-radius: 50%; }
+.stage.idle::before { top: 0.65em; width: 0.5rem; border-top: 2px solid var(--ink-faint); }
 .stage.stuck { color: var(--bad); font-weight: 500; }
-.stage.stuck::before { background: var(--bad); border-radius: 1px; }
+.stage.stuck::before { border: 0.25rem solid var(--bad); border-radius: 1px; }
 
 /* Figures */
 
@@ -350,8 +350,7 @@ ol.chain > li::before {
   top: 0;
   bottom: 0;
   left: calc(8.25rem + 0.875rem - 0.5px);
-  width: 1px;
-  background: var(--rule-strong);
+  border-left: 1px solid var(--rule-strong);
 }
 ol.chain > li:first-child::before { top: 1.25rem; }
 ol.chain > li:last-child::before { bottom: auto; height: 1.25rem; }
@@ -361,13 +360,11 @@ ol.chain > li::after {
   position: absolute;
   top: 1.0625rem;
   left: calc(8.25rem + 0.875rem - 0.25rem);
-  width: 0.5rem;
-  height: 0.5rem;
-  background: var(--ink-soft);
+  border: 0.25rem solid var(--ink-soft);
   border-radius: 50%;
   outline: 3px solid var(--paper);
 }
-ol.chain > li.unsure::after { background: var(--paper); border: 2px solid var(--warn); }
+ol.chain > li.unsure::after { width: 0.5rem; height: 0.5rem; background: var(--paper); border: 2px solid var(--warn); }
 .chain-when { grid-column: 1; color: var(--ink-soft); }
 .chain-who { grid-column: 3; min-width: 0; margin: 0; }
 .chain-source { grid-column: 4; min-width: 0; }
@@ -506,14 +503,14 @@ form.panel { gap: 0.875rem; margin: 0; }
 
   table.list.log-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 0.75rem; }
   table.list.log-table td, table.list.log-table td:last-child { width: auto; padding: 0; }
-  .log-table td::before { display: none; }
+  table.list.log-table td[data-label="Who"], table.list.log-table td[data-label="What"] { padding-left: 3rem; }
+  table.list.log-table td[data-label]::before { width: 2.5rem; }
+  table.list.log-table td[data-label="When"]::before, table.list.log-table td[data-label="Flag"]::before { content: none; }
   .log-table td:nth-child(1) { grid-column: 1; font-size: var(--text-small); }
   .log-table td:nth-child(2) { grid-column: 1; font-weight: 500; }
   .log-table td:nth-child(3) { grid-column: 1 / -1; margin-top: 0.125rem; }
   .log-table td:nth-child(4) { grid-column: 2; grid-row: 1 / span 2; align-self: start; }
 
-  table.list.jobs-table td { padding: 0.125rem 0; }
-  .jobs-table td::before { display: none; }
   .jobs-table td:last-child { font-size: var(--text-small); color: var(--ink-soft); }
 
   .response, .flagged-row, .file-row, .recent ul.rows > li { grid-template-columns: minmax(0, 1fr); }
@@ -531,6 +528,12 @@ form.panel { gap: 0.875rem; margin: 0; }
   .chain-when, .chain-who, .chain-source { grid-column: 2; }
   .chain-when { font-size: var(--text-small); }
   .chain-source { margin-top: 0.125rem; padding-left: 0; color: var(--ink-soft); }
+}
+
+/* Forced colours repaints an outline in the text colour, so the gap around a chain's node asks for the system's own background. */
+
+@media (forced-colors: active) {
+  ol.chain > li::after { outline-color: Canvas; }
 }
 
 @media (prefers-reduced-motion: reduce) {

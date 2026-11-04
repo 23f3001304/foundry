@@ -27,7 +27,7 @@
     </div>
     {% endif %}
     <div class="buttons">
-      {% for choice, label in job.answer_offer.buttons %}<button class="primary" type="submit" name="choice" value="{{ choice }}">{{ label }}</button>{% endfor %}
+      {% for choice, label in job.answer_offer.buttons %}<button{% if job.answer_offer.buttons|length == 1 %} class="primary"{% endif %} type="submit" name="choice" value="{{ choice }}">{{ label }}</button>{% endfor %}
       {% if job.answer_offer.changes %}<button type="submit" name="choice" value="revise">Ask for changes</button>{% endif %}
     </div>
   </form>

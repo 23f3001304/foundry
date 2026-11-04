@@ -87,8 +87,20 @@ EVENTS = {
     "revision_notes": "asked for changes",
 }
 MOST_TEXT = 240
-TONES = {State.BLOCKED: "stuck", State.DELIVERED: "done", State.DROPPED: "done", State.BRIEF_PENDING: "waiting", State.COLLECTING: "waiting", State.SIGNOFF_PENDING: "waiting"}
-WORKING = "working"
+TONES = {
+    State.RECEIVED: "working",
+    State.MAKING: "working",
+    State.REVIEWING: "working",
+    State.APPROVED: "working",
+    State.BRIEF_PENDING: "waiting",
+    State.COLLECTING: "waiting",
+    State.SIGNOFF_PENDING: "waiting",
+    State.DELIVERED: "done",
+    State.DROPPED: "done",
+    State.BLOCKED: "stuck",
+}
+# A state nobody has named above gets the neutral mark, so it can't read as being worked on.
+NO_TONE = "idle"
 # A page that grows with every job would soon be too long to read, so it shows the newest and says what it left out.
 MOST_PAST_CARDS = 200
 MOST_TIMELINES = 20
@@ -368,7 +380,7 @@ def stage_of(job: Job) -> tuple[str, str]:
 
 
 def tone_of(job: Job) -> str:
-    return TONES.get(job.state, WORKING)
+    return TONES.get(job.state, NO_TONE)
 
 
 def squeeze(text: str) -> str:
@@ -621,7 +633,7 @@ class Reader:
                     else:
                         status = "Not delivered" if job.state is State.DELIVERED else "Not signed off yet"
                     if newest and not here:
-                        status += f" {FILE_GONE}"
+                        status = f"{status.rstrip('.')}. {FILE_GONE}"
                     versions.append(Version(number, entry.id, name_of(entry, known[job.bucket]), self.when(entry.at), status, newest and here and Path(path).suffix.lower() in MEDIA))
                 files.append(WorkFile(Path(path).name, Path(path).suffix.lower() in PICTURES, versions[::-1]))
             found.append(WorkJob(job.id, bucket_name(job.bucket), title_of(job), stage, files, tone_of(job)))
@@ -667,7 +679,10 @@ class Reader:
             target = ("file", entry.id)
         elif can_flag and entry.kind in SAID:
             target = ("entry", entry.id)
-        return Moment(self.when(entry.at), name_of(entry, known), EVENTS.get(entry.kind, entry.kind.replace("_", " ")), squeeze(shown_words(entry, self.settings.inputs_dir)), target)
+        words = squeeze(shown_words(entry, self.settings.inputs_dir))
+        # A flag's entry opens with the word this line already gives it.
+        words = words.removeprefix("Flagged ") if entry.kind == "flag" else words
+        return Moment(self.when(entry.at), name_of(entry, known), EVENTS.get(entry.kind, entry.kind.replace("_", " ")), words, target)
 
     def flagged(self, user: User) -> list[Flagged]:
         known = self._names(user)
