@@ -27,6 +27,8 @@ MOST_TABLE_COLUMNS = 8
 # A table's words are sized to the largest of these that lets the whole table fit, and a cell keeps this much room around its words.
 TABLE_SIZES = (20, 9)
 CELL_PAD = 6
+# A little more than the padding, because PowerPoint sets a word slightly wider than the measure here does.
+WORD_SLACK = 4
 RULE_WIDTH = 9525
 PICTURE_KINDS = (".png", ".jpg", ".jpeg")
 ROWS_SHAPE = 'A table\'s "rows" is a list of rows, and each row is a list of cells. The first row holds the headings.'
@@ -212,11 +214,27 @@ def _row_height(brand: Brand, row: list[str], widths: list[float], size: int, he
     return lines * size * LINE_SPACING + 2 * CELL_PAD
 
 
+def _column_widths(brand: Brand, cells: list[list[str]], width: int, size: int) -> list[float] | None:
+    # Every column is at least as wide as its longest word, so no word is ever cut in two. A cell below the headings gets its whole line if the slide has room,
+    # and a heading may wrap. None when the words alone are wider than the slide at this size.
+    fonts = [load_font(brand.font_file("heading"), size)] + [load_font(brand.font_file("body"), size)] * (len(cells) - 1)
+    pad = 2 * CELL_PAD + WORD_SLACK
+    narrowest = [max((font.getlength(word) for row, font in zip(cells, fonts) for word in row[at].split()), default=0) + pad for at in range(len(cells[0]))]
+    if sum(narrowest) > width:
+        return None
+    widest = [max(least, max((fonts[1].getlength(row[at]) for row in cells[1:]), default=0) + pad) for at, least in enumerate(narrowest)]
+    if sum(widest) <= width:
+        return [wide + (width - sum(widest)) * wide / sum(widest) for wide in widest]
+    wanted = [wide - least for wide, least in zip(widest, narrowest)]
+    return [least + (width - sum(narrowest)) * extra / sum(wanted) for least, extra in zip(narrowest, wanted)]
+
+
 def _fit_table(brand: Brand, cells: list[list[str]], width: int, height: int) -> tuple[int, list[float], list[float]]:
-    # A column gets room in step with its longest words, and the words are as large as they can be with the whole table on the slide.
-    weights = [max(4, min(40, max(len(row[at]) for row in cells))) for at in range(len(cells[0]))]
-    widths = [width * weight / sum(weights) for weight in weights]
+    # The words are as large as they can be with the whole table on the slide, and each column is wide enough for its words.
     for size in range(TABLE_SIZES[0], TABLE_SIZES[1] - 1, -1):
+        widths = _column_widths(brand, cells, width, size)
+        if widths is None:
+            continue
         heights = [_row_height(brand, row, widths, size, header=number == 0) for number, row in enumerate(cells)]
         if sum(heights) <= height:
             return size, widths, heights
