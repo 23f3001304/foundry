@@ -44,7 +44,7 @@ params:
   approver:
     type: string
     label: Approver
-    description: Leave empty and whoever asks approves their own job.
+    description: Shown to the agents. The desk enforces the approver in the brand's pack.md or FOUNDRY_APPROVER. Leave empty and whoever asks approves their own job.
     required: false
   bridge:
     type: bridge

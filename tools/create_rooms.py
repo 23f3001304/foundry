@@ -9,6 +9,7 @@ from pathlib import Path
 
 import httpx
 import yaml
+from foundry.pack import load_pack
 from register_desk import ENV_FILE, save
 from setup_makers import main as setup_makers
 
@@ -23,6 +24,10 @@ def reviewer_inputs() -> dict[str, str]:
     return inputs | {"reviewer_model": model} if model else inputs
 
 
+def template_approver(brand_dir: Path) -> str:
+    return load_pack(brand_dir).approver or os.environ.get("FOUNDRY_APPROVER", "")
+
+
 def main(mode: str, name: str, slug: str) -> None:
     url = os.environ.get("SWITCH_URL", "http://127.0.0.1:8000")
     brand_dir = REPO / "brands" / slug
@@ -30,6 +35,9 @@ def main(mode: str, name: str, slug: str) -> None:
     tokens = yaml.safe_load(kit.split("---")[1])
     with httpx.Client(base_url=f"{url}/gateway", timeout=120) as gateway:
         gateway.post("/auth/login", json={"email": os.environ["SWITCH_EMAIL"], "password": os.environ["SWITCH_PASSWORD"]}).raise_for_status()
+        online = next((machine for machine in gateway.get("/management/controllers").json() if machine["state"] == "online"), None)
+        if online is None:
+            raise SystemExit("No agent controller is online, so no rooms were made. Start it as in step 2 of the README, then run this again.")
         existing = {agent["name"] for agent in gateway.get("/management/agents").json()}
         answer = gateway.post("/rooms/from-template-document", json={
             "template": (REPO / "templates" / "foundry.template.yaml").read_text(encoding="utf-8"),
@@ -42,7 +50,7 @@ def main(mode: str, name: str, slug: str) -> None:
                 "tone": tokens["voice"],
                 "brand_kit": kit,
                 "brand_dir": str(brand_dir),
-                "approver": os.environ.get("FOUNDRY_APPROVER", ""),
+                "approver": template_approver(brand_dir),
                 "sticker_mode": os.environ.get("FOUNDRY_STICKER_MODE", "subtle"),
                 **reviewer_inputs(),
             },
@@ -50,8 +58,7 @@ def main(mode: str, name: str, slug: str) -> None:
         })
         if answer.is_error:
             raise SystemExit(f"Switch refused the template: {answer.text}")
-        machines = gateway.get("/management/controllers").json()
-    setup_makers(next(machine["status"]["machine"]["workspaces_dir"] for machine in machines if machine["state"] == "online"))
+    setup_makers(online["status"]["machine"]["workspaces_dir"])
     rooms = {room["room_name"]: room["room_id"] for room in answer.json()["room"]["rooms"]}
     inside = (rooms[f"{name}-studio"], rooms[f"{name}-review"]) if mode == "agency" else (rooms[f"{name}-projects"],) * 2
     entry = f"{rooms[name]}:{inside[0]}:{inside[1]}"

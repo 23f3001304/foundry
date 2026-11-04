@@ -13,6 +13,7 @@ class Pack:
     report_format: str = ""
     report_room: str = ""
     sources: dict[str, str] = field(default_factory=dict)
+    approver: str = ""
 
 
 def load_pack(brand_dir: Path | str) -> Pack:
@@ -27,4 +28,5 @@ def load_pack(brand_dir: Path | str) -> Pack:
         report_format=data.get("report_format", "").strip(),
         report_room=data.get("report_room", "").strip(),
         sources=sources,
+        approver=str(data.get("approver") or "").strip(),
     )

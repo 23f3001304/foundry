@@ -49,6 +49,7 @@ RETRY = "A person asked to try this job again. If your file is still right, repl
 NOTHING_MADE = "Nobody made a file for this job. Make what the brief asks for."
 ASK_WHAT_THEY_NEED = "Do you want something made from this? If so, tell me what you need."
 USE_THE_BUTTONS = "More than one approval is waiting on you here. Please use the buttons on the card you mean."
+CARD_AND_QUESTION = "A card and a question are both waiting on you here. Please press the button on the card, or answer the question in words."
 RESEND_VOICE = "I couldn't read that voice note. Please resend it in under 30 seconds, or type it."
 NO_REPORT = "I couldn't write that up just now. Send any reply to try again."
 # A question left this long is dropped, so tomorrow's note isn't read as its answer.
@@ -459,9 +460,12 @@ class Desk:
         if parse_reply(text, self.gate.extra_words) is Decision.NONE:
             return False
         at = datetime.fromtimestamp(event["payload"]["timestamp"] / 1000, UTC)
-        if not theirs and self._open_question(room_id, sender, at):
+        asked = self._open_question(room_id, sender, at)
+        if asked and not theirs:
             return False
-        if len(theirs) > 1:
+        if asked:
+            self.client.post_message(room_id, CARD_AND_QUESTION)
+        elif len(theirs) > 1:
             self.client.post_message(room_id, USE_THE_BUTTONS)
         elif theirs or waiting:
             job = theirs[0] if theirs else waiting[-1]
@@ -508,7 +512,7 @@ class Desk:
         if kind is Kind.REPORT:
             self._start_report(burst)
         elif kind is Kind.REQUEST:
-            job = self.store.create(burst.room_id, burst.sender, resolve_approver(burst.sender, self.settings.approver))
+            job = self.store.create(burst.room_id, burst.sender, self._approver_for(burst))
             job.brief, job.language = burst.text, burst.language
             self.store.save(job)
             self._sticker(burst.room_id, "brief_received")
@@ -517,6 +521,9 @@ class Desk:
         elif kind is Kind.UNSURE:
             self.client.post_message(burst.room_id, ASK_WHAT_THEY_NEED)
 
+    def _approver_for(self, burst: Burst) -> str:
+        return resolve_approver(burst.sender, self.settings.pack_for(burst.room_id).approver or self.settings.approver)
+
     def _open_question(self, room_id: str, sender: str, now: datetime) -> Job | None:
         for job in reversed(self.store.in_room(room_id)):
             if job.kind == "report" and job.requester == sender and job.asked_at and now - datetime.fromisoformat(job.asked_at) <= QUESTION_WINDOW:
@@ -524,7 +531,7 @@ class Desk:
         return None
 
     def _start_report(self, burst: Burst) -> None:
-        job = self.store.create(burst.room_id, burst.sender, resolve_approver(burst.sender, self.settings.approver))
+        job = self.store.create(burst.room_id, burst.sender, self._approver_for(burst))
         local = timezone(timedelta(minutes=self.settings.utc_offset_minutes))
         job.kind, job.brief, job.sent_at, job.language = "report", burst.text, burst.first_at.astimezone(local).isoformat(), burst.language
         self.store.save(job)
