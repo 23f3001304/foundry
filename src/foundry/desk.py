@@ -13,12 +13,13 @@ import httpx
 
 from foundry.buffer import Burst, MessageBuffer
 from foundry.cleanup import CleanupFailed, ReportStore, clean_note, signoff_detail
+from foundry.brand import BrandError
 from foundry.delivery import deliver, deliver_report
 from foundry.gates import Decision, Gate, parse_reply, resolve_approver
 from foundry.intake import Kind, classify
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
 from foundry.pack import Pack, load_pack
-from foundry.stickers import sticker_for
+from foundry.stickers import branded_sticker, sticker_for
 from foundry.switch_client import Outcome, SwitchClient
 from foundry.voice import Transcript, VoiceError, transcribe
 
@@ -104,6 +105,7 @@ class Settings:
     packs: dict[str, Pack] = field(default_factory=dict)
     reports_path: Path | str = "foundry-reports.db"
     utc_offset_minutes: int = 330
+    brands: dict[str, str] = field(default_factory=dict)
 
     def pack_for(self, room_id: str) -> Pack:
         return self.packs.get(room_id, Pack())
@@ -119,14 +121,16 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        workrooms = _rooms_from(os.environ.get("FOUNDRY_ROOMS", ""))
         return cls(
             buffer_path=os.environ.get("FOUNDRY_BUFFER_DB", "foundry-buffer.db"),
             quiet_seconds=int(os.environ.get("FOUNDRY_QUIET_SECONDS", "60")),
             approver=os.environ.get("FOUNDRY_APPROVER") or None,
-            workrooms=_rooms_from(os.environ.get("FOUNDRY_ROOMS", "")),
+            workrooms=workrooms,
             sticker_mode=os.environ.get("FOUNDRY_STICKER_MODE", "subtle"),
             work_timeout_minutes=int(os.environ.get("FOUNDRY_WORK_TIMEOUT_MINUTES", "30")),
             packs=_packs_from(os.environ.get("FOUNDRY_PACKS", "")),
+            brands=_brands_from(os.environ.get("FOUNDRY_PACKS", ""), workrooms),
             reports_path=os.environ.get("FOUNDRY_REPORTS_DB", "foundry-reports.db"),
             utc_offset_minutes=int(os.environ.get("FOUNDRY_UTC_OFFSET_MINUTES", "330")),
         )
@@ -138,10 +142,19 @@ def _rooms_from(text: str) -> dict[str, Workrooms]:
     return {outside: Workrooms(studio, review) for outside, studio, review in parts}
 
 
-def _packs_from(text: str) -> dict[str, Pack]:
+def _named_brands(text: str) -> dict[str, str]:
     # room:brand-slug, comma-separated.
-    parts = [entry.strip().split(":") for entry in text.split(",") if entry.strip()]
-    return {room: load_pack(BRANDS / slug) for room, slug in parts}
+    return dict(entry.strip().split(":") for entry in text.split(",") if entry.strip())
+
+
+def _packs_from(text: str) -> dict[str, Pack]:
+    return {room: load_pack(BRANDS / slug) for room, slug in _named_brands(text).items()}
+
+
+def _brands_from(text: str, workrooms: dict[str, Workrooms]) -> dict[str, str]:
+    brands = _named_brands(text)
+    inside = {room: brands[outside] for outside, rooms in workrooms.items() if outside in brands for room in (rooms.studio, rooms.review)}
+    return brands | inside
 
 
 class Desk:
@@ -351,8 +364,17 @@ class Desk:
         other = {"studio": rooms.studio, "review": rooms.review}.get(named, named)
         return list(dict.fromkeys(room for room in (job.room_id, other) if room))
 
+    def _sticker_path(self, room_id: str, event: str) -> Path | None:
+        brand = self.settings.brands.get(room_id)
+        try:
+            if brand:
+                return branded_sticker(event, self.settings.sticker_mode, BRANDS / brand)
+        except (OSError, BrandError) as error:
+            logger.warning("Could not brand the %s sticker: %s", event, error)
+        return sticker_for(event, self.settings.sticker_mode)
+
     def _sticker(self, room_id: str, event: str) -> None:
-        path = sticker_for(event, self.settings.sticker_mode)
+        path = self._sticker_path(room_id, event)
         if path is None:
             return
         try:

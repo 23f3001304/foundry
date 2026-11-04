@@ -27,6 +27,7 @@ class Brand:
     logo_path: Path
     guidance: str = ""
     style: str = "band"
+    business_type: str = ""
 
     def font_file(self, role: str) -> Path | None:
         path = self.logo_path.parent / "fonts" / f"{role}.ttf"
@@ -59,7 +60,7 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
     logo_path = Path(assets_dir) / "logo.png"
     if not logo_path.exists():
         raise BrandError(f"The brand kit has no logo at {logo_path}")
-    return Brand(data["name"], data["colors"], data["fonts"], data["voice"], logo_path, guidance.strip(), data.get("style", "band"))
+    return Brand(data["name"], data["colors"], data["fonts"], data["voice"], logo_path, guidance.strip(), data.get("style", "band"), data.get("business_type", ""))
 
 
 def load_brand_dir(brand_dir: Path | str) -> Brand:
