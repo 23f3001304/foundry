@@ -1075,9 +1075,9 @@ class Coordinator:
         return True
 
     def _about_someone_else(self, heard: _Heard, pool: list[Item]) -> bool:
-        # "Team Lead C is blocked" says nothing about what the sender owes.
-        person, sender = heard.reading.person, heard.burst.sender
-        return bool(person) and _key(person) not in (_key(sender), _key(self._name_of(sender, heard.bucket))) and not any(_owned_by(item, person) for item in pool)
+        # "Team Lead C is blocked" says nothing about what the sender owes. It takes another person on these jobs' lists for that: "Team B" or "my team" is still the sender talking about themselves.
+        person = (heard.reading.person or "").lstrip("@")
+        return any(item.owner != heard.burst.sender and _owned_by(item, person) for job_id in {one.job_id for one in pool} for item in self.items.for_job(job_id))
 
     def _give_reason(self, item: Item, reason: str, at: datetime, room_id: str, sender: str) -> None:
         # A reason stops the one reminder and shows in the status. The item stays open.

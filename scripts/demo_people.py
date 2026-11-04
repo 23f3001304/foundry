@@ -13,7 +13,6 @@ import sys
 import time
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import httpx
 import yaml
@@ -21,10 +20,9 @@ from foundry.voice import speak
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 
-from register_desk import save
+from register_desk import local_url, save
 
 SCENES = Path(__file__).resolve().parent / "scenes"
-THIS_MACHINE = ("localhost", "127.0.0.1", "::1")
 ON_THE_BUSINESS_CLOCK = re.compile(r"\{in:(\d+)\}")
 LOG_TOKEN = re.compile(r"(Log token for this job: )[^\s.]+")
 NUMBERED = re.compile(r"\s*\d+[.)]\s*")
@@ -68,21 +66,12 @@ def masked(text: str) -> str:
     return LOG_TOKEN.sub(r"\1<hidden>", text)
 
 
-def _local(name: str, default: str) -> str:
-    # These scripts sign in as the admin and reset the password of anyone with a scripted person's name, so they only ever talk to a stack on this machine.
-    url = os.environ.get(name, default)
-    host = urlsplit(url).hostname or ""
-    if host not in THIS_MACHINE and not host.endswith(".localhost"):
-        raise SystemExit(f"{name} points at {host or url}, which is not this machine. The demo scripts only run against a local stack, so nothing was done.")
-    return url
-
-
 def switch_url() -> str:
-    return _local("SWITCH_URL", "http://127.0.0.1:8000")
+    return local_url("SWITCH_URL", "http://127.0.0.1:8000")
 
 
 def _chat_url() -> str:
-    return f"{_local('MATTERMOST_URL', 'http://127.0.0.1:8065')}/api/v4"
+    return f"{local_url('MATTERMOST_URL', 'http://127.0.0.1:8065')}/api/v4"
 
 
 def local_only() -> None:
@@ -91,9 +80,10 @@ def local_only() -> None:
 
 
 def _signed_in(login: str, password: str) -> httpx.Client:
-    answer = httpx.post(f"{_chat_url()}/users/login", json={"login_id": login, "password": password}, timeout=30)
+    with httpx.Client(timeout=30, trust_env=False) as unsigned:
+        answer = unsigned.post(f"{_chat_url()}/users/login", json={"login_id": login, "password": password})
     answer.raise_for_status()
-    return httpx.Client(base_url=_chat_url(), headers={"Authorization": f"Bearer {answer.headers['Token']}"}, timeout=60)
+    return httpx.Client(base_url=_chat_url(), headers={"Authorization": f"Bearer {answer.headers['Token']}"}, timeout=60, trust_env=False)
 
 
 def _admin() -> httpx.Client:
@@ -113,7 +103,7 @@ def _channel_id(admin: httpx.Client, team: dict, room: str) -> str:
 
 def find_bridge() -> str | None:
     # Whatever the stack's Mattermost bridge is called, every sender id on it holds this.
-    with httpx.Client(base_url=f"{switch_url()}/gateway", timeout=60) as gateway:
+    with httpx.Client(base_url=f"{switch_url()}/gateway", timeout=60, trust_env=False) as gateway:
         gateway.post("/auth/login", json={"email": os.environ["SWITCH_EMAIL"], "password": os.environ["SWITCH_PASSWORD"]}).raise_for_status()
         bridges = gateway.get("/collaborations").raise_for_status().json()
     return next((bridge["bridge_id"] for bridge in bridges if bridge["bridge_type"] == "mattermost"), None)

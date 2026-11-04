@@ -53,7 +53,7 @@ def main() -> None:
     bridge = find_bridge() if any(needs_bridge(brand) for _, _, brand in SEED) else None
     if bridge:
         save({"FOUNDRY_MATTERMOST_BRIDGE": bridge})
-    with httpx.Client(base_url=f"{url}/gateway", timeout=60) as gateway:
+    with httpx.Client(base_url=f"{url}/gateway", timeout=60, trust_env=False) as gateway:
         gateway.post("/auth/login", json={"email": os.environ["SWITCH_EMAIL"], "password": os.environ["SWITCH_PASSWORD"]}).raise_for_status()
         rooms = gateway.get("/rooms").json()
     for mode, name, brand in still_to_make({room["name"] for room in rooms}):

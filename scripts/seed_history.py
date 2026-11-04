@@ -40,7 +40,7 @@ def _already_seeded(log: Log, bucket: str, history: list[dict], now: datetime) -
 
 
 def _rooms() -> dict[str, str]:
-    with httpx.Client(base_url=f"{switch_url()}/gateway", timeout=60) as gateway:
+    with httpx.Client(base_url=f"{switch_url()}/gateway", timeout=60, trust_env=False) as gateway:
         gateway.post("/auth/login", json={"email": os.environ["SWITCH_EMAIL"], "password": os.environ["SWITCH_PASSWORD"]}).raise_for_status()
         return {room["name"]: room["id"] for room in gateway.get("/rooms").raise_for_status().json()}
 

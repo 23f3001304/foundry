@@ -60,13 +60,13 @@ def _squash(text: str) -> str:
 
 
 def carries(text: str, value: str) -> bool:
-    # A number is there when every number in the value is in the text, however each is written. Words are there when they appear as written.
+    # A number is there when every number in the value is in the text, however each is written. Words are there when they appear as written, as whole words: "no" is not in "nothing".
     if not value.strip():
         return False
     wanted = numbers_in(value)
     if wanted:
         return set(wanted) <= set(numbers_in(text))
-    return _squash(value) in _squash(text)
+    return re.search(rf"(?<!\w){re.escape(_squash(value))}(?!\w)", _squash(text)) is not None
 
 
 def _is_year(text: str, number: re.Match) -> bool:
