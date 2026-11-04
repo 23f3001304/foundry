@@ -1,25 +1,29 @@
 """Turns a brief into a list of who owes what, shows it on the brief card, asks each person once, reads what they say back, reminds once, and asks the asker at the due time. Internal mode only."""
 
 import logging
+import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, timezone
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 
 from foundry.buffer import Burst
 from foundry.cards import ALREADY_THERE, ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, RIGHT, ROOM_GONE, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
-from foundry.checks import LOW_CONFIDENCE, jumped, numbers_in
+from foundry.checks import LOW_CONFIDENCE, jumped, numbers_in, outliers
 from foundry.cleanup import format_date
 from foundry.items import IN, Item, ItemState, ItemStore, Owed, going_without, parse_owes, status_line
 from foundry.jobs import Job, JobStore, State, advance
 from foundry.log import Entry, Log, Writer
 from foundry.reading import Reading, asks_for_status, is_short_ask, might_be_status, read_message
 from foundry.switch_client import DESK_NAME, Outcome, SwitchClient
+from foundry.tables import TABLE_KINDS, is_file_answer, read_file
 from foundry.text import headline, quiet
+from foundry.tools.layout import MakerError
 
 if TYPE_CHECKING:
     from foundry.desk import Settings
@@ -130,6 +134,20 @@ JUMPED = "{owner}'s answer for {input} is {value}, more than {share} away from t
 DISAGREE = "{owner} and {other} gave different answers for {input}: {value} and {other_value}."
 UNSEEN_NUMBER = "Foundry read {value} from {owner}'s answer for {input}, but that number is not in what they wrote."
 CHANGED_AFTER_START = "{owner} changed {input} from {old} to {new} after the makers started."
+FAR_FROM_PEERS = "{owner}'s answer for {input} is {value}, far from the others given for this measure."
+# A file sent as an answer. Its name comes from the person, so it is quieted where it is filled in.
+READABLE, SAVE_AS = " and ".join(TABLE_KINDS), " or ".join(TABLE_KINDS)
+MOST_FILE_BYTES = 20 * 1024 * 1024
+MOST_NAME_CHARS = 80
+FILE_NOTED = "Got it. {input}: I saved {name} as the answer."
+FILE_NOT_USED = f"I can only use {READABLE} files as an answer, so I haven't used {{name}}. What you owe is still open. Save it as {SAVE_AS}, or type the figure."
+FILE_UNREADABLE = "{reason} Nothing is changed, and what you owe is still open."
+FILE_NOT_GOT = "I couldn't get {name} from the chat just now, so nothing is changed. Please send it again."
+FILE_NOT_SAVED = "I couldn't save {name} just now, so nothing is changed. Please send it again in a little while."
+FILE_TOO_BIG = f"{{name}} is too big for me to use (over {MOST_FILE_BYTES // 1024 // 1024} MB), so nothing is changed. Please send a smaller file."
+WHICH_FILE = "{owner}, which one is {name} for: {options}? Send it again and say its name in the message."
+# Words that say nothing about which input a file is for.
+FILLER = frozenset({"a", "an", "the", "for", "of", "and", "in", "to", "by", "on", "is", "are", "this", "that", "here", "with", "my", "our", "from"})
 # Where a job is, in words a client may read. It names no one.
 STAGES = {
     State.RECEIVED: "the brief is being drafted",
@@ -259,6 +277,42 @@ def _pick(reading: Reading, candidates: list[Item]) -> Item | None:
     # With none named, the one still open is meant, or failing that the only one they have.
     pool = [item for item in candidates if item.state is ItemState.OPEN] or candidates
     return pool[0] if len(pool) == 1 else None
+
+
+def _safe(text: str, fallback: str) -> str:
+    # Letters, digits, dots, dashes and underscores only, so a name can't be a folder or reach one.
+    return re.sub(r"[^\w.-]+", "_", text).strip("._-") or fallback
+
+
+def input_path(root: Path | str, bucket: str, job_id: str, owner: str, name: str) -> Path:
+    """Where a file sent as an answer goes: a folder for the client and one for the job, then the sender's name before the file's own. A name already taken gets a number."""
+    base = re.split(r"[\\/]", name)[-1]
+    kind = re.search(r"\.\w{1,8}$", base)
+    suffix = kind.group().lower() if kind else ""
+    stem = _safe(base[:kind.start()] if kind else base, "file")[:MOST_NAME_CHARS]
+    folder, sender = Path(root) / _safe(bucket, "client") / _safe(job_id, "job"), _safe(owner, "owner")[:MOST_NAME_CHARS]
+    path, taken = folder / f"{sender}-{stem}{suffix}", 2
+    while path.exists():
+        path, taken = folder / f"{sender}-{stem}-{taken}{suffix}", taken + 1
+    return path
+
+
+def _is_audio(attachment: dict) -> bool:
+    return str(attachment.get("mimetype", "")).startswith("audio/") or attachment.get("msgtype") == "m.audio"
+
+
+def _file_words(text: str) -> set[str]:
+    return set(re.findall(r"[^\W_]+", text.casefold())) - FILLER
+
+
+def _file_item(candidates: list[Item], name: str, caption: str) -> Item | None:
+    # The one input it is for: the only one open, or the one whose words the file's name and the message share most. None when that is not clear.
+    if len(candidates) == 1:
+        return candidates[0]
+    said = _file_words(f"{Path(name).stem} {caption}")
+    scores = [len(said & _file_words(item.input)) for item in candidates]
+    best = [item for item, score in zip(candidates, scores) if score == max(scores)]
+    return best[0] if max(scores) > 0 and len(best) == 1 else None
 
 
 @dataclass
@@ -840,6 +894,71 @@ class Coordinator:
         self.client.post_message(burst.room_id, f"{self._title(job)}: {STAGES[job.state]}.")
         return True
 
+    def take_file(self, event: dict, at: datetime) -> bool:
+        # A table sent by someone Foundry has asked for something is their answer. True when the message was only that, so it is not also sorted as a note.
+        room_id, payload = event["room_id"], event["payload"]
+        files = [attachment for attachment in payload.get("attachments") or [] if not _is_audio(attachment)]
+        if not files or not self.settings.is_internal(room_id):
+            return False
+        sender, bucket = payload["sender"], self.settings.bucket_for(room_id)
+        owed = self.items.open_for(sender, bucket)
+        if not owed:
+            return False
+        caption = payload["body"].strip()
+        caption = "" if caption in {attachment.get("filename") for attachment in files} else caption
+        taken = False
+        for attachment in files:
+            name = attachment.get("filename") or "file"
+            if Path(name).suffix.lower() not in TABLE_KINDS:
+                self.client.post_message(room_id, FILE_NOT_USED.format(name=quiet(name)))
+                # With words beside it, the words still go on to be read.
+                taken = taken or not caption
+                continue
+            taken = True
+            if not owed:
+                break
+            item = _file_item(owed, name, caption)
+            if item is None:
+                self.client.post_message(room_id, WHICH_FILE.format(owner=quiet(self._name_of(sender, bucket)), name=quiet(name), options=_join(self._labels(owed))))
+                continue
+            if self._save_file(item, attachment, name, room_id, at):
+                owed = [other for other in owed if other.id != item.id]
+        return taken
+
+    def _save_file(self, item: Item, attachment: dict, name: str, room_id: str, at: datetime) -> bool:
+        # The file is kept where the data tools can open it, and the item closes only once it is known to be a table.
+        shown = quiet(name)
+        if (attachment.get("size") or 0) > MOST_FILE_BYTES:
+            self.client.post_message(room_id, FILE_TOO_BIG.format(name=shown))
+            return False
+        try:
+            data = self.client.download(room_id, attachment)
+        except httpx.HTTPError as error:
+            logger.warning("Could not download %s for item %s: %s", name, item.id, error)
+            self.client.post_message(room_id, FILE_NOT_GOT.format(name=shown))
+            return False
+        if len(data) > MOST_FILE_BYTES:
+            self.client.post_message(room_id, FILE_TOO_BIG.format(name=shown))
+            return False
+        path = input_path(Path(self.settings.inputs_dir).resolve(), item.bucket, item.job_id, self._owner_name(item), name)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        except OSError as error:
+            logger.warning("Could not save %s for item %s: %s", name, item.id, error)
+            self.client.post_message(room_id, FILE_NOT_SAVED.format(name=shown))
+            return False
+        try:
+            read_file(path)
+        except MakerError as error:
+            path.unlink(missing_ok=True)
+            self.client.post_message(room_id, FILE_UNREADABLE.format(reason=quiet(str(error).replace(path.name, name))))
+            return False
+        self._record(item, str(path), at, room_id, confidence=None, said="", typed=False, file=True)
+        self._close_voice_cards(item)
+        self.client.post_message(room_id, FILE_NOTED.format(input=quiet(item.input), name=shown))
+        return True
+
     def confirm_voice(self, card: Card, at: datetime) -> None:
         # Right: the sender says the voice note was heard as they said it, so the answer read from it is now theirs.
         item = self._item_of(card)
@@ -1060,7 +1179,9 @@ class Coordinator:
             # An answer already in stays in use. The newer one is only noted.
             self._flag(item.job_id, [NEWER_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value, old=item.answer)])
 
-    def _record(self, item: Item, value: str, at: datetime, room_id: str, *, confidence: float | None, said: str, typed: bool, by: str | None = None, confirmed: bool = True) -> None:
+    def _record(
+        self, item: Item, value: str, at: datetime, room_id: str, *, confidence: float | None, said: str, typed: bool, by: str | None = None, confirmed: bool = True, file: bool = False,
+    ) -> None:
         # The one place an answer is taken in: it is logged with its measure, it closes the item and the checks run on it. The newest answer wins and the older ones stay in the log.
         # An answer with no voice_confirmed entry for its item is how the chain tells one nobody confirmed.
         job = self._job_of(item)
@@ -1076,7 +1197,8 @@ class Coordinator:
         item.answer, item.answer_entry, item.confirmed = value, entry.id, confirmed
         self.items.save(item)
         if job is not None:
-            lines = self._checks(job, item, value, previous, confidence, said if typed else None, key)
+            # The checks compare figures, and a file's path is not one.
+            lines = [] if file else self._checks(job, item, value, previous, confidence, said if typed else None, key)
             if not confirmed:
                 lines.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value))
             if replaced is not None and _differ(replaced, value) and job.state in STARTED:
@@ -1125,10 +1247,18 @@ class Coordinator:
             lines.append(JUMPED.format(owner=owner, input=item.input, value=value, share=f"{share:.0%}", old=previous.text))
         for other in self.items.for_job(job.id):
             same_ask = (_key(other.input), self._measure_key(other, job)) == (_key(item.input), key)
-            if other.id != item.id and same_ask and other.state in IN and other.confirmed and other.answer is not None and _differ(other.answer, value):
+            if other.id != item.id and same_ask and other.state in IN and other.confirmed and other.answer is not None and not is_file_answer(other.answer) and _differ(other.answer, value):
                 lines.append(DISAGREE.format(owner=owner, other=self._owner_name(other), input=item.input, value=value, other_value=other.answer))
                 break
-        return lines
+        return lines + self._far_from_peers(job, key)
+
+    def _far_from_peers(self, job: Job, key: str) -> list[str]:
+        # Every answer on this measure in this job is judged together, so a far figure that came first is judged once its peers have answered.
+        answered = [
+            other for other in self.items.for_job(job.id)
+            if other.state in IN and other.confirmed and other.answer is not None and _key(self._measure_key(other, job)) == _key(key)
+        ]
+        return [FAR_FROM_PEERS.format(owner=self._owner_name(answered[at]), input=answered[at].input, value=answered[at].answer) for at in outliers([other.answer for other in answered])]
 
     def _measure_key(self, item: Item, job: Job | None) -> str:
         # The pack's name for a measure when the item's wording holds it, so this quarter's figure meets last quarter's however the brief agent wrote it.

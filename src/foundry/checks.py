@@ -2,18 +2,25 @@
 
 import logging
 import re
+from collections.abc import Iterable
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from statistics import median
 
 from pptx import Presentation
 from pptx.shapes.group import GroupShape
 
 from foundry.cleanup import DATE_TOKEN, NUMBER, CleanResult
-from foundry.log import Log
+from foundry.log import Entry, Log
+from foundry.tables import is_file_answer, table_text
 
 logger = logging.getLogger(__name__)
 
 LOW_CONFIDENCE = 0.6
+# How far a figure may sit from the middle of its peers, as a share of that middle, before it needs a look. Wider than a jump, because offices differ in size.
+PEER_SHARE = 0.5
+# Fewer figures than this have no peers: with two, each is as far from the middle as the other.
+FEWEST_PEERS = 3
 NOT_SURE = "The model said it was not sure this report is right."
 # Only what people said. A reviewer's note, an agent's marker or a card must not make a number look sourced.
 PEOPLE_WORDS = ("message", "voice_heard", "voice_corrected", "item_answer", "item_passed_on", "revision_notes")
@@ -58,7 +65,7 @@ def unsourced_numbers(output: str, sources: list[str]) -> list[str]:
     return [number for number in numbers_in(output) if number not in known]
 
 
-def _figure(text: str) -> Decimal | None:
+def figure(text: str) -> Decimal | None:
     match = FIGURE.fullmatch(text.strip())
     if match is None:
         return None
@@ -70,10 +77,30 @@ def _figure(text: str) -> Decimal | None:
 
 def jumped(previous: str, new: str, share: float) -> bool:
     # Moving by more than the share of the old figure. Coming from nothing always counts, and a word is never a jump.
-    before, after = _figure(previous), _figure(new)
+    before, after = figure(previous), figure(new)
     if before is None or after is None:
         return False
     return abs(after - before) > abs(before) * Decimal(str(share))
+
+
+def _as_figure(value: str | int | float | Decimal) -> Decimal | None:
+    if isinstance(value, str):
+        return figure(value)
+    number = Decimal(str(value))
+    return number if number.is_finite() else None
+
+
+def outliers(values: Iterable[str | int | float | Decimal], share: float = PEER_SHARE) -> list[int]:
+    # The places in values of figures further than the share from the middle of all of them. A word is skipped and keeps its place,
+    # fewer than three figures have no peers, and a middle of nothing leaves no scale to judge by.
+    figures = [(place, _as_figure(value)) for place, value in enumerate(values)]
+    known = [(place, number) for place, number in figures if number is not None]
+    if len(known) < FEWEST_PEERS:
+        return []
+    middle = median(number for _, number in known)
+    if middle == 0:
+        return []
+    return [place for place, number in known if abs(number - middle) > abs(middle) * Decimal(str(share))]
 
 
 def _shape_text(shapes) -> list[str]:
@@ -123,8 +150,16 @@ def needs_attention(result: CleanResult) -> list[str]:
     return lines
 
 
+def _said(entry: Entry) -> str | None:
+    # A file sent as an answer is logged by its path. What the person gave is what is in the file, and the digits in a folder name are not figures anyone gave.
+    if entry.kind == "item_answer" and is_file_answer(entry.text):
+        return table_text(entry.text)
+    return entry.text
+
+
 def people_words(log: Log, bucket: str, job_id: str) -> list[str]:
     entries = log.for_job(bucket, job_id)
     # The messages that opened a job were logged before it had an id, so its opening entry names them.
     opening = [log.get(bucket, int(part)) for entry in entries if entry.kind == "job_opened" for part in (entry.ref or "").split(",") if part.strip().isdigit()]
-    return [entry.text for entry in [*opening, *entries] if entry is not None and entry.kind in PEOPLE_WORDS]
+    said = [_said(entry) for entry in [*opening, *entries] if entry is not None and entry.kind in PEOPLE_WORDS]
+    return [text for text in said if text is not None]

@@ -7,14 +7,13 @@ from mcp.server.mcpserver import MCPServer
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from foundry.brand import Brand, load_brand_dir
-from foundry.tools.layout import LINE_SPACING, MakerError, fit_size, load_font, rgb, wrap
+from foundry.tools.layout import LINE_SPACING, MakerError, check_font_can_draw, fit_size, load_font, rgb, wrap
 
 mcp = MCPServer("foundry-visual")
 
 SIZE = re.compile(r"(\d{3,4})x(\d{3,4})")
 SMALLEST_SIDE, LARGEST_SIDE = 200, 7100
 MOST_OF_THE_HEIGHT_FOR_THE_PICTURE = 0.6
-UNDRAWABLE = "\U0010FFFF"
 
 
 def _parse_size(size: str) -> tuple[int, int]:
@@ -25,19 +24,11 @@ def _parse_size(size: str) -> tuple[int, int]:
     return sides
 
 
-def _check_font_can_draw(text: str, font: ImageFont.FreeTypeFont, role: str) -> None:
-    # A font draws the same empty box for every letter it lacks. Refuse rather than ship boxes.
-    box = bytes(font.getmask(UNDRAWABLE))
-    missing = sorted({letter for letter in text if not letter.isspace() and bytes(font.getmask(letter)) == box})
-    if missing:
-        raise MakerError(f"The brand's {role} font cannot draw: {' '.join(missing[:10])}. Write this text in a script the font has.")
-
-
 def _draw_text(draw: ImageDraw.ImageDraw, text: str, font_path: Path | None, role: str, colour: tuple, box: tuple[int, int, int, int], largest: int, smallest: int, highlight: str = "", marker: tuple = (), marked_colour: tuple = ()) -> int:
     left, top, right, bottom = box
     size = fit_size(text, font_path, right - left, bottom - top, largest, smallest)
     font = load_font(font_path, size)
-    _check_font_can_draw(text, font, role)
+    check_font_can_draw(text, font, role)
     lines = wrap(text, font, right - left)
     start = " ".join(lines).find(highlight) if highlight else -1
     end, offset = start + len(highlight), 0

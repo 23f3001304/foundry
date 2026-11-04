@@ -5,6 +5,7 @@ from pathlib import Path
 
 from lxml import etree
 from mcp.server.mcpserver import MCPServer
+from PIL import Image
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
@@ -14,13 +15,22 @@ from pptx.util import Pt
 
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
-from foundry.tools.layout import MakerError, fit_size
+from foundry.checks import figure
+from foundry.tools.layout import LINE_SPACING, MakerError, fit_size, load_font, wrap
 
 mcp = MCPServer("foundry-deck")
 
 WIDTH, HEIGHT = 960, 540
 TITLE_ONLY = 5
 BULLET_GAP = 16
+MOST_TABLE_COLUMNS = 8
+# A table's words are sized to the largest of these that lets the whole table fit, and a cell keeps this much room around its words.
+TABLE_SIZES = (20, 9)
+CELL_PAD = 6
+RULE_WIDTH = 9525
+PICTURE_KINDS = (".png", ".jpg", ".jpeg")
+ROWS_SHAPE = 'A table\'s "rows" is a list of rows, and each row is a list of cells. The first row holds the headings.'
+TABLE_TOO_BIG = "This table is too big to fit on one slide. Show fewer rows, shorten the words, or split it over two slides."
 DRAWING = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 # The small line under a slide's content that says where its numbers came from. It stops short of the corner logo.
 SOURCE_BOX = (56, 500, 780, 28)
@@ -148,21 +158,149 @@ def _make_title(deck: Presentation, brand: Brand, spec: dict) -> None:
     _title_slide(deck, brand, _required(spec, "title", "title"), spec.get("subtitle", ""), spec.get("highlight", ""))
 
 
+def _titled_slide(deck: Presentation, brand: Brand, title: str, highlight: str) -> tuple:
+    # The start of every slide that holds something under its title, and the box left for it: clear of the corner logo and the source line.
+    slide = _new_slide(deck, brand, "paper")
+    if brand.style == "solid":
+        _block(slide, brand, "primary", 0, 0, WIDTH, 110)
+        _write(slide.shapes.title, brand, "heading", "paper", (56, 22, 848, 70), [title], 34, 16, middle=True, highlight=highlight)
+        return slide, (56, 140, 790, 350)
+    _block(slide, brand, "primary", 0, 0, 24, HEIGHT)
+    _write(slide.shapes.title, brand, "heading", "primary", (72, 44, 780, 90), [title], 36, 16, highlight=highlight)
+    return slide, (72, 150, 780, 340)
+
+
 def _make_content(deck: Presentation, brand: Brand, spec: dict) -> None:
     title = _required(spec, "title", "content")
     points = [f"• {point}" for point in _required(spec, "bullets", "content")]
     highlight = spec.get("highlight", "")
     _check_highlight(highlight, title, *points)
-    slide = _new_slide(deck, brand, "paper")
-    if brand.style == "solid":
-        _block(slide, brand, "primary", 0, 0, WIDTH, 110)
-        _write(slide.shapes.title, brand, "heading", "paper", (56, 22, 848, 70), [title], 34, 16, middle=True, highlight=highlight)
-        _text_box(slide, brand, "body", "ink", (56, 140, 790, 350), points, 32, 13, BULLET_GAP, highlight)
-    else:
-        _block(slide, brand, "primary", 0, 0, 24, HEIGHT)
-        _write(slide.shapes.title, brand, "heading", "primary", (72, 44, 780, 90), [title], 36, 16, highlight=highlight)
-        _text_box(slide, brand, "body", "ink", (72, 150, 780, 340), points, 32, 13, BULLET_GAP, highlight)
+    slide, box = _titled_slide(deck, brand, title, highlight)
+    _text_box(slide, brand, "body", "ink", box, points, 32, 13, BULLET_GAP, highlight)
     _corner_logo(slide, brand, on_paper=True)
+
+
+def _cell_text(cell: object) -> str:
+    if cell is None:
+        return ""
+    if isinstance(cell, float) and cell.is_integer():
+        return str(int(cell))
+    return str(cell).strip()
+
+
+def _table_cells(spec: dict) -> list[list[str]]:
+    rows = _required(spec, "rows", "table")
+    if not isinstance(rows, list) or not all(isinstance(row, list) for row in rows):
+        raise MakerError(ROWS_SHAPE)
+    if len(rows) < 2:
+        raise MakerError("A table needs its headings and at least one row under them.")
+    cells = [[_cell_text(cell) for cell in row] for row in rows]
+    columns = len(cells[0])
+    if not columns:
+        raise MakerError("A table needs at least one column.")
+    if columns > MOST_TABLE_COLUMNS:
+        raise MakerError(f"A table can have at most {MOST_TABLE_COLUMNS} columns, and this has {columns}.")
+    for number, row in enumerate(cells[1:], start=2):
+        if len(row) != columns:
+            raise MakerError(f"Row {number} has {len(row)} cell{'' if len(row) == 1 else 's'}, and the headings have {columns}.")
+    return cells
+
+
+def _row_height(brand: Brand, row: list[str], widths: list[float], size: int, header: bool) -> float:
+    font = load_font(brand.font_file("heading" if header else "body"), size)
+    lines = max(len(wrap(text, font, max(width - 2 * CELL_PAD, 10))) for text, width in zip(row, widths))
+    return lines * size * LINE_SPACING + 2 * CELL_PAD
+
+
+def _fit_table(brand: Brand, cells: list[list[str]], width: int, height: int) -> tuple[int, list[float], list[float]]:
+    # A column gets room in step with its longest words, and the words are as large as they can be with the whole table on the slide.
+    weights = [max(4, min(40, max(len(row[at]) for row in cells))) for at in range(len(cells[0]))]
+    widths = [width * weight / sum(weights) for weight in weights]
+    for size in range(TABLE_SIZES[0], TABLE_SIZES[1] - 1, -1):
+        heights = [_row_height(brand, row, widths, size, header=number == 0) for number, row in enumerate(cells)]
+        if sum(heights) <= height:
+            return size, widths, heights
+    raise MakerError(TABLE_TOO_BIG)
+
+
+def _underline(cell, brand: Brand) -> None:
+    # A thin line under a row in the accent colour. It goes first, ahead of the fill, which is where the file format wants it.
+    line = etree.Element(f"{DRAWING}lnB", w=str(RULE_WIDTH))
+    etree.SubElement(etree.SubElement(line, f"{DRAWING}solidFill"), f"{DRAWING}srgbClr", val=brand.colors["accent"].removeprefix("#"))
+    cell._tc.get_or_add_tcPr().insert(0, line)
+
+
+def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
+    title = _required(spec, "title", "table")
+    cells = _table_cells(spec)
+    highlight = spec.get("highlight", "")
+    _check_highlight(highlight, title)
+    slide, (left, top, width, height) = _titled_slide(deck, brand, title, highlight)
+    size, widths, heights = _fit_table(brand, cells, width, height)
+    table = slide.shapes.add_table(len(cells), len(cells[0]), Pt(left), Pt(top), Pt(width), Pt(sum(heights))).table
+    table.horz_banding = False
+    for at, column_width in enumerate(widths):
+        table.columns[at].width = Pt(column_width)
+    # A column of figures is lined up on its right, and so is its heading.
+    figures = [any(row[at] for row in cells[1:]) and all(figure(row[at]) is not None for row in cells[1:] if row[at]) for at in range(len(widths))]
+    for number, row in enumerate(cells):
+        header = number == 0
+        table.rows[number].height = Pt(heights[number])
+        for at, text in enumerate(row):
+            cell = table.cell(number, at)
+            cell.fill.solid()
+            cell.fill.fore_color.rgb = _colour(brand, "primary" if header else "paper")
+            cell.margin_left = cell.margin_right = cell.margin_top = cell.margin_bottom = Pt(CELL_PAD)
+            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            cell.text_frame.word_wrap = True
+            paragraph = cell.text_frame.paragraphs[0]
+            paragraph.alignment = PP_ALIGN.RIGHT if figures[at] else PP_ALIGN.LEFT
+            run = paragraph.add_run()
+            run.text = text
+            run.font.size = Pt(size)
+            run.font.name = brand.fonts["heading" if header else "body"]
+            run.font.color.rgb = _colour(brand, "paper" if header else "ink")
+            if not header:
+                _underline(cell, brand)
+    _corner_logo(slide, brand, on_paper=True)
+
+
+def _chart_record(path: Path) -> str:
+    # What draw_chart wrote beside a chart: its title, labels and figures.
+    try:
+        return Path(f"{path}.txt").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _picture(path_text: str) -> tuple[Path, tuple[int, int]]:
+    path = Path(path_text)
+    if not path.is_file():
+        raise MakerError(f"There is no picture at {path_text}. Give the absolute path of a {' or '.join(PICTURE_KINDS)} file.")
+    if path.suffix.lower() not in PICTURE_KINDS:
+        raise MakerError(f"{path.name} is not a {' or '.join(PICTURE_KINDS)} file.")
+    try:
+        with Image.open(path) as image:
+            return path, image.size
+    except OSError as error:
+        raise MakerError(f"{path.name} is not a picture I can read.") from error
+
+
+def _make_picture(deck: Presentation, brand: Brand, spec: dict) -> None:
+    title = _required(spec, "title", "picture")
+    path, (pixels_wide, pixels_high) = _picture(_required(spec, "path", "picture"))
+    highlight = spec.get("highlight", "")
+    _check_highlight(highlight, title)
+    slide, (left, top, width, height) = _titled_slide(deck, brand, title, highlight)
+    # The whole picture, as large as the room allows, in the middle of it.
+    scale = min(width / pixels_wide, height / pixels_high)
+    wide, high = pixels_wide * scale, pixels_high * scale
+    slide.shapes.add_picture(str(path), Pt(left + (width - wide) / 2), Pt(top), width=Pt(wide), height=Pt(high))
+    _corner_logo(slide, brand, on_paper=True)
+    # A chart is an image, so the words and figures it drew go in the notes, where the number check reads the deck's text.
+    record = _chart_record(path)
+    if record:
+        slide.notes_slide.notes_text_frame.text = record
 
 
 def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
@@ -177,7 +315,7 @@ def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
     _corner_logo(slide, brand, on_paper=not solid)
 
 
-LAYOUTS = {"title": _make_title, "content": _make_content, "statement": _make_statement}
+LAYOUTS = {"title": _make_title, "content": _make_content, "statement": _make_statement, "table": _make_table, "picture": _make_picture}
 
 
 def _source(item: object, slide: int, words: list[str]) -> Link:
@@ -199,8 +337,17 @@ def _sources_of(spec: dict, slide: int) -> list[Link]:
     given = spec.get("sources") or []
     if not isinstance(given, list):
         raise MakerError(f'A slide\'s "sources" must be a list. {SOURCE_SHAPE}')
-    words = [spec.get(key, "") for key in ("title", "subtitle", "text")] + list(spec.get("bullets", []))
+    words = [spec.get(key, "") for key in ("title", "subtitle", "text")] + list(spec.get("bullets", [])) + _data_words(spec)
     return [_source(item, slide, words) for item in given]
+
+
+def _data_words(spec: dict) -> list[str]:
+    # The words a table's cells and a chart's record put on their slide. Left alone when they are not shaped right, which the layout will say.
+    if spec.get("layout") == "table" and isinstance(spec.get("rows"), list):
+        return [_cell_text(cell) for row in spec["rows"] if isinstance(row, list) for cell in row]
+    if spec.get("layout") == "picture" and isinstance(spec.get("path"), str):
+        return _chart_record(Path(spec["path"])).splitlines()
+    return []
 
 
 def _print_sources(slide, brand: Brand, links: list[Link], layout: str) -> None:
@@ -219,6 +366,8 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     {"layout": "content", "title": "...", "bullets": ["...", "..."]}
     {"layout": "statement", "text": "One big sentence."}
     {"layout": "title", "title": "...", "subtitle": "..."}
+    {"layout": "table", "title": "...", "rows": [["Region", "Revenue"], ["North", "100"]]} where the first row is the headings, at most 8 columns, and the table must fit on the slide
+    {"layout": "picture", "title": "...", "path": "/absolute/path/chart.png"} where the picture is a .png or .jpg, such as a chart draw_chart made, shown whole
     Any slide can also have "highlight": words on that slide to put on the brand's accent colour, for the one thing that matters most.
     highlight does the same for the title slide. Text that cannot fit raises an error. Shorten it or split the slide.
 

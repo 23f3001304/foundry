@@ -6,6 +6,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from PIL import ImageFont
 
 LINE_SPACING = 1.2
+UNDRAWABLE = "\U0010FFFF"
 
 
 class MakerError(ToolError, ValueError):
@@ -14,6 +15,14 @@ class MakerError(ToolError, ValueError):
 
 def load_font(path: Path | None, size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(str(path), size) if path else ImageFont.load_default(size)
+
+
+def check_font_can_draw(text: str, font: ImageFont.FreeTypeFont, role: str) -> None:
+    # A font draws the same empty box for every letter it lacks. Refuse rather than ship boxes.
+    box = bytes(font.getmask(UNDRAWABLE))
+    missing = sorted({letter for letter in text if not letter.isspace() and bytes(font.getmask(letter)) == box})
+    if missing:
+        raise MakerError(f"The brand's {role} font cannot draw: {' '.join(missing[:10])}. Write this text in a script the font has.")
 
 
 def wrap(text: str, font: ImageFont.FreeTypeFont, width: float) -> list[str]:

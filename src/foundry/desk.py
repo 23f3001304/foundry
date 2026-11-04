@@ -99,7 +99,7 @@ MAKER_STUCK = "The team cannot finish this as asked."
 NO_BRIEF = "I could not get this request drafted into a brief. Please send it again."
 RETRY = "A person asked to try this job again. If your file is still right, reply with the same path."
 NOTHING_MADE = "Nobody made a file for this job. Make what the brief asks for."
-LOG_TOKEN = "Log token for this job: {token}. Give it to the foundry-log tool, and to nothing else."
+LOG_TOKEN = "Log token for this job: {token}. Give it to the foundry-log and foundry-data tools, and to nothing else."
 # Only for a job that collected inputs from people, because a source prints on the slide.
 GIVE_SOURCES = (
     "This job collected inputs from people. The deck maker: where a number or fact on a slide came from a log entry, give that slide a \"sources\" list with one item for it, made of \"value\", \"entry\" and \"label\". "
@@ -255,6 +255,8 @@ class Settings:
     jobs_path: Path | str = "foundry-jobs.db"
     # What the dashboard asks the desk to do. Left empty, it sits beside the work database.
     commands_path: Path | str = ""
+    # Where files people send as answers are kept, in a folder for each client and job.
+    inputs_dir: Path | str = "foundry-inputs"
 
     def __post_init__(self) -> None:
         if not self.commands_path:
@@ -306,6 +308,7 @@ class Settings:
             work_path=os.environ.get("FOUNDRY_WORK_DB", "foundry-work.db"),
             jobs_path=os.environ.get("FOUNDRY_JOBS_DB", "foundry-jobs.db"),
             commands_path=os.environ.get("FOUNDRY_COMMANDS_DB", ""),
+            inputs_dir=os.environ.get("FOUNDRY_INPUTS_DIR", "foundry-inputs"),
         )
 
 
@@ -1031,6 +1034,9 @@ class Desk:
         heard = ",".join(str(entry_id) for entry_id in payload.get("heard_entries", [])) or None
         entry = self._log_person(event or sent, "message", text, heard)
         if event is None:
+            return
+        # A table sent by someone who owes an input is their answer, and it is not also a note to sort.
+        if self.coordinator.take_file(event, self._sent_at(payload)):
             return
         if not text or CARD_ANSWER.fullmatch(text) or self._answers_an_approval(event, text) or event["room_id"] in self.settings.inside_rooms():
             return

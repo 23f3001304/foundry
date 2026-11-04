@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.db
+foundry-inputs/
 spike/
 assets/raw/
 foundry-concept-addendum.md
