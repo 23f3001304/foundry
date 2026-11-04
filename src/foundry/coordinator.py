@@ -111,6 +111,7 @@ INPUT_LINE = "- {input} ({measure}): {value}, from {owner}{how}"
 PASSED_ON_HOW = ", passed on by the asker"
 UNSURE_HOW = ", not confirmed by them"
 NOT_RECEIVED = "Not received: {what}. Say so in the work, and do not make up a figure for them."
+SAID_WHY = ', who said "{reason}"'
 MEASURES_HEADING = "This business names these measures. When an input is one of them, write its measure exactly as listed: {measures}."
 # What Foundry says back to someone whose reply it took. Names, answers and reasons come from people, so each is quieted where it is filled in.
 ANSWER_NOTED = "Got it. {input}: {value}."
@@ -274,6 +275,11 @@ def _differ(left: str, right: str) -> bool:
 
 def _join(names: list[str], word: str = "or") -> str:
     return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} {word} {names[-1]}"
+
+
+def _said_why(item: Item) -> str:
+    # The kit asks for the reason in the person's own words, and the reviewer has no log to find it in.
+    return SAID_WHY.format(reason=quiet(_one_line(item.reason))) if item.reason else ""
 
 
 def _names_another(reading: Reading, candidates: list[Item]) -> bool:
@@ -714,7 +720,7 @@ class Coordinator:
             lines.insert(0, INPUTS_HEADING)
         missing = going_without(items)
         if missing:
-            what = "; ".join(f"{quiet(_one_line(item.input))}, from {quiet(_one_line(self._owner_name(item))) or NOBODY}" for item in missing)
+            what = "; ".join(f"{quiet(_one_line(item.input))}, from {quiet(_one_line(self._owner_name(item))) or NOBODY}{_said_why(item)}" for item in missing)
             lines.append(NOT_RECEIVED.format(what=what))
         return "\n".join(lines)
 
