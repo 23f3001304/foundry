@@ -401,14 +401,16 @@ class Coordinator:
         away = AWAY_UNTIL.format(day=format_date(reading.until)) if reading.until else AWAY
         speaker = self._name_of(burst.sender, heard.bucket)
         reason, job_id = away, None
+        # Whoever says it, it is taken only when the person it is about owes an open item. With nothing owed there is nothing to follow, and what was written may be a note with a leave in it.
         # The sender may speak of themselves in the third person, which is still themselves.
         if not reading.person or _key(reading.person) in (_key(burst.sender), _key(speaker)):
             who, name, items = burst.sender, speaker, [item for item in heard.own if item.state is ItemState.OPEN]
+            if not items:
+                return False
         else:
             # Said of someone else, it applies to the job they most recently owe something for and no other.
             items = [item for item in heard.open_here if _owned_by(item, reading.person)]
             if not items:
-                # Nothing is owed by them, so there is nothing to follow, and what was written may be a note with a name in it.
                 return False
             job_id = items[-1].job_id
             items = [item for item in items if item.job_id == job_id]
