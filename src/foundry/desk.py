@@ -54,7 +54,7 @@ from foundry.commands import (
     outcome_for,
     still_waits_on,
 )
-from foundry.coordinator import Coordinator
+from foundry.coordinator import DUE_RAN_OUT, Coordinator
 from foundry.daily import REPORT_FIX_TOO_LATE, VOICE_UNCONFIRMED, DailyReports
 from foundry.delivery import DELIVERED, deliver, deliver_report
 from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, parse_reply, resolve_approver, revise_notes
@@ -1201,14 +1201,15 @@ class Desk:
             self.cards.requeue_routine(card.request_id)
             return
         self.cards.finish(card.request_id, EXPIRED)
-        if card.trigger is Trigger.VOICE:
+        if card.trigger in (Trigger.VOICE, Trigger.DUE):
             # When it ran out, so a word long after can be told from one that is about this card.
             self.cards.note(card.request_id, ran_out_at=self.clock().isoformat())
-            if card.item_id:
-                # Nobody said Right or Wrong, and work doesn't stop for that: the item closes with the value marked unconfirmed.
-                self.coordinator.keep_unconfirmed(card)
+        if card.trigger is Trigger.VOICE and card.item_id:
+            # Nobody said Right or Wrong, and work doesn't stop for that: the item closes with the value marked unconfirmed.
+            self.coordinator.keep_unconfirmed(card)
         if card.trigger in HOLDS_JOB:
-            self.client.post_message(card.room_id, CARD_RAN_OUT.format(title=card.title))
+            # A due card that ran out also says how to go on, because nothing else would.
+            self.client.post_message(card.room_id, (DUE_RAN_OUT if card.trigger is Trigger.DUE else CARD_RAN_OUT).format(title=card.title))
         if card.trigger is Trigger.LATE_FIX:
             # Nobody chose, so the work carries on, and the final card says the fix was never made.
             self.client.post_message(card.room_id, FIX_CARD_RAN_OUT)

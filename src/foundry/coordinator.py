@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 import httpx
 
 from foundry.buffer import Burst
-from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, RIGHT, ROOM_GONE, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
+from foundry.cards import ALREADY_THERE, ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, RIGHT, ROOM_GONE, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
 from foundry.checks import LOW_CONFIDENCE, jumped, numbers_in
 from foundry.cleanup import format_date
 from foundry.items import IN, Item, ItemState, ItemStore, Owed, going_without, parse_owes, status_line
@@ -41,13 +41,15 @@ DUE_CHOICES = (ASK_AGAIN, ASK_SOMEONE_ELSE, GO_WITHOUT)
 # Meta only allows a free-form message within 24 hours of the person's last message, so that is how long a WhatsApp person can be reached.
 WHATSAPP_PREFIX = "@switch-whatsapp-"
 WHATSAPP_WINDOW = timedelta(hours=24)
-# Inside Card.data. The items a due card lists, the due time it is for, that its answer is being worked on, and that it waits for a name.
+# Inside Card.data. The items a due card lists, the due time it is for, that its answer is being worked on, that it waits for a name, and that it waits to be told how to hand one over.
 LISTED = "open"
 DUE_FOR = "due"
 ANSWERING = "answering"
 AWAITING_NAME = "awaiting_name"
+AWAITING_TYPED = "awaiting_typed"
 NAME_WINDOW = timedelta(hours=2)
-MOST_NAME_WORDS = 5
+# A due card that ran out is opened again if the asker writes or asks for status within this long.
+RAN_OUT_WINDOW = timedelta(hours=24)
 UNITS = (("month", 30 * 86400), ("week", 7 * 86400), ("day", 86400), ("hour", 3600), ("minute", 60))
 WHO_OWES = "Who owes what:"
 OWES = "Owes: {what} ({measure}). Due {due}."
@@ -71,8 +73,16 @@ TOLD_DETAIL = 'Type what they said, like "{owner} says 40", or press They didn\'
 DUE_TITLE = "Inputs: {job}"
 DUE_DETAIL = (
     "{job} is waiting on:\n{lines}\n\n"
-    "Ask again sends one more message and gives them {hours} more hours. Ask someone else asks another person. Go without starts the work with what is in, and the final card names what is missing."
+    "Ask again sends one more message and gives them {hours} more hours. Ask someone else asks another person. "
+    "Go without leaves these out. The work starts once nothing else is open, and the final card names what is missing."
 )
+# Said when the due card runs out: the job is on hold, and what the asker can do. Writing here, or asking where it stands, opens the card again.
+DUE_RAN_OUT = (
+    "The card for {title} ran out, so this job is on hold. Write anything here, or ask where it stands, and Foundry opens it again. "
+    'To hand an input to someone else now, write "ask Team Lead D instead of Team Lead C".'
+)
+DUE_OPENED_AGAIN = "I've opened the card for {title} again. Please answer it with its buttons."
+ASK_INSTEAD = 'To hand one of these to someone else, write "ask Team Lead D instead of {owner}".'
 DUE_LINE = "- {input}, from {owner}: {state}."
 NO_REPLY = "no reply to Foundry yet"
 SAID = 'said "{reason}"'
@@ -82,10 +92,11 @@ CANT_REACH_THEM = "Foundry can't reach them."
 NO_REMINDER_SENT = "Foundry couldn't send a reminder, because their last message on WhatsApp was over 24 hours ago."
 STATUS_NO_REMINDER = "Foundry can't send {names} a reminder, because their last message on WhatsApp was over 24 hours ago"
 DUE_CLOSED = "Nothing the card for {title} listed is waiting on anyone now, so I closed it."
-WHO_INSTEAD = "Who should I ask instead of {owners} for {what}? Write their name here."
+WHO_INSTEAD = "Who should I ask instead of {owner} for {what}? Write their name here."
 WITHOUT_NOTED = "Going without {what}. The final card will say so."
 # Lines on a job's attention list. None may start "No source found for " or "Could not read ", which the final card drops each round as its own.
 MISSING_INPUT = "{input} from {owner} was not received, so the work went ahead without it."
+MISSING_UNCONFIRMED = "{input} from {owner} was heard by voice but never confirmed, so the work went ahead without it."
 HEARD_BY_VOICE = "{owner}'s answer for {input} was heard by voice and not confirmed: {value}"
 NEWER_BY_VOICE = "{owner} also sent {input} by voice as {value}, and it was not confirmed, so the work uses {old}."
 # What the makers are told about the inputs. People wrote the values, so they are quieted where they are filled in.
@@ -94,6 +105,7 @@ INPUT_LINE = "- {input} ({measure}): {value}, from {owner}{how}"
 PASSED_ON_HOW = ", passed on by the asker"
 UNSURE_HOW = ", not confirmed by them"
 NOT_RECEIVED = "Not received: {what}. Say so in the work, and do not make up a figure for them."
+NOT_USED = "Heard by voice and not confirmed, so not used: {what}. Say so in the work, and do not make up a figure for them."
 MEASURES_HEADING = "This business names these measures. When an input is one of them, write its measure exactly as listed: {measures}."
 # What Foundry says back to someone whose reply it took. Names, answers and reasons come from people, so each is quieted where it is filled in.
 ANSWER_NOTED = "Got it. {input}: {value}."
@@ -146,16 +158,21 @@ def _clock_time(text: str) -> time:
     return datetime.strptime(text, "%H:%M").time()
 
 
-def reminder_time(asked_at: datetime, due_at: datetime, working_hours: tuple[str, str], offset: int) -> datetime:
-    # Halfway between the ask and the due time. Outside the business's working day (offset is its minutes ahead of UTC) it waits for the day's next start.
-    zone = timezone(timedelta(minutes=offset))
-    halfway = asked_at + (due_at - asked_at) / 2
+def inside_hours(when: datetime, working_hours: tuple[str, str], offset: int) -> bool:
+    # Inside the business's working day by its own clock (offset is its minutes ahead of UTC). A day that ends before it starts runs through the night.
     start, end = (_clock_time(text) for text in working_hours)
-    local = halfway.astimezone(zone)
-    # A day that ends before it starts runs through the night.
-    if (start <= local.time() < end) if start < end else (local.time() >= start or local.time() < end):
+    moment = when.astimezone(timezone(timedelta(minutes=offset))).time()
+    return start <= moment < end if start < end else moment >= start or moment < end
+
+
+def reminder_time(asked_at: datetime, due_at: datetime, working_hours: tuple[str, str], offset: int) -> datetime:
+    # Halfway between the ask and the due time. Outside the working day it waits for the day's next start.
+    halfway = asked_at + (due_at - asked_at) / 2
+    if inside_hours(halfway, working_hours, offset):
         return halfway
-    next_start = datetime.combine(local.date(), start, zone)
+    zone = timezone(timedelta(minutes=offset))
+    local = halfway.astimezone(zone)
+    next_start = datetime.combine(local.date(), _clock_time(working_hours[0]), zone)
     return next_start if next_start > local else next_start + timedelta(days=1)
 
 
@@ -170,6 +187,16 @@ def _trying(what: str) -> Iterator[None]:
 
 def _room_gone(error: httpx.HTTPError) -> bool:
     return isinstance(error, httpx.HTTPStatusError) and error.response.status_code in ROOM_GONE
+
+
+def _unconfirmed(item: Item) -> bool:
+    # It holds a value that came in by voice, and nobody has said it was heard right.
+    return item.answer is not None and not item.confirmed
+
+
+def _will_not_pass(error: httpx.HTTPError) -> bool:
+    # Switch refused this one for what it is, such as a request it can't take. A busy server, a lost connection, a timeout or a rate limit may pass on another try.
+    return isinstance(error, httpx.HTTPStatusError) and 400 <= error.response.status_code < 500 and error.response.status_code not in (408, 429)
 
 
 def last_wrote(writer: Writer, now: datetime) -> str:
@@ -314,9 +341,17 @@ class Coordinator:
 
     def start(self, job: Job) -> bool:
         items = self.items.for_job(job.id) if self.settings.is_internal(job.room_id) else []
+        refused = None
         for item in items:
             if item.asked_at is None:
-                self.ask(item)
+                try:
+                    self.ask(item)
+                except httpx.HTTPError as error:
+                    # Everyone after this person is still asked. This one is asked on the retry, when the approval comes round again.
+                    logger.warning("Could not ask %s for item %s, so the approval is tried again: %s", item.owner_name, item.id, error)
+                    refused = refused or error
+        if refused is not None:
+            raise refused
         return bool(items)
 
     def ask(self, item: Item) -> None:
@@ -325,13 +360,24 @@ class Coordinator:
         item.asked_at = now
         self.items.save(item)
         try:
-            if not (item.reachable and self._send(job, item, now)):
-                self.client.post_message(job.room_id, self._not_asked(item))
-        except httpx.HTTPError:
-            # Nothing got through, so the retry has to ask this person.
-            item.asked_at = None
+            # A WhatsApp person who last wrote more than 24 hours ago can't be sent anything, so they are told about as someone who can't be reached.
+            sent = self.can_reach(item, now) and self._send(job, item, now)
+        except httpx.HTTPError as error:
+            if not _will_not_pass(error):
+                # Nothing got through, so the retry has to ask this person.
+                item.asked_at = None
+                self.items.save(item)
+                raise
+            logger.warning("Could not ask %s for item %s: Switch refused it (%s) and will not take it, so they are marked as not reachable.", item.owner_name, item.id, error.response.status_code)
+            item.reachable, sent = False, False
             self.items.save(item)
-            raise
+        if not sent:
+            try:
+                self.client.post_message(job.room_id, self._not_asked(item))
+            except httpx.HTTPError:
+                item.asked_at = None
+                self.items.save(item)
+                raise
 
     def _send(self, job: Job, item: Item, now: datetime, template: str = ASK) -> bool:
         text = self._put(template, job, item)
@@ -393,16 +439,33 @@ class Coordinator:
                 self._look_after(job, now)
 
     def _look_after(self, job: Job, now: datetime) -> None:
+        for item in self._open_items(job):
+            with _trying(f"settle a voice answer for item {item.id}"):
+                self._keep_if_nobody_can_confirm(item, now)
         # A job whose inputs are all closed but whose makers were never asked (the desk stopped between the two) is started here.
         with _trying(f"look after job {job.id}"):
             if self.close_if_done(job):
                 return
-        items = [item for item in self.items.for_job(job.id) if item.state is ItemState.OPEN and item.asked_at is not None]
+        fresh = self._job_by_id(job.id)
+        if fresh is None or fresh.state is not State.COLLECTING:
+            return
+        items = self._open_items(job)
         for item in items:
             with _trying(f"remind about item {item.id}"):
                 self._remind(job, item, now)
         with _trying(f"ask about the due time of job {job.id}"):
             self._ask_at_due_time(job, items, now)
+
+    def _open_items(self, job: Job) -> list[Item]:
+        return [item for item in self.items.for_job(job.id) if item.state is ItemState.OPEN and item.asked_at is not None]
+
+    def _keep_if_nobody_can_confirm(self, item: Item, now: datetime) -> None:
+        # An open item holding an answer nobody has confirmed needs a voice card to wait for. If the card gave up before it opened, nobody can, and work doesn't stop for that.
+        if item.answer is None or item.confirmed or self.cards.about_item(item.id, Trigger.VOICE, QUEUED, OPEN):
+            return
+        ended = [card for card in self.cards.about_item(item.id, Trigger.VOICE, CLOSED, EXPIRED, ANSWERED) if card.data.get("value") == item.answer]
+        data = ended[-1].data if ended else {"value": item.answer, "at": now.isoformat()}
+        self._keep_unconfirmed(item, data, ended[-1].room_id if ended else item.room_id)
 
     def close_if_done(self, job: Job) -> bool:
         # The job is read afresh, because the caller's copy may be behind and saving it over this one would undo what happened since.
@@ -442,30 +505,45 @@ class Coordinator:
         return STATUS_NO_REMINDER.format(names=_join(list(dict.fromkeys(names)), "and")) if names else ""
 
     def _remind(self, job: Job, item: Item, now: datetime) -> None:
-        if not self._reminder_wanted(item) or not self.can_reach(item, now):
+        # One id for an item's reminder, so a second one is not something a bug could make: Switch and the queue each know the id.
+        request_id = f"reminder-{item.id}"
+        if self.cards.get(request_id) is not None:
+            if item.reminded_at is None:
+                item.reminded_at = now
+                self.items.save(item)
             return
-        at = self._reminder_at(job, item)
-        # After the due time the asker's card takes over, so a reminder that would only now be due is not sent.
-        if at is not None and at <= now < item.due_at:
-            self._send_reminder(job, item, now)
+        if not self._reminder_wanted(item) or not self.can_reach(item, now) or not self._reminder_due(job, item, now):
+            return
+        # A reminder is sent while the person has nothing else open, never queued. A queued one would open whenever the other card ended, at night or after the due time.
+        # A routine card gives way to it, as it does to any card that is not routine.
+        in_the_way = self.cards.open_for(item.owner, item.bucket)
+        if in_the_way is None or in_the_way.is_routine:
+            self._send_reminder(job, item, now, request_id)
 
-    def _reminder_at(self, job: Job, item: Item) -> datetime | None:
+    def _reminder_due(self, job: Job, item: Item, now: datetime) -> bool:
+        pack = self.settings.pack_for(job.room_id)
         try:
-            return reminder_time(item.asked_at, item.due_at, self.settings.pack_for(job.room_id).working_hours, self.settings.utc_offset_minutes)
+            at = reminder_time(item.asked_at, item.due_at, pack.working_hours, self.settings.utc_offset_minutes)
+            inside = inside_hours(now, pack.working_hours, self.settings.utc_offset_minutes)
         except (ValueError, TypeError) as error:
             logger.warning("Could not read the working hours for room %s (%s), so item %s gets no reminder.", job.room_id, error, item.id)
-            return None
+            return False
+        # Inside the working day now, and not only at halfway, because a tick can come late. After the due time the asker's card takes over, so a reminder is not sent then.
+        return inside and at <= now < item.due_at
 
-    def _send_reminder(self, job: Job, item: Item, now: datetime) -> None:
+    def _send_reminder(self, job: Job, item: Item, now: datetime, request_id: str) -> None:
         # Saved before the send, so a crash or a restart can't send it twice.
         item.reminded_at = now
         self.items.save(item)
         try:
             self.cards.submit(
                 Trigger.REMINDER, item.owner, item.bucket, item.room_id, REMINDER_TITLE.format(what=quiet(item.input)), self._put(REMINDER, job, item), REMINDER_CHOICES,
-                job_id=item.job_id, item_id=item.id,
+                job_id=item.job_id, item_id=item.id, request_id=request_id,
             )
         except httpx.HTTPError as error:
+            if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == ALREADY_THERE:
+                # An earlier try got through and only its reply was lost, so the reminder has been sent.
+                return
             # Nothing got through, so a later tick is still owed the one reminder.
             item.reminded_at = None
             if _room_gone(error):
@@ -504,11 +582,11 @@ class Coordinator:
         # Nothing happens by itself once the asker has been asked: a card still up, one that ran out for this very time, or one waiting for a name is the job's one.
         if self._due_cards(job, QUEUED, OPEN) or any(card.data.get(DUE_FOR) == for_time for card in self._due_cards(job, EXPIRED)):
             return True
-        return any(self._waiting_for_name(card, now) for card in self._due_cards(job, ANSWERED))
+        return any(self._waiting(card, now, AWAITING_NAME, AWAITING_TYPED) for card in self._due_cards(job, ANSWERED))
 
-    def _waiting_for_name(self, card: Card, at: datetime) -> bool:
-        since = card.data.get(AWAITING_NAME)
-        return bool(since) and at - datetime.fromisoformat(since) <= NAME_WINDOW
+    def _waiting(self, card: Card, at: datetime, *marks: str) -> bool:
+        # The asker was told what to do next, and has this long to do it before the card comes back.
+        return any(card.data.get(mark) and at - datetime.fromisoformat(card.data[mark]) <= NAME_WINDOW for mark in marks)
 
     def _due_line(self, item: Item, now: datetime) -> str:
         if item.answer is not None and not item.confirmed:
@@ -563,9 +641,10 @@ class Coordinator:
         if lines:
             lines.insert(0, INPUTS_HEADING)
         missing = going_without(items)
-        if missing:
-            what = "; ".join(f"{quiet(_one_line(item.input))}, from {quiet(_one_line(self._owner_name(item))) or NOBODY}" for item in missing)
-            lines.append(NOT_RECEIVED.format(what=what))
+        for template, left_out in ((NOT_USED, [item for item in missing if _unconfirmed(item)]), (NOT_RECEIVED, [item for item in missing if not _unconfirmed(item)])):
+            if left_out:
+                what = "; ".join(f"{quiet(_one_line(item.input))}, from {quiet(_one_line(self._owner_name(item))) or NOBODY}" for item in left_out)
+                lines.append(template.format(what=what))
         return "\n".join(lines)
 
     # --- what the buttons on those cards do ---
@@ -661,35 +740,54 @@ class Coordinator:
                 raise
 
     def _ask_for_a_name(self, card: Card, items: list[Item], now: datetime) -> None:
+        item = items[0]
+        owner = quiet(_one_line(item.owner_name)) or NOBODY
+        if len(items) > 1:
+            # Which one is meant can't be told from a name, so nothing waits for one. The typed way to hand one over names both people.
+            self.cards.note(card.request_id, **{AWAITING_TYPED: now.isoformat()})
+            self.client.post_message(card.room_id, ASK_INSTEAD.format(owner=owner))
+            return
         self.cards.note(card.request_id, **{AWAITING_NAME: now.isoformat()})
-        owners = list(dict.fromkeys(quiet(_one_line(item.owner_name)) or NOBODY for item in items))
-        what = list(dict.fromkeys(quiet(_one_line(item.input)) for item in items))
-        self.client.post_message(card.room_id, WHO_INSTEAD.format(owners=_join(owners, "and"), what=_join(what, "and")))
+        self.client.post_message(card.room_id, WHO_INSTEAD.format(owner=owner, what=quiet(_one_line(item.input))))
+
+    def _open_ran_out_cards_again(self, burst: Burst, bucket: str) -> None:
+        # A due card that ran out leaves the job on hold. The asker writing in its room, or asking where things stand, within a day of that, opens it again, as for a voice note.
+        asking = might_be_status(burst.text) and is_short_ask(burst.text)
+        now, again = self.clock(), []
+        for card in self.cards.find(burst.sender, bucket, Trigger.DUE, EXPIRED):
+            job = self._job_by_id(card.job_id)
+            since = card.data.get("ran_out_at")
+            if job is None or job.state is not State.COLLECTING or not since or now - datetime.fromisoformat(since) > RAN_OUT_WINDOW:
+                continue
+            if (card.room_id == burst.room_id or asking) and self._still_open(card) and not self._due_cards(job, QUEUED, OPEN):
+                again.append(card)
+        for card in again:
+            self.cards.ask_again(card.request_id)
+            self.client.post_message(card.room_id, DUE_OPENED_AGAIN.format(title=card.title))
+        if again:
+            self.cards.pump()
 
     def _name_given(self, burst: Burst, bucket: str) -> bool:
         for card in reversed(self.cards.find(burst.sender, bucket, Trigger.DUE, ANSWERED)):
-            if card.room_id == burst.room_id and self._waiting_for_name(card, burst.first_at):
+            if card.room_id == burst.room_id and self._waiting(card, burst.first_at, AWAITING_NAME):
                 return self._ask_the_named(card, burst)
         return False
 
     def _ask_the_named(self, card: Card, burst: Burst) -> bool:
+        # Taken as a name only if it is someone who has written in this business. Anything else ends the wait and goes on as the ordinary message it is.
         name = _one_line(burst.text)
         writer = _writer_named(self._writers(card.bucket), name)
-        # Someone nobody has heard from is still a name, but a sentence is not one.
-        if writer is None and len(name.split()) > MOST_NAME_WORDS:
-            return False
-        job, items, now = self._job_by_id(card.job_id), self._still_open(card), self.clock()
+        job, items = self._job_by_id(card.job_id), self._still_open(card)
         self.cards.note(card.request_id, **{AWAITING_NAME: None})
-        if job is None or job.state is not State.COLLECTING or not items:
+        if writer is None or job is None or job.state is not State.COLLECTING or len(items) != 1 or writer.sender == items[0].owner:
             return False
-        for item in items:
-            if writer is None or writer.sender != item.owner:
-                self._swap_owner(job, item, name, writer, burst.room_id)
+        self._swap_owner(job, items[0], name, writer, burst.room_id)
         return True
 
     def _go_without(self, card: Card, job: Job, items: list[Item]) -> None:
         # Said before the items close, because closing the last one starts the makers.
-        self._flag(job.id, [MISSING_INPUT.format(input=item.input, owner=self._owner_name(item) or NOBODY) for item in items])
+        # An answer that was heard by voice and never confirmed was not "not received", so it is not called that.
+        self._flag(job.id, [(MISSING_UNCONFIRMED if _unconfirmed(item) else MISSING_INPUT).format(input=item.input, owner=self._owner_name(item) or NOBODY) for item in items])
         what = list(dict.fromkeys(quiet(_one_line(item.input)) for item in items))
         self.client.post_message(card.room_id, WITHOUT_NOTED.format(what=_join(what, "and")))
         for item in items:
@@ -711,7 +809,9 @@ class Coordinator:
         if not self.settings.is_internal(burst.room_id):
             return False
         bucket = self.settings.bucket_for(burst.room_id)
-        # After "Ask someone else", the asker's next words name the person. Code matches them, and no model reads them.
+        # The asker is back, so a due card that ran out opens again. What they wrote is still read below.
+        self._open_ran_out_cards_again(burst, bucket)
+        # After "Ask someone else" on a card listing one input, the asker's next words name the person. Code matches them, and no model reads them.
         if self._name_given(burst, bucket):
             return True
         open_here, own = self.items.open_in(bucket), self._own_items(burst.sender, bucket)
@@ -778,6 +878,8 @@ class Coordinator:
             return self._ask_which(heard, pool)
         burst = heard.burst
         self._give_reason(item, heard.reading.reason or "", burst.first_at, burst.room_id, burst.sender)
+        # They have said something, so the reminder card is about nothing, and it would hold up their next card for hours.
+        self._settle_cards(item, Trigger.REMINDER)
         self.client.post_message(burst.room_id, REASON_NOTED)
         return True
 
@@ -832,6 +934,7 @@ class Coordinator:
         for item in items:
             item.reason = reason
             self.items.save(item)
+            self._settle_cards(item, Trigger.REMINDER)
         self.log.add(burst.first_at, heard.bucket, burst.room_id, who, "availability", away, sender_name=name, job_id=job_id, ref=reading.until.isoformat() if reading.until else None)
         self.client.post_message(burst.room_id, AWAY_NOTED.format(name=quiet(name), away=away))
         return True
@@ -971,22 +1074,23 @@ class Coordinator:
             self.log.add(at, item.bucket, room_id, by, "item_passed_on", said, sender_name=self._name_of(by, item.bucket), job_id=item.job_id, item_id=item.id, ref=str(entry.id))
         item.state = ItemState.PASSED_ON if by is not None else ItemState.ANSWERED
         item.answer, item.answer_entry, item.confirmed = value, entry.id, confirmed
+        self.items.save(item)
+        if job is not None:
+            lines = self._checks(job, item, value, previous, confidence, said if typed else None, key)
+            if not confirmed:
+                lines.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value))
+            if replaced is not None and _differ(replaced, value) and job.state in STARTED:
+                lines.append(CHANGED_AFTER_START.format(owner=self._owner_name(item), input=item.input, old=replaced, new=value))
+                self._tell_asker(job, item, replaced, value)
+            # Once it is confirmed, or replaced, the lines saying it was not no longer hold.
+            stale = []
+            if confirmed and replaced is not None:
+                stale.append(NEWER_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value, old=replaced))
+            if confirmed and was_unconfirmed:
+                stale.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=replaced))
+            self._flag(item.job_id, lines, stale)
+        # Last, because it may start the makers, and asking them can fail. The answer and its checks are kept either way.
         self._close(item)
-        if job is None:
-            return
-        lines = self._checks(job, item, value, previous, confidence, said if typed else None, key)
-        if not confirmed:
-            lines.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value))
-        if replaced is not None and _differ(replaced, value) and job.state in STARTED:
-            lines.append(CHANGED_AFTER_START.format(owner=self._owner_name(item), input=item.input, old=replaced, new=value))
-            self._tell_asker(job, item, replaced, value)
-        # Once it is confirmed, or replaced, the lines saying it was not no longer hold.
-        stale = []
-        if confirmed and replaced is not None:
-            stale.append(NEWER_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value, old=replaced))
-        if confirmed and was_unconfirmed:
-            stale.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=replaced))
-        self._flag(item.job_id, lines, stale)
 
     def _flag(self, job_id: str, lines: list[str], drop: Iterable[str] = ()) -> None:
         # The job is read afresh, because closing the item may have started the makers and saved the job since the caller read it.
