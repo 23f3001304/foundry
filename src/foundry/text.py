@@ -8,6 +8,15 @@ def quiet(text: str | None) -> str:
     return (text or "").replace("@", "@\u200b")
 
 
+MOST_HEADLINE_CHARS = 80
+CUT_SHORT = "..."
+
+
 def headline(text: str) -> str:
     line = re.sub(r"[*_`#]", "", text.strip().splitlines()[0]).strip()
-    return line.removeprefix("What is being made:").strip()[:80]
+    line = line.removeprefix("What is being made:").strip()
+    if len(line) <= MOST_HEADLINE_CHARS:
+        return line
+    # Cut on a whole word, because it goes in the middle of a sentence as often as on a card.
+    cut = line[: MOST_HEADLINE_CHARS - len(CUT_SHORT)]
+    return f"{(cut.rsplit(' ', 1)[0] if ' ' in cut else cut).rstrip(' ,;:')}{CUT_SHORT}"
