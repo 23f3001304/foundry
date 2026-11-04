@@ -120,7 +120,7 @@ def status_line(items: list[Item]) -> str:
     open_items = [item for item in items if item.state is ItemState.OPEN]
     # A voice answer nobody has confirmed yet is neither silence nor an answer.
     heard = [item for item in open_items if item.answer is not None and not item.confirmed]
-    parts += [f'{quiet(item.owner_name)} said "{quiet(item.reason)}"' for item in open_items if item.reason and item not in heard]
+    parts += dict.fromkeys(f'{quiet(item.owner_name)} said "{quiet(item.reason)}"' for item in open_items if item.reason and item not in heard)
     if heard:
         parts.append(f"waiting for {_names(list(dict.fromkeys(quiet(item.owner_name) for item in heard)))} to confirm what Foundry heard")
     silent = [quiet(item.owner_name) if item.owner_name else f"whoever owes {quiet(item.input)}" for item in open_items if not item.reason and item not in heard]
