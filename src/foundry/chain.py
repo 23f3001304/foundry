@@ -155,7 +155,7 @@ def _same_value(first: str, second: str) -> bool:
 
 
 def source_line(links: Iterable[Link]) -> str:
-    return SOURCE_LINE.format(parts="; ".join(f"{link.value} from {link.label}" for link in links))
+    return SOURCE_LINE.format(parts="; ".join(dict.fromkeys(f"{link.value} from {link.label}" for link in links)))
 
 
 def without_times_in_source_lines(text: str, links: list[Link]) -> str:
