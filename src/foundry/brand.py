@@ -15,9 +15,32 @@ COLOURS = ("primary", "accent", "ink", "paper")
 DEFAULT_PAPER, DEFAULT_INK = "#FFFFFF", "#222222"
 
 
+# Most of a value that is shown back in an error. The kit is somebody's file, so what is in it is never quoted at length.
+MOST_QUOTED = 30
+MOST_SHOWN = 200
+ALIASES = "The brand kit can't use YAML aliases (&name and *name). Write each value out."
+TOO_DEEP = "The brand kit's front matter is nested too deeply."
+LOGO = "logo.png"
+
+
 class BrandError(ToolError):
     # A ToolError, so a maker whose tool cannot read the brand folder is shown why. A plain exception reaches it only as "Error executing tool".
     pass
+
+
+class _NoAliases(yaml.SafeLoader):
+    # A few hundred bytes of aliases can stand for gigabytes once they are read out, and a kit has no use for them.
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.events.AliasEvent):
+            raise BrandError(ALIASES)
+        return super().compose_node(parent, index)
+
+
+def _words(value: object, what: str) -> str:
+    # Every maker, check and sticker uses these as text, so a number or a list is stopped here and not found later by whatever reads it.
+    if not isinstance(value, str):
+        raise BrandError(f"The brand kit's {what} must be words, not a number or a list.")
+    return value
 
 
 @dataclass
@@ -40,34 +63,45 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
     match = FRONT_MATTER.match(text)
     tokens, guidance = (match.group(1), match.group(2) or "") if match else (text, "")
     try:
-        data = yaml.safe_load(tokens)
+        data = yaml.load(tokens, Loader=_NoAliases)
     except yaml.YAMLError as error:
-        raise BrandError(f"The brand kit's front matter is not valid: {error}") from error
+        raise BrandError(f"The brand kit's front matter is not valid: {str(error)[:MOST_SHOWN]}") from error
+    except RecursionError:
+        raise BrandError(TOO_DEEP) from None
     if not isinstance(data, dict):
         raise BrandError("The brand kit's front matter must list its fields.")
     missing = [field for field in REQUIRED if not data.get(field)]
     if missing:
         raise BrandError(f"The brand kit is missing: {', '.join(missing)}")
+    name, voice = _words(data["name"], "name"), _words(data["voice"], "voice")
     colours = data["colors"]
-    for name in COLOURS:
-        if name in colours or name == "primary":
-            if not HEX_COLOUR.fullmatch(str(colours.get(name, ""))):
-                raise BrandError(f"The brand kit needs a {name} colour like #7A3E1D, not {colours.get(name)!r}")
+    if not isinstance(colours, dict):
+        raise BrandError('The brand kit\'s colors must list names and colours, like primary: "#7A3E1D".')
+    for colour in COLOURS:
+        if colour in colours or colour == "primary":
+            value = colours.get(colour)
+            if not isinstance(value, str) or not HEX_COLOUR.fullmatch(value):
+                shown = f", not {value[:MOST_QUOTED]!r}" if isinstance(value, str) else ""
+                raise BrandError(f"The brand kit needs a {colour} colour like #7A3E1D{shown}")
     colours.setdefault("accent", colours["primary"])
     colours.setdefault("paper", DEFAULT_PAPER)
     colours.setdefault("ink", DEFAULT_INK)
     fonts = data["fonts"]
-    if not fonts.get("heading") or not fonts.get("body"):
+    if not isinstance(fonts, dict) or not all(isinstance(fonts.get(role), str) and fonts[role].strip() for role in ("heading", "body")):
         raise BrandError("The brand kit's fonts need a heading and a body.")
-    logo_path = Path(assets_dir) / "logo.png"
+    # Left out, or left blank, these are nothing and the ordinary look. Anything else has to be words.
+    style = "band" if data.get("style") is None else _words(data["style"], "style")
+    business_type = "" if data.get("business_type") is None else _words(data["business_type"], "business_type")
+    logo_path = Path(assets_dir) / LOGO
     if not logo_path.exists():
-        raise BrandError(f"The brand kit has no logo at {logo_path}")
-    return Brand(data["name"], data["colors"], data["fonts"], data["voice"], logo_path, guidance.strip(), data.get("style", "band"), data.get("business_type", ""))
+        raise BrandError(f"The brand kit has no {LOGO} in its folder.")
+    return Brand(name, colours, fonts, voice, logo_path, guidance.strip(), style, business_type)
 
 
 def load_brand_dir(brand_dir: Path | str) -> Brand:
     folder = Path(brand_dir)
     kit = folder / "kit.md"
     if not kit.exists():
-        raise BrandError(f"There is no kit.md in {folder}")
+        # The brand's name and not where it is kept, since this reaches pages and the makers.
+        raise BrandError(f"There is no kit.md in the {folder.name} brand folder.")
     return load_brand(kit.read_text(encoding="utf-8"), folder)

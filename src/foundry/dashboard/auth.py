@@ -9,6 +9,8 @@ import httpx
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from starlette.requests import Request
 
+from foundry.text import same_login
+
 if TYPE_CHECKING:
     from foundry.desk import Settings
 
@@ -35,10 +37,6 @@ class Session:
     expires: datetime
 
 
-def same_login(text: object) -> str:
-    return str(text or "").strip().casefold()
-
-
 def businesses_for(settings: "Settings", login: str) -> dict[str, str]:
     # Read from each pack's dashboard list. An entry that doesn't name both a login and who it acts as counts for nobody.
     wanted, found = same_login(login), {}
@@ -53,7 +51,8 @@ def businesses_for(settings: "Settings", login: str) -> dict[str, str]:
 
 
 async def switch_login(switch_url: str, transport: httpx.AsyncBaseTransport | None, login: str, password: str) -> dict[str, str]:
-    async with httpx.AsyncClient(base_url=switch_url, transport=transport, timeout=15) as switch:
+    # trust_env off: a proxy named in the environment is never sent a password, whatever Switch's address is.
+    async with httpx.AsyncClient(base_url=switch_url, transport=transport, timeout=15, trust_env=False) as switch:
         reply = await switch.post(LOGIN_PATH, json={"email": login, "password": password})
     reply.raise_for_status()
     return dict(reply.cookies.items())

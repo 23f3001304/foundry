@@ -21,7 +21,7 @@ from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, I
 from foundry.chain import Link, carries, flag, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines
 from foundry.checks import calculations, entry_words, file_text, needs_attention, people_words, shown_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date
-from foundry.brand import HEX_COLOUR, BrandError
+from foundry.brand import HEX_COLOUR
 from foundry.commands import (
     ANSWERED_HERE,
     APPROVE,
@@ -31,8 +31,11 @@ from foundry.commands import (
     JOB_APPROVALS,
     LABELS,
     LOG_ANSWERED,
+    CANT_READ_ALL,
     LOG_CHANGED,
+    LOG_CHANGED_BUT,
     LOG_FLAGGED,
+    LOG_NOT_READ,
     LOG_RELOADED,
     LOG_RESTARTED,
     NO_DUE_CARD,
@@ -41,7 +44,9 @@ from foundry.commands import (
     NOT_A_CHOICE,
     NOT_FOR_YOU,
     NOT_IN_THIS_JOB,
+    NOT_LISTED,
     NOT_OPEN,
+    NOT_READ,
     NOT_STUCK,
     NOT_THE_APPROVER,
     NOT_THIS_CLIENT,
@@ -53,7 +58,7 @@ from foundry.commands import (
     Command,
     CommandStore,
     Refused,
-    is_data_file,
+    changed_file,
     outcome_for,
     still_waits_on,
 )
@@ -412,14 +417,18 @@ class Desk:
                 continue
             if job.state not in (State.RECEIVED, State.MAKING, State.REVIEWING):
                 continue
-            with _give_up_if_room_is_gone(f"job {job.id}"):
-                if job.state is State.RECEIVED:
-                    # No brief has been approved, so there is nothing a person could restart yet.
-                    job.asked_at = None
-                    self.client.post_message(job.room_id, NO_BRIEF)
-                else:
-                    self._stop(job, f"Nobody on the team has answered for {self.settings.work_timeout_minutes} minutes.")
-            self.store.save(job)
+            try:
+                with _give_up_if_room_is_gone(f"job {job.id}"):
+                    if job.state is State.RECEIVED:
+                        # No brief has been approved, so there is nothing a person could restart yet.
+                        job.asked_at = None
+                        self.client.post_message(job.room_id, NO_BRIEF)
+                    else:
+                        self._stop(job, f"Nobody on the team has answered for {self.settings.work_timeout_minutes} minutes.")
+                self.store.save(job)
+            except Exception:
+                # One job's trouble must not keep the others from being looked at, or the rest of the tick from running.
+                logger.exception("Could not stop job %s, so it comes round again on the next tick.", job.id)
 
     def on_agent_message(self, event: dict) -> None:
         payload = event["payload"]
@@ -728,7 +737,8 @@ class Desk:
         try:
             if brand:
                 return branded_sticker(event, self.settings.sticker_mode, BRANDS / brand)
-        except (OSError, BrandError) as error:
+        except Exception as error:
+            # Not only a kit that can't be read. A sticker must never stop work, whatever is wrong with it.
             logger.warning("Could not brand the %s sticker: %s", event, error)
         return sticker_for(event, self.settings.sticker_mode)
 
@@ -1612,14 +1622,23 @@ class Desk:
         rooms = [room for room in self.settings.packs if room in self.settings.brands and self.settings.bucket_for(room) == bucket]
         if not rooms:
             raise Refused(NO_PACK_TO_READ)
+        # The route checks this too, and so does the desk, since a command is only a row in a file. The login has to be one the client's own pack lists, as the identity it asks as.
+        if not any(self.settings.packs[room].lists(command.login, command.acts_as) for room in rooms):
+            raise Refused(NOT_LISTED)
+        # The file is named only when it is one the dashboard can change, since it came in a command.
+        what = changed_file(command.payload)
         try:
             fresh = {room: load_pack(BRANDS / self.settings.brands[room]) for room in rooms}
-        except PackError as error:
-            raise Refused(str(error)) from None
+        except Exception as error:
+            # The file is changed whether or not the pack can be read again, so the change is logged either way, with how it went.
+            if not isinstance(error, PackError):
+                logger.exception("Could not read the pack for %s again after a change on the dashboard.", bucket)
+            why = quiet(str(error) if isinstance(error, PackError) else CANT_READ_ALL)
+            text = LOG_CHANGED_BUT.format(what=what, why=why, via=VIA_DASHBOARD) if what else LOG_NOT_READ.format(why=why, via=VIA_DASHBOARD)
+            self._log_dashboard(command, bucket, self.settings.home_room(bucket), text, None, None)
+            raise Refused(str(error) if isinstance(error, PackError) else NOT_READ) from None
         self.settings.packs.update(fresh)
-        # The file is named only when it is one the dashboard can change, since it came in a command.
-        file = command.payload.get("file")
-        text = LOG_CHANGED.format(file=file, via=VIA_DASHBOARD) if is_data_file(file) else LOG_RELOADED.format(via=VIA_DASHBOARD)
+        text = LOG_CHANGED.format(what=what, via=VIA_DASHBOARD) if what else LOG_RELOADED.format(via=VIA_DASHBOARD)
         self._log_dashboard(command, bucket, self.settings.home_room(bucket), text, None, None)
 
     def _job_named(self, command: Command) -> Job:

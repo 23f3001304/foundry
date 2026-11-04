@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+from foundry.text import same_login
+
 DEFAULT_SET_TIMES = ("10:00", "18:00")
 
 
@@ -57,6 +59,13 @@ class Pack:
     ask_again_hours: int = 24
     measures: tuple[str, ...] = ()
     dashboard: tuple[dict, ...] = ()
+
+    def lists(self, login: str, acts_as: str) -> bool:
+        # Whether the dashboard list names this login, acting as this identity. Both sides are matched as the dashboard matches them.
+        wanted, identity = same_login(login), str(acts_as or "").strip()
+        return bool(wanted and identity) and any(
+            isinstance(listed, dict) and same_login(listed.get("login")) == wanted and str(listed.get("acts_as") or "").strip() == identity for listed in self.dashboard
+        )
 
     def __post_init__(self) -> None:
         # Refused here, when the desk starts. Left alone, a typo would raise on every tick.

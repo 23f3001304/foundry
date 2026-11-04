@@ -12,7 +12,7 @@ from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, ONE_BY_ONE, OPE
 from foundry.cards import COLUMNS as CARD_COLUMNS
 from foundry.checks import shown_words
 from foundry.chain import LINK_MARK, SAID, NotFlagged, Step, chain_for, name_of, names
-from foundry.commands import CLAIMED, DUE_ACTIONS, JOB_APPROVALS, LABELS, Command, CommandStore, is_data_file, still_waits_on
+from foundry.commands import CLAIMED, DUE_ACTIONS, JOB_APPROVALS, KIT, LABELS, Command, CommandStore, is_data_file, still_waits_on
 from foundry.dashboard import data as brand_data
 from foundry.dashboard.auth import User
 from foundry.dashboard.gateway import Bridge, Room
@@ -117,6 +117,7 @@ NOT_RUNNING = "Not running (Switch says: {status})"
 NO_CONNECTION = "No connection to show."
 NOT_ALL_YOURS = "It also has rooms Foundry doesn't link to a business, and removing it would delete those too. Use Switch's Gateway if you mean to."
 CANT_SEE_ALL = "Foundry can only see some of the rooms on it, so it can't say what removing it would delete. Use Switch's Gateway if you mean to."
+SHARED = "Other businesses use this connection too, so only its health is shown here. Use Switch's Gateway to change it."
 
 
 # How long a page waits for a database the desk is writing. Short, so a locked file shows a plain page and doesn't hold everything else up.
@@ -307,13 +308,19 @@ class ConnectionRow:
     kind: str
     state: str
     healthy: bool
+    # The names of this login's rooms on it, and nobody else's.
     rooms: list[str]
+    # How many rooms Switch says are on it in all, and how many of them are not listed above: other rooms Foundry doesn't link to a business, or can't see.
+    room_total: int
+    unlisted: int
     # The businesses it serves, as buckets and as the names shown.
     serves: tuple[str, ...]
     clients: str
     removable: bool
     # Why it can't be removed here, when it can't.
     why_not: str
+    # Other businesses use it too. Then only its health is shown: no rooms, no counts, and no way to remove it.
+    shared: bool
 
 
 @dataclass
@@ -329,6 +336,7 @@ class ClientData:
     client: str
     link: str
     has_folder: bool
+    has_kit: bool
     files: list[DataFile]
 
 
@@ -678,31 +686,41 @@ class Reader:
 
     # Connections
 
-    def _business_of(self, room_id: str) -> str:
-        # A client's studio and review rooms are the client's, whether or not they are named in a pack.
-        inside = {room: outside for outside, rooms in self.settings.workrooms.items() for room in (rooms.studio, rooms.review)}
-        return self.settings.bucket_for(inside.get(room_id, room_id))
+    def _owners(self, room_id: str) -> set[str]:
+        # Every business a room is the room of. A client's studio and review rooms are the client's, whether or not a pack names them, and a room two clients share is both's.
+        settings = self.settings
+        outsides = [outside for outside, rooms in settings.workrooms.items() if room_id in (rooms.studio, rooms.review) and outside != room_id]
+        own = {settings.bucket_for(room_id)} if room_id in settings.brands or room_id in settings.packs or not outsides else set()
+        return own | {settings.bucket_for(outside) for outside in outsides}
 
     def connections(self, user: User, bridges: list[Bridge], rooms: list[Room]) -> list[ConnectionRow]:
-        # A connection belongs to no business by itself, so it is told from the rooms on it. It is this login's only when it has a room of one of its businesses and none of anyone else's.
+        # A connection belongs to no business by itself, so it is told from the rooms on it. A room counts as this login's only when every business it is the room of is one the login manages.
+        # A connection with a room of this login's is shown. It can be removed only if every room on it is this login's and Foundry can see them all. If other businesses' rooms are on it too, only its health is shown.
         known = set(self.settings.brands) | set(self.settings.packs) | set(self.settings.all_rooms())
         found = []
         for bridge in bridges:
             on = [room for room in rooms if room.bridge_id == bridge.id]
-            owners = {room.id: self._business_of(room.id) for room in on if room.id in known}
-            mine = [room for room in on if owners.get(room.id) in user.businesses]
-            if not mine or any(room.id in owners and owners[room.id] not in user.businesses for room in on):
+            owners = {room.id: self._owners(room.id) for room in on if room.id in known}
+            mine = [room for room in on if owners.get(room.id) and owners[room.id] <= user.businesses.keys()]
+            if not mine:
                 continue
-            # Removing it deletes every room on it, so it can only be removed when every one of them is this login's and Foundry can see all of them.
+            others = any(room.id in owners and not owners[room.id] <= user.businesses.keys() for room in on)
             unlinked = any(room.id not in owners for room in on)
-            why_not = NOT_ALL_YOURS if unlinked else CANT_SEE_ALL if bridge.rooms != len(on) else ""
+            total = bridge.rooms if bridge.rooms is not None else len(on)
+            why_not = SHARED if others else NOT_ALL_YOURS if unlinked else CANT_SEE_ALL if bridge.rooms != len(on) else ""
             healthy = bridge.status == "active" and not bridge.attention
-            serves = tuple(dict.fromkeys(owners[room.id] for room in mine))
+            serves = tuple(dict.fromkeys(bucket for room in mine for bucket in sorted(owners[room.id])))
             if bridge.attention:
                 state = NEEDS_ATTENTION.format(what=bridge.attention)
             else:
                 state = RUNNING if healthy else NOT_RUNNING.format(status=bridge.status or "unknown")
-            found.append(ConnectionRow(bridge.id, quote(bridge.id, safe=""), bridge.name, bridge.type or "unknown", state, healthy, [room.name for room in on], serves, ", ".join(bucket_name(bucket) for bucket in serves), not why_not, why_not))
+            names = [] if others else [room.name for room in mine]
+            found.append(
+                ConnectionRow(
+                    bridge.id, quote(bridge.id, safe=""), bridge.name, bridge.type or "unknown", state, healthy, names, 0 if others else total, 0 if others else max(total - len(mine), 0),
+                    serves, ", ".join(bucket_name(bucket) for bucket in serves), not why_not, why_not, others,
+                )
+            )
         return found
 
     def health(self, user: User, rows: list[ConnectionRow]) -> dict[str, str]:
@@ -723,7 +741,7 @@ class Reader:
         for bucket in user.businesses:
             folder = brand_data.folder_for(self.settings, bucket)
             files = [DataFile(item.file, item.kind, item.changed) for item in brand_data.items(folder)] if folder else []
-            found.append(ClientData(bucket, bucket_name(bucket), quote(bucket, safe=""), folder is not None, files))
+            found.append(ClientData(bucket, bucket_name(bucket), quote(bucket, safe=""), folder is not None, any(file.file == KIT for file in files), files))
         return found
 
     def data_folder(self, user: User, bucket: str) -> Path | None:

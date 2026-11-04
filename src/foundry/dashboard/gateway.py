@@ -17,14 +17,17 @@ GATEWAY = "/gateway"
 READ_TIMEOUT = 5
 # Adding a connection makes Switch check the credentials with the chat app, and removing one deletes its rooms one by one.
 WRITE_TIMEOUT = 30
-# The test Switch Console uses to mask a field as it is typed.
-SECRET_FIELD = re.compile(r"token|password|secret|api[_-]?key|private[_-]?key|credential", re.I)
+# Switch Console's test for a field to mask as it is typed, with the other names a secret goes by.
+SECRET_FIELD = re.compile(r"token|passw|pwd|passphrase|secret|credential|cookie|bearer|jwt|signing|auth|(^|[_-])key($|[_-])|api[_-]?key|private[_-]?key", re.I)
 # All that is read about a connection or a room. Whatever else Switch sends is dropped, so a secret in a reply can't reach a page.
 LISTED = ("bridge_id", "bridge_type", "display_name", "status", "attention", "room_count")
 ROOMS_LISTED = ("id", "name", "bridge_id")
 MOST_DETAIL = 300
-# How much of a typed secret, in a row, counts as Switch having quoted it back.
-ECHO_WINDOW = 8
+# How much of a typed secret, in a row, counts as Switch having quoted it back. Only letters and numbers are compared, whatever their case.
+ECHO_WINDOW = 6
+# A reply that hides most of a secret and shows its two ends is quoting it too. Four are enough to tell.
+ECHO_END = 4
+MASK = re.compile(r"\.{2,}|\u2026|\*{2,}|\u2022|x{3,}", re.I)
 
 SWITCH_DOWN = "Foundry can't reach Switch. Check that it is running, then try again."
 SIGNED_OUT = "Switch no longer accepts your sign-in. Sign out, then sign in again."
@@ -32,15 +35,23 @@ NOT_ALLOWED = "Switch says your login isn't allowed to change connections. A Swi
 TROUBLE = "Switch had a problem with that. Try again in a moment."
 NOT_ACCEPTED = "Switch did not accept those details. Check them and enter them again."
 GONE = "Switch no longer has that connection."
+# Looking is not changing, so a refusal to show something is not told as a form filled in wrong or a change a login may not make.
+READ_NOT_ALLOWED = "Switch says your login isn't allowed to see its connections."
+READ_REFUSED = "Switch would not give that list just now. Try again in a moment."
+# A write that may have got part of the way. Switch deletes a connection's rooms one by one and then the connection, so nothing is said to be undone or not done.
 PART_WAY = "Switch had a problem part-way and may have deleted some rooms. Check its Gateway before you try again."
+DELETE_LOST = "Foundry lost touch with Switch part-way, so it may have deleted some rooms. Check its Gateway before you try again."
+ADD_TROUBLE = "Switch had a problem with that, and the connection may have been added. Check its Gateway before you try again."
+ADD_LOST = "Foundry lost touch with Switch part-way, so the connection may have been added. Check its Gateway before you try again."
 
 
 class SwitchProblem(Exception):
     """Switch didn't do it. The text is what the page says, and the status is what the page answers with."""
 
-    def __init__(self, status: int, message: str) -> None:
+    def __init__(self, status: int, message: str, unsure: bool = False) -> None:
         super().__init__(message)
-        self.status, self.message = status, message
+        # Unsure: the change may have been made, so the page does not offer the same form again.
+        self.status, self.message, self.unsure = status, message, unsure
 
 
 @dataclass(frozen=True)
@@ -91,16 +102,26 @@ def scrub(item: object, listed: Sequence[str] = LISTED) -> dict:
 
 def open_gateway(request: Request, timeout: float) -> httpx.AsyncClient:
     found = find_session(request)
-    return httpx.AsyncClient(base_url=request.app.state.switch_url, transport=request.app.state.transport, cookies=found[1].cookies if found else {}, timeout=timeout)
+    # trust_env off: the login's cookie and a token typed here go to the Switch the dashboard was started for, never to a proxy the environment happens to name.
+    return httpx.AsyncClient(base_url=request.app.state.switch_url, transport=request.app.state.transport, cookies=found[1].cookies if found else {}, timeout=timeout, trust_env=False)
+
+
+def squash(text: str) -> str:
+    return re.sub(r"[^0-9a-z]", "", text.casefold())
 
 
 def echoes(text: str, secrets: Sequence[str]) -> bool:
-    # Any stretch of a typed secret, so a copy that is quoted, cut short or masked is caught as well as a whole one.
-    for secret in secrets:
-        if len(secret) < ECHO_WINDOW:
-            if secret and secret in text:
+    # Any stretch of a typed secret, however it is cut, cased or spaced, and its two ends when the middle is hidden. A whole copy is the least of it.
+    flat, hidden = squash(text), MASK.search(text) is not None
+    for secret in map(squash, secrets):
+        if not secret:
+            continue
+        if len(secret) <= ECHO_WINDOW:
+            if secret in flat:
                 return True
-        elif any(secret[start : start + ECHO_WINDOW] in text for start in range(len(secret) - ECHO_WINDOW + 1)):
+        elif any(secret[start : start + ECHO_WINDOW] in flat for start in range(len(secret) - ECHO_WINDOW + 1)):
+            return True
+        elif hidden and len(secret) >= 2 * ECHO_END and (secret[:ECHO_END] in flat or secret[-ECHO_END:] in flat):
             return True
     return False
 
@@ -117,29 +138,37 @@ def plain_detail(answer: httpx.Response, secrets: Sequence[str]) -> str | None:
     return None if not detail or len(detail) > MOST_DETAIL or echoes(detail, secrets) else detail
 
 
-def problem_for(answer: httpx.Response, secrets: Sequence[str], missing: str | None, trouble: str) -> SwitchProblem:
+def problem_for(answer: httpx.Response, secrets: Sequence[str], missing: str | None, trouble: str, writing: bool) -> SwitchProblem:
     code = answer.status_code
     if code == 401:
         return SwitchProblem(401, SIGNED_OUT)
     if code == 403:
-        return SwitchProblem(403, NOT_ALLOWED)
+        return SwitchProblem(403, NOT_ALLOWED if writing else READ_NOT_ALLOWED)
     if code == 404 and missing:
         return SwitchProblem(404, missing)
     if 400 <= code < 500 and code != 404:
-        return SwitchProblem(400, plain_detail(answer, secrets) or NOT_ACCEPTED)
-    return SwitchProblem(502, trouble)
+        # Only what a person typed can be wrong in a way they can fix, so a read that is refused is not told that way.
+        return SwitchProblem(400, (plain_detail(answer, secrets) or NOT_ACCEPTED) if writing else READ_REFUSED)
+    # Anything else, a redirect included, is not a change that worked. After a write it may have got part of the way.
+    return SwitchProblem(502, trouble, unsure=writing)
 
 
-async def ask(switch: httpx.AsyncClient, method: str, path: str, secrets: Sequence[str] = (), missing: str | None = None, trouble: str = TROUBLE, **options) -> httpx.Response:
-    # Nothing about the request goes in a log or an error, because it may hold a token.
+async def ask(
+    switch: httpx.AsyncClient, method: str, path: str, secrets: Sequence[str] = (), missing: str | None = None, trouble: str = TROUBLE, lost: str = TROUBLE, **options
+) -> httpx.Response:
+    # Nothing about the request goes in a log or an error, because it may hold a token. Nor does anything Switch said back.
+    writing = method != "GET"
     try:
         answer = await switch.request(method, GATEWAY + path, **options)
-    except httpx.HTTPError:
+    except httpx.HTTPError as error:
         logger.warning("Could not reach Switch for %s %s.", method, path)
+        # Failing to connect means nothing was sent. Any other failure may have come after Switch began.
+        if writing and not isinstance(error, httpx.ConnectError | httpx.ConnectTimeout):
+            raise SwitchProblem(502, lost, unsure=True) from None
         raise SwitchProblem(503, SWITCH_DOWN) from None
-    if answer.is_error:
+    if not answer.is_success:
         logger.warning("Switch answered %s to %s %s.", answer.status_code, method, path)
-        raise problem_for(answer, secrets, missing, trouble)
+        raise problem_for(answer, secrets, missing, trouble, writing)
     return answer
 
 
@@ -175,12 +204,17 @@ def humanize(key: str) -> str:
     return key.replace("_", " ").capitalize()
 
 
+def masked(schema: dict) -> bool:
+    # Switch marks a secret by its format, or as one that can be written and never read back.
+    return schema.get("format") == "password" or schema.get("writeOnly") is True
+
+
 def field_of(key: str, schema: dict, required: bool) -> Field:
     # What Switch sends is Pydantic's JSON schema, where an optional yes/no field is an anyOf and has no type of its own.
     variants = schema.get("anyOf") if isinstance(schema.get("anyOf"), list) else []
     kind = schema.get("type") or next((variant.get("type") for variant in variants if isinstance(variant, dict) and variant.get("type") not in (None, "null")), None)
     boolean = kind == "boolean"
-    secret = schema.get("format") == "password" or bool(SECRET_FIELD.search(key))
+    secret = bool(SECRET_FIELD.search(key)) or any(masked(part) for part in (schema, *(variant for variant in variants if isinstance(variant, dict))))
     return Field(key, str(schema.get("title") or humanize(key)), str(schema.get("description") or ""), required, secret, boolean, boolean and schema.get("default") is True)
 
 
@@ -218,8 +252,11 @@ def configuration(kind: BridgeType, form: Mapping) -> tuple[dict, list[str], lis
 
 async def add_bridge(switch: httpx.AsyncClient, kind: BridgeType, name: str, config: dict, secrets: Sequence[str]) -> None:
     body = {"bridge_type": kind.key, "display_name": name, "connection_config": config, "set_as_default": False, "channel_creation_enabled": kind.channels}
-    await ask(switch, "POST", "/collaborations", secrets, json=body)
+    await ask(switch, "POST", "/collaborations", secrets, trouble=ADD_TROUBLE, lost=ADD_LOST, json=body)
 
 
 async def delete_bridge(switch: httpx.AsyncClient, bridge_id: str) -> None:
-    await ask(switch, "DELETE", f"/collaborations/{quote(bridge_id, safe='')}", missing=GONE, trouble=PART_WAY)
+    # Quoting leaves dots alone, and an address that ends in .. is a step up from the one meant, so such an id is not a connection that can be asked for.
+    if bridge_id in (".", ".."):
+        raise SwitchProblem(404, GONE)
+    await ask(switch, "DELETE", f"/collaborations/{quote(bridge_id, safe='')}", missing=GONE, trouble=PART_WAY, lost=DELETE_LOST)

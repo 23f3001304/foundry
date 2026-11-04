@@ -2,7 +2,9 @@
 {% block main %}
 <h1>Add a connection</h1>
 {% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
-{% if chosen %}
+{% if unsure %}
+<p>Check <a href="{{ gateway_link }}">Switch's Gateway</a> before you add it again, so it isn't added twice. Anything secret you typed was not kept.</p>
+{% elif chosen %}
 <p class="lead">Adding a {{ chosen.name }} connection. Anything secret you type here goes straight to Switch. Foundry does not keep it, log it or show it again, so if Switch says no, enter it again.</p>
 <form class="stack" method="post" action="/connections/add" autocomplete="off">
   <input type="hidden" name="csrf" value="{{ csrf }}">

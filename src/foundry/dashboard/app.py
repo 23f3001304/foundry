@@ -51,14 +51,17 @@ ERRORS = {
     403: "You can't do that here.",
     404: "That page isn't here, or it belongs to someone else.",
     405: "That page doesn't take this.",
+    411: "That form needs a length, and this one had none, so nothing was done.",
     413: "That file is too big.",
 }
 MOST_STATEMENT = 200
 JOB_ACTIONS = ("restart", *DUE_ACTIONS)
 JOB_ANSWERS = ("approve", "revise")
 MOST_CHOICE = 300
-# A form with a file in it can be a little over the file's own limit. Anything bigger is refused before it is read.
-MOST_BODY = 1_000_000
+# A form with a file in it can be a little over the file's own limit. Anything bigger is refused before it is read, and so is one that doesn't say how big it is.
+MOST_BODY = brand_data.MOST_TABLE + 500_000
+# More digits than this is not a number a form could mean, and is cheap to refuse before it is read as one.
+MOST_DIGITS = 9
 MOST_NAME = 80
 NEEDS_NAME = "Give the connection a name."
 NAME_TOO_LONG = f"Use a name of {MOST_NAME} letters or fewer."
@@ -67,7 +70,7 @@ ROOMS_CHANGED = "The rooms on this connection changed since you looked, so nothi
 NOTICES = {
     "added": "The connection was added. It has no rooms yet, so it shows in this list once a room of yours uses it.",
     "removed": "The connection and the rooms on it were deleted.",
-    "saved": "Saved. The desk reads it again within a few seconds, and jobs that start after that use it.",
+    "saved": "Saved. The new file is used straight away, including on jobs already running. The agents' copy of the brand kit in Switch is not changed by this.",
 }
 
 Handler = Callable[..., Response | Awaitable[Response]]
@@ -75,7 +78,7 @@ Handler = Callable[..., Response | Awaitable[Response]]
 
 def whole_number(value: object) -> int | None:
     text = str(value or "")
-    return int(text) if text.isascii() and text.isdigit() else None
+    return int(text) if text.isascii() and text.isdigit() and len(text) <= MOST_DIGITS else None
 
 
 def render(request: Request, name: str, user: User | None = None, status: int = 200, **context) -> Response:
@@ -91,7 +94,10 @@ def signed_in(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
             return RedirectResponse("/login", 303)
         arguments: tuple = (request, user)
         if request.method == "POST":
-            if (whole_number(request.headers.get("content-length")) or 0) > MOST_BODY:
+            length = whole_number(request.headers.get("content-length"))
+            if length is None:
+                raise HTTPException(411)
+            if length > MOST_BODY:
                 raise HTTPException(413)
             form = await request.form()
             if not csrf_ok(request, form.get("csrf")):
@@ -176,7 +182,8 @@ async def own_connection(request: Request, user: User, bridge_id: str) -> Connec
     # Looked up fresh each time, so what a form names is only ever matched against what Switch says now.
     if not user.businesses:
         return None
-    return next((row for row in await connection_rows(request, user, gateway.READ_TIMEOUT) if row.id == bridge_id), None)
+    # One that other businesses use as well is shown for its health alone, and is not found here.
+    return next((row for row in await connection_rows(request, user, gateway.READ_TIMEOUT) if row.id == bridge_id and not row.shared), None)
 
 
 @signed_in
@@ -210,8 +217,8 @@ async def connections(request: Request, user: User) -> Response:
     return render(request, "connections.html", user, status, title="Connections", page="connections", rows=rows, problem=problem, notice=NOTICES.get(request.query_params.get("done", "")), gateway_link=connections_link(request))
 
 
-def add_page(request: Request, user: User, kinds: list[gateway.BridgeType], chosen: gateway.BridgeType | None, problem: str = "", status: int = 200) -> Response:
-    return render(request, "connection_add.html", user, status, title="Add a connection", page="connections", kinds=kinds, chosen=chosen, problem=problem, gateway_link=connections_link(request))
+def add_page(request: Request, user: User, kinds: list[gateway.BridgeType], chosen: gateway.BridgeType | None, problem: str = "", status: int = 200, unsure: bool = False) -> Response:
+    return render(request, "connection_add.html", user, status, title="Add a connection", page="connections", kinds=kinds, chosen=chosen, problem=problem, unsure=unsure, gateway_link=connections_link(request))
 
 
 @signed_in
@@ -257,13 +264,14 @@ async def connection_add(request: Request, user: User, form: FormData) -> Respon
                 return add_page(request, user, kinds, chosen, problem, 400)
             await gateway.add_bridge(switch, chosen, name, config, secrets_typed)
     except gateway.SwitchProblem as trouble:
-        return add_page(request, user, kinds, chosen, trouble.message, trouble.status)
+        return add_page(request, user, kinds, chosen, trouble.message, trouble.status, trouble.unsure)
     logger.info("%s added a %s connection.", user.login, chosen.key)
     return RedirectResponse("/connections?done=added", 303)
 
 
-def remove_page(request: Request, user: User, row: ConnectionRow | None, problem: str = "", status: int = 200) -> Response:
-    return render(request, "connection_remove.html", user, status, title="Remove a connection", page="connections", row=row, problem=problem)
+def remove_page(request: Request, user: User, row: ConnectionRow | None, problem: str = "", status: int = 200, unsure: bool = False) -> Response:
+    # When the delete may have gone part way, the page does not offer to do it again.
+    return render(request, "connection_remove.html", user, status, title="Remove a connection", page="connections", row=row, problem=problem, unsure=unsure, gateway_link=connections_link(request))
 
 
 @signed_in
@@ -290,13 +298,13 @@ async def connection_remove(request: Request, user: User, form: FormData) -> Res
         sent = whole_number(form.get("rooms"))
         if sent is None:
             return remove_page(request, user, row, CONFIRM_FIRST, 400)
-        if sent != len(row.rooms):
+        if sent != row.room_total:
             return remove_page(request, user, row, ROOMS_CHANGED, 409)
         async with gateway.open_gateway(request, gateway.WRITE_TIMEOUT) as switch:
             await gateway.delete_bridge(switch, row.id)
     except gateway.SwitchProblem as trouble:
-        return remove_page(request, user, row, trouble.message, trouble.status)
-    logger.info("%s removed connection %s and its %d rooms.", user.login, row.id, len(row.rooms))
+        return remove_page(request, user, row, trouble.message, trouble.status, trouble.unsure)
+    logger.info("%s removed connection %s and its %d rooms.", user.login, row.id, row.room_total)
     return RedirectResponse("/connections?done=removed", 303)
 
 
@@ -321,54 +329,59 @@ def data_file(request: Request, user: User) -> Response:
     return render(request, "data_file.html", user, title=view.file, page="data", view=view, problem="", recent=recent(request, user))
 
 
-def read_upload(form: FormData) -> tuple[str, str, str | None]:
-    # The name the file came with, its text, and what is wrong with it. Only as much is read as a source can be.
+def read_upload(form: FormData) -> tuple[str, bytes, str | None]:
+    # The name the file came with, what is in it, and what is wrong with it. Only as much is read as the biggest thing a source can be.
     upload = form.get("upload")
     if not isinstance(upload, UploadFile):
-        return "", "", brand_data.NO_FILE
-    text, problem = brand_data.text_of(upload.file.read(brand_data.MOST_UPLOAD + 1))
-    return upload.filename or "", text, problem
+        return "", b"", brand_data.NO_FILE
+    return upload.filename or "", upload.file.read(brand_data.MOST_TABLE + 1), None
 
 
 @signed_in
 def data_save(request: Request, user: User, form: FormData) -> Response:
-    # Replaces a file that is already there. The folder and the name are matched against what is on disk, never built into a path.
+    # Replaces a file that is already there, or gives a brand with no kit its first one. The folder and the name are matched against what is on disk, never built into a path.
     bucket, file = request.path_params["bucket"], request.path_params["file"]
     folder = request.app.state.reader.data_folder(user, bucket)
     found = brand_data.find(folder, file) if folder else None
-    if found is None:
+    if folder is None or (found is None and file != KIT):
         raise HTTPException(404)
-    _, text, problem = read_upload(form)
-    if problem is None and file == KIT:
-        problem = brand_data.kit_problem(text, folder)
-    status = 400
+    target, problem = (found.path, None) if found else brand_data.target_for_kit(folder)
+    content, status = b"", 400
     if problem is None:
-        problem, status = brand_data.write(found.path, text), 500
+        _, raw, problem = read_upload(form)
+        if problem is None:
+            content, problem = brand_data.checked(file, raw, folder)
+    if problem is None:
+        problem, status = brand_data.write(target, content), 500
     if problem:
         view = request.app.state.reader.data_view(user, bucket, file)
+        if view is None:
+            return data_page(request, user, problem, status)
         return render(request, "data_file.html", user, status, title=file, page="data", view=view, problem=problem, recent=recent(request, user))
-    ask(request, user, "reload_pack", {"file": brand_data.relative(file)}, bucket)
+    ask(request, user, "reload_pack", {"file": brand_data.relative(file), "sha": brand_data.fingerprint(content)}, bucket)
     return RedirectResponse("/data?done=saved", 303)
 
 
 @signed_in
 def data_add(request: Request, user: User, form: FormData) -> Response:
-    # A new source document, named by the file chosen. A name already there, in any letters, is replaced.
+    # A new source, named by the file chosen. A name already there, in any letters, is replaced.
     bucket = request.path_params["bucket"]
     folder = request.app.state.reader.data_folder(user, bucket)
     if folder is None:
         raise HTTPException(404)
-    name, text, problem = read_upload(form)
+    name, raw, problem = read_upload(form)
     if problem != brand_data.NO_FILE:
-        problem = brand_data.name_problem(name) or problem
-    target, status = None, 400
+        problem = brand_data.name_problem(name)
+    target, content, status = None, b"", 400
     if problem is None:
         target, problem = brand_data.target_for(folder, name)
     if target is not None:
-        problem, status = brand_data.write(target, text), 500
+        content, problem = brand_data.checked(name, raw, folder)
+        if problem is None:
+            problem, status = brand_data.write(target, content), 500
     if problem:
         return data_page(request, user, problem, status)
-    ask(request, user, "reload_pack", {"file": brand_data.relative(target.name)}, bucket)
+    ask(request, user, "reload_pack", {"file": brand_data.relative(target.name), "sha": brand_data.fingerprint(content)}, bucket)
     return RedirectResponse("/data?done=saved", 303)
 
 

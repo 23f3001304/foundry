@@ -15,7 +15,11 @@
     {% for row in rows %}
     <li class="response">
       <h3>{{ row.name }}</h3>
-      <p class="small">Type: {{ row.kind }}. {{ row.rooms|length }} {{ 'room' if row.rooms|length == 1 else 'rooms' }}.{% if user.businesses|length > 1 %} Serves {{ row.clients }}.{% endif %}</p>
+      {% if row.shared %}
+      <p class="small">Type: {{ row.kind }}.{% if user.businesses|length > 1 %} Serves {{ row.clients }}.{% endif %}</p>
+      {% else %}
+      <p class="small">Type: {{ row.kind }}. {{ row.room_total }} {{ 'room' if row.room_total == 1 else 'rooms' }}.{% if user.businesses|length > 1 %} Serves {{ row.clients }}.{% endif %}</p>
+      {% endif %}
       <p class="{{ 'status' if row.healthy else 'problem' }}">{{ row.state }}</p>
       {% if row.removable %}
       <p><a class="button" href="/connections/{{ row.link }}/remove">Remove</a></p>
@@ -28,7 +32,7 @@
   {% else %}
   <p class="note">No connection to show.</p>
   {% endif %}
-  <p class="small">A connection is listed only when it has a room of a business you manage and no room of anyone else's. It is then taken to be yours. A new connection has no rooms yet, so it appears here once a room of yours uses it.</p>
+  <p class="small">A connection is listed when it has a room of a business you manage. It can be removed here only when every room on it is yours. One that other businesses use too is shown for its health alone. A new connection has no rooms yet, so it appears here once a room of yours uses it.</p>
 </section>
 <section>
   <h2>Add a connection</h2>
