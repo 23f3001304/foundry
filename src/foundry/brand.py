@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+from mcp.server.mcpserver.exceptions import ToolError
 
 FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---[ \t]*(?:\r?\n(.*))?\Z", re.DOTALL)
 HEX_COLOUR = re.compile(r"#[0-9A-Fa-f]{6}")
@@ -14,7 +15,8 @@ COLOURS = ("primary", "accent", "ink", "paper")
 DEFAULT_PAPER, DEFAULT_INK = "#FFFFFF", "#222222"
 
 
-class BrandError(Exception):
+class BrandError(ToolError):
+    # A ToolError, so a maker whose tool cannot read the brand folder is shown why. A plain exception reaches it only as "Error executing tool".
     pass
 
 

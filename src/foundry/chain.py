@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from collections.abc import Collection, Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -59,6 +60,7 @@ NO_SOURCE_DETAIL = "No entry for this job gives {needle}."
 NOT_FLAGGED = "Entry {entry_id} is not a flagged item."
 NOT_A_TARGET = "Cannot flag {target!r}. It is not a file made for this job, a number or statement in one, or an entry in this log."
 SOURCE_LINE = "Source: {parts}"
+TIME_OF_DAY = re.compile(r"\d{1,2}:\d{2}\s*[ap]m", re.IGNORECASE)
 
 FILE, TEXT, ENTRY = "file", "text", "entry"
 
@@ -94,8 +96,13 @@ class Target:
     entry: int = 0
 
 
-def _who(entry: Entry) -> str:
-    return entry.sender_name or entry.sender
+def names(log: Log, bucket: str) -> dict[str, str]:
+    # The name each sender last wrote under in this bucket. Some entries, such as an answered card, are logged with the sender's id and no name.
+    return {writer.sender: writer.sender_name for writer in log.writers(bucket) if writer.sender_name}
+
+
+def name_of(entry: Entry, known: dict[str, str]) -> str:
+    return entry.sender_name or known.get(entry.sender) or entry.sender
 
 
 def _number(text: str) -> int | None:
@@ -132,10 +139,11 @@ def source_line(links: Iterable[Link]) -> str:
     return SOURCE_LINE.format(parts="; ".join(f"{link.value} from {link.label}" for link in links))
 
 
-def without_source_lines(text: str, links: list[Link]) -> str:
-    # The line a deck prints under a slide says who gave a number and when. None of that is a figure for the number check to look at.
+def without_times_in_source_lines(text: str, links: list[Link]) -> str:
+    # The line a deck prints under a slide says when a number was given, and a time of day is not a figure to check. The rest of the line is a maker's words, so it is checked.
     for slide in dict.fromkeys(link.slide for link in links):
-        text = text.replace(source_line(link for link in links if link.slide == slide), "")
+        line = source_line(link for link in links if link.slide == slide)
+        text = text.replace(line, TIME_OF_DAY.sub("", line))
     return text
 
 
@@ -176,7 +184,8 @@ def read_links(path: str | Path) -> list[Link]:
         data = json.loads(Path(f"{path}{SOURCES_SUFFIX}").read_text(encoding="utf-8"))
     except FileNotFoundError:
         return []
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, RecursionError) as error:
+        # A file nested deeper than the parser can follow raises RecursionError, which is not a ValueError.
         logger.warning("Could not read the source links for %s: %s", Path(path).name, error)
         return []
     if not isinstance(data, list):
@@ -261,6 +270,7 @@ def _copies(job: list[Entry]) -> dict[str, Copy]:
 class _Trail:
     def __init__(self, log: Log, bucket: str, job: list[Entry]) -> None:
         self.log, self.bucket, self.job = log, bucket, job
+        self.known = names(log, bucket)
         self.copies = _copies(job)
         self.steps: list[Step] = []
         self._seen: set[tuple[int, str]] = set()
@@ -311,7 +321,7 @@ class _Trail:
     def _add(self, entry: Entry, what: str, detail: str, label: str, who: str | None = None) -> None:
         if (entry.id, what) not in self._seen:
             self._seen.add((entry.id, what))
-            self.steps.append(Step(entry.at, who or _who(entry), what, detail, label))
+            self.steps.append(Step(entry.at, who or name_of(entry, self.known), what, detail, label))
 
     def _said(self, entry: Entry, label: str) -> None:
         notes = self._heard(entry)

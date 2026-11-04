@@ -7,7 +7,7 @@ from mcp.server.mcpserver import MCPServer
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from foundry.brand import Brand, load_brand_dir
-from foundry.tools.layout import LINE_SPACING, fit_size, load_font, rgb, wrap
+from foundry.tools.layout import LINE_SPACING, MakerError, fit_size, load_font, rgb, wrap
 
 mcp = MCPServer("foundry-visual")
 
@@ -21,7 +21,7 @@ def _parse_size(size: str) -> tuple[int, int]:
     match = SIZE.fullmatch(size)
     sides = tuple(int(side) for side in match.groups()) if match else ()
     if len(sides) != 2 or not all(SMALLEST_SIDE <= side <= LARGEST_SIDE for side in sides):
-        raise ValueError(f"The size must be WIDTHxHEIGHT between {SMALLEST_SIDE} and {LARGEST_SIDE}, like 1080x1080, not {size!r}.")
+        raise MakerError(f"The size must be WIDTHxHEIGHT between {SMALLEST_SIDE} and {LARGEST_SIDE}, like 1080x1080, not {size!r}.")
     return sides
 
 
@@ -30,7 +30,7 @@ def _check_font_can_draw(text: str, font: ImageFont.FreeTypeFont, role: str) -> 
     box = bytes(font.getmask(UNDRAWABLE))
     missing = sorted({letter for letter in text if not letter.isspace() and bytes(font.getmask(letter)) == box})
     if missing:
-        raise ValueError(f"The brand's {role} font cannot draw: {' '.join(missing[:10])}. Write this text in a script the font has.")
+        raise MakerError(f"The brand's {role} font cannot draw: {' '.join(missing[:10])}. Write this text in a script the font has.")
 
 
 def _draw_text(draw: ImageDraw.ImageDraw, text: str, font_path: Path | None, role: str, colour: tuple, box: tuple[int, int, int, int], largest: int, smallest: int, highlight: str = "", marker: tuple = (), marked_colour: tuple = ()) -> int:
@@ -71,7 +71,7 @@ def render_graphic(brand_dir: str, headline: str, subline: str, size: str, out_p
     Text that cannot fit, or that the brand's fonts cannot draw, raises an error. Shorten or rewrite it.
     """
     if highlight and highlight not in headline:
-        raise ValueError(f"The highlight must be words from the headline. {highlight!r} is not in {headline!r}.")
+        raise MakerError(f"The highlight must be words from the headline. {highlight!r} is not in {headline!r}.")
     width, height = _parse_size(size)
     brand = load_brand_dir(brand_dir)
     canvas = _compose(brand, headline, subline, width, height, highlight)

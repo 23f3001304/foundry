@@ -2,9 +2,14 @@
 
 from pathlib import Path
 
+from mcp.server.mcpserver.exceptions import ToolError
 from PIL import ImageFont
 
 LINE_SPACING = 1.2
+
+
+class MakerError(ToolError, ValueError):
+    """Something a maker asked a tool for that the tool cannot do. Under mcp 2.x a plain ValueError reaches the maker only as "Error executing tool", so it retries blind. A ToolError shows why."""
 
 
 def load_font(path: Path | None, size: int) -> ImageFont.FreeTypeFont:
@@ -35,7 +40,7 @@ def fit_size(text: str, font_path: Path | None, width: float, height: float, lar
     for size in range(largest, smallest - 1, -1):
         if len(wrap(text, load_font(font_path, size), width)) * size * LINE_SPACING <= height:
             return size
-    raise ValueError(f"This text is too long to fit: {text[:60]}...")
+    raise MakerError(f"This text is too long to fit: {text[:60]}...")
 
 
 def rgb(colour: str) -> tuple[int, int, int]:

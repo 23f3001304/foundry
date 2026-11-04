@@ -5,7 +5,6 @@ from pathlib import Path
 
 from lxml import etree
 from mcp.server.mcpserver import MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
@@ -15,7 +14,7 @@ from pptx.util import Pt
 
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
-from foundry.tools.layout import fit_size
+from foundry.tools.layout import MakerError, fit_size
 
 mcp = MCPServer("foundry-deck")
 
@@ -136,13 +135,13 @@ def _title_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, hi
 
 def _required(spec: dict, field: str, layout: str) -> str | list:
     if not spec.get(field):
-        raise ValueError(f"A {layout} slide needs its {field}.")
+        raise MakerError(f"A {layout} slide needs its {field}.")
     return spec[field]
 
 
 def _check_highlight(highlight: str, *texts: str) -> None:
     if highlight and not any(highlight in text for text in texts):
-        raise ValueError(f"The highlight must be words on the slide. {highlight!r} is not on it.")
+        raise MakerError(f"The highlight must be words on the slide. {highlight!r} is not on it.")
 
 
 def _make_title(deck: Presentation, brand: Brand, spec: dict) -> None:
@@ -181,29 +180,25 @@ def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
 LAYOUTS = {"title": _make_title, "content": _make_content, "statement": _make_statement}
 
 
-class SourceError(ToolError, ValueError):
-    """A source the maker got wrong. As a ToolError the maker is shown why, which a plain ValueError would not be."""
-
-
 def _source(item: object, slide: int, words: list[str]) -> Link:
     if not isinstance(item, dict):
-        raise SourceError(SOURCE_SHAPE)
+        raise MakerError(SOURCE_SHAPE)
     value, entry, label = item.get("value"), item.get("entry"), item.get("label")
     if not isinstance(value, str) or not value.strip():
-        raise SourceError(f'A source needs its "value", the words or number it is for. {SOURCE_SHAPE}')
+        raise MakerError(f'A source needs its "value", the words or number it is for. {SOURCE_SHAPE}')
     if isinstance(entry, bool) or not isinstance(entry, int):
-        raise SourceError(f'A source needs its "entry", the whole number job_facts gave for it. {SOURCE_SHAPE}')
+        raise MakerError(f'A source needs its "entry", the whole number job_facts gave for it. {SOURCE_SHAPE}')
     if not isinstance(label, str) or not label.strip():
-        raise SourceError(f'A source needs its "label", who gave it and when. {SOURCE_SHAPE}')
+        raise MakerError(f'A source needs its "label", who gave it and when. {SOURCE_SHAPE}')
     if not any(value in text for text in words):
-        raise SourceError(f"A source's value must be words on its slide. {value!r} is not on it.")
+        raise MakerError(f"A source's value must be words on its slide. {value!r} is not on it.")
     return Link(slide, value, entry, label)
 
 
 def _sources_of(spec: dict, slide: int) -> list[Link]:
     given = spec.get("sources") or []
     if not isinstance(given, list):
-        raise SourceError(f'A slide\'s "sources" must be a list. {SOURCE_SHAPE}')
+        raise MakerError(f'A slide\'s "sources" must be a list. {SOURCE_SHAPE}')
     words = [spec.get(key, "") for key in ("title", "subtitle", "text")] + list(spec.get("bullets", []))
     return [_source(item, slide, words) for item in given]
 
@@ -227,9 +222,9 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     Any slide can also have "highlight": words on that slide to put on the brand's accent colour, for the one thing that matters most.
     highlight does the same for the title slide. Text that cannot fit raises an error. Shorten it or split the slide.
 
-    Any slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 6:12 pm"}], one for each number or
-    fact on that slide that came from the log. value is the words on the slide. entry is the number job_facts gave that entry.
-    label says who gave it and when. The slide prints them as a small line, and the links are saved beside the deck for the chain.
+    Only when foundry-desk's message asks for sources, a slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 6:12 pm"}],
+    one for each number or fact on that slide that came from a log entry. value is the words on the slide. entry is the number job_facts gave that entry.
+    label holds the name job_facts shows for that entry and when it was said. The slide prints them as a small line, and the links are saved beside the deck.
     """
     brand = load_brand_dir(brand_dir)
     deck = Presentation()
@@ -240,7 +235,7 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     for number, spec in enumerate(slides, start=2):
         layout = LAYOUTS.get(spec.get("layout"))
         if layout is None:
-            raise ValueError(f"Unknown layout {spec.get('layout')!r}. Use one of: {', '.join(LAYOUTS)}.")
+            raise MakerError(f"Unknown layout {spec.get('layout')!r}. Use one of: {', '.join(LAYOUTS)}.")
         sources = _sources_of(spec, number)
         layout(deck, brand, spec)
         if sources:
