@@ -1,15 +1,24 @@
 {% extends "base.html" %}
+{% from "_ui.html" import crumbs, job_tabs, empty_state %}
 {% block main %}
+{% if tabs %}
+<header class="page-head">
+  {{ crumbs([("Jobs", "/jobs"), (tabs.title, "/jobs/" ~ tabs.id)], "Files") }}
+  <h1>{{ tabs.title }}</h1>
+</header>
+{{ job_tabs(tabs, "files") }}
+{% else %}
 <header class="page-head">
   <h1>Generated work</h1>
 </header>
+{% endif %}
 {% if not jobs %}
-<p class="empty">Nothing has been made yet.</p>
+{{ empty_state("designer", "Nothing has been made for this job yet." if tabs else "Nothing has been made yet.", "/jobs/" ~ tabs.id if tabs else "/jobs", "Back to the job" if tabs else "See the jobs") }}
 {% endif %}
 {% for job in jobs %}
 <section>
   <div class="section-head">
-    <h2><a class="row-link" href="/jobs/{{ job.id }}">{{ job.title }}</a></h2>
+    <h2>{% if tabs %}Files{% else %}<a class="row-link" href="/jobs/{{ job.id }}">{{ job.title }}</a>{% endif %}</h2>
     <p class="page-meta"><span class="stage {{ job.tone }}">{{ job.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.client }}</span>{% endif %}</p>
   </div>
   <div class="scroll">

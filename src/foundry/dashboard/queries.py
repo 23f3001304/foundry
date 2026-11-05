@@ -37,14 +37,14 @@ PICTURES = (".png", ".jpg", ".jpeg")
 STAGES = {
     State.RECEIVED: ("Drafting the brief", "apprentice"),
     State.BRIEF_PENDING: ("Brief waiting for approval", "apprentice"),
-    State.COLLECTING: ("Collecting inputs from people", "reviewer"),
-    State.MAKING: ("Being made", "smith"),
+    State.COLLECTING: ("Collecting inputs from people", "tap"),
+    State.MAKING: ("Being made", "designer"),
     State.REVIEWING: ("Being checked by the reviewer", "reviewer"),
-    State.SIGNOFF_PENDING: ("Work waiting for sign-off", "designer"),
-    State.APPROVED: ("Approved, being delivered", "designer"),
-    State.DELIVERED: ("Delivered", "designer"),
-    State.BLOCKED: ("Stuck", "smith"),
-    State.DROPPED: ("Nothing to send, every note was left out", "designer"),
+    State.SIGNOFF_PENDING: ("Work waiting for sign-off", "smith"),
+    State.APPROVED: ("Approved, being delivered", "shipped"),
+    State.DELIVERED: ("Delivered", "cheer"),
+    State.BLOCKED: ("Stuck", "blocked"),
+    State.DROPPED: ("Nothing to send, every note was left out", "smith"),
 }
 REPORT_STAGES = {State.RECEIVED: "Writing the report", State.SIGNOFF_PENDING: "Report waiting for sign-off"}
 NO_BRIEF = "No brief yet"
@@ -134,10 +134,12 @@ SHARED = "Other businesses use this connection too, so only its health is shown 
 
 # How long a page waits for a database the desk is writing. Short, so a locked file shows a plain page and doesn't hold everything else up.
 READ_TIMEOUT = 2
+# Every page counts for its navigation, and no page should wait on those counts: a locked file just means no badge this time.
+NAV_TIMEOUT = 0.25
 
 
-def open_read_only(path: Path | str) -> sqlite3.Connection:
-    return sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=READ_TIMEOUT)
+def open_read_only(path: Path | str, timeout: float = READ_TIMEOUT) -> sqlite3.Connection:
+    return sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=timeout)
 
 
 class ReadOnlyLog(Log):
@@ -167,6 +169,26 @@ class Offer:
     buttons: list[tuple[str, str]] = field(default_factory=list)
     changes: bool = False
     notice: str = ""
+
+
+@dataclass
+class NavCounts:
+    """The real numbers beside the navigation, across every business this login has."""
+
+    waiting: int = 0
+    stuck: int = 0
+
+
+@dataclass
+class JobNav:
+    """A job's own pages, so moving between them takes one step."""
+
+    id: str
+    title: str
+    client: str
+    files: int
+    # The things flagged on this job, newest first: the flag's entry and its words.
+    flags: list[tuple[int, str]]
 
 
 @dataclass
@@ -371,6 +393,7 @@ class Flagged:
     who: str
     at: str
     client: str
+    job_id: str = ""
 
 
 @dataclass
@@ -387,6 +410,7 @@ class Recent:
     what: str
     status: str
     failed: bool
+    done: bool = False
 
 
 @dataclass
@@ -528,6 +552,13 @@ def is_made_file(entry: Entry) -> bool:
     return entry.kind == "file_made" and bool(entry.ref) and LINK_MARK not in entry.ref
 
 
+def where_to_answer(card: Card) -> str:
+    # A job's page answers its approval and its due-time card once they are open. Everything else is answered on its own card.
+    if card.job_id and card.state == OPEN and (card.trigger in JOB_APPROVALS or card.trigger is Trigger.DUE):
+        return f"/jobs/{card.job_id}#act"
+    return f"/responses#card-{quote(card.request_id, safe='')}"
+
+
 class Reader:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -592,6 +623,33 @@ class Reader:
         return {bucket: names(self.log, bucket) for bucket in user.businesses}
 
     # Pages
+
+    def nav_counts(self, user: User) -> NavCounts:
+        if not user.businesses:
+            return NavCounts()
+        buckets = list(user.businesses)
+        marks = ", ".join("?" * len(buckets))
+
+        def counted(path: Path | str, sql: str, *values: str) -> int:
+            with closing(open_read_only(path, NAV_TIMEOUT)) as db:
+                return db.execute(sql, (*buckets, *values)).fetchone()[0]
+
+        # The same cards the overview calls waiting, and the same jobs it calls stuck.
+        try:
+            return NavCounts(
+                counted(self.settings.work_path, f"SELECT COUNT(*) FROM cards WHERE bucket IN ({marks}) AND state IN (?, ?)", OPEN, QUEUED),
+                counted(self.settings.jobs_path, f"SELECT COUNT(*) FROM jobs WHERE bucket IN ({marks}) AND state = ?", State.BLOCKED.value),
+            )
+        except sqlite3.OperationalError:
+            return NavCounts()
+
+    def job_nav(self, user: User, job_id: str) -> JobNav | None:
+        job = self.job_of(user, job_id)
+        if job is None:
+            return None
+        entries = self.log.for_job(job.bucket, job.id)
+        flags = [(entry.id, entry.text) for entry in sorted(entries, key=lambda entry: entry.id, reverse=True) if entry.kind == "flag"]
+        return JobNav(job.id, title_of(job), bucket_name(job.bucket), len(self._files(entries)), flags)
 
     def overview(self, user: User) -> list[Figures]:
         if not user.businesses:
@@ -668,13 +726,13 @@ class Reader:
         return hours
 
     def _needs(self, person: str, cards: list[Card], jobs: list[Job]) -> list[Need]:
-        stuck = [Need("stuck", title_of(job), _short(job.attention[0]) if job.attention else "Waiting for someone to restart it", f"/jobs/{job.id}") for job in jobs if job.state is State.BLOCKED]
+        stuck = [Need("stuck", title_of(job), _short(job.attention[0]) if job.attention else "Waiting for someone to restart it", f"/jobs/{job.id}#act") for job in jobs if job.state is State.BLOCKED]
         waiting = [
-            Need("waiting", card.title, CARD_KINDS.get(card.trigger, "Card"), f"/jobs/{card.job_id}" if card.job_id else "/responses")
+            Need("waiting", card.title, CARD_KINDS.get(card.trigger, "Card"), where_to_answer(card))
             for card in cards
             if card.person == person and card.state in (OPEN, QUEUED)
         ]
-        noted = [Need("working", title_of(job), _short(job.attention[0]), f"/jobs/{job.id}") for job in jobs if job.attention and job.state not in (State.BLOCKED, State.DELIVERED, State.DROPPED)]
+        noted = [Need("working", title_of(job), _short(job.attention[0]), f"/jobs/{job.id}#attention") for job in jobs if job.attention and job.state not in (State.BLOCKED, State.DELIVERED, State.DROPPED)]
         return stuck + waiting + noted
 
     def job_board(self, user: User, stage: str = "") -> JobBoard:
@@ -831,11 +889,13 @@ class Reader:
         via = any(entry.kind == "dashboard_action" and entry.ref == answers[-1].ref for entry in entries)
         return f"Approved by {name_of(answers[-1], known)}{' on the dashboard' if via else ''}, {self.when(answers[-1].at)}. Delivered."
 
-    def work(self, user: User) -> list[WorkJob]:
+    def work(self, user: User, only: str | None = None) -> list[WorkJob]:
         if not user.businesses:
             return []
         known, found = self._names(user), []
         for job in self.jobs(user.businesses):
+            if only and job.id != only:
+                continue
             entries = self.log.for_job(job.bucket, job.id)
             made = [entry for entry in entries if is_made_file(entry)]
             if not made:
@@ -911,7 +971,7 @@ class Reader:
     def flagged(self, user: User) -> list[Flagged]:
         known = self._names(user)
         flags = [entry for bucket in user.businesses for entry in self.log.of_kind(bucket, "flag")]
-        return [Flagged(entry.id, entry.text, name_of(entry, known[entry.bucket]), self.when(entry.at), bucket_name(entry.bucket)) for entry in sorted(flags, key=lambda entry: entry.id, reverse=True)]
+        return [Flagged(entry.id, entry.text, name_of(entry, known[entry.bucket]), self.when(entry.at), bucket_name(entry.bucket), entry.job_id or "") for entry in sorted(flags, key=lambda entry: entry.id, reverse=True)]
 
     def chain(self, user: User, flag_id: int) -> ChainPage | None:
         entry = self.log.find(flag_id)
@@ -924,7 +984,7 @@ class Reader:
         known = self._names(user)[entry.bucket]
         job = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", entry.job_id or "")
         via = any(other.ref == str(entry.id) for other in self.log.of_kind(entry.bucket, "dashboard_action"))
-        flagged = Flagged(entry.id, entry.text, name_of(entry, known), self.when(entry.at), bucket_name(entry.bucket))
+        flagged = Flagged(entry.id, entry.text, name_of(entry, known), self.when(entry.at), bucket_name(entry.bucket), entry.job_id or "")
         return ChainPage(flagged, steps, entry.job_id or "", title_of(_job(job[0])) if job else NO_BRIEF, via)
 
     # Connections
@@ -1010,7 +1070,7 @@ class Reader:
                 status, failed = DIDNT_DO.format(error=command.error), True
             else:
                 status, failed = (DONE if command.done_at else WAITING_FOR_FOUNDRY), False
-            found.append(Recent(self._describe(command), status, failed))
+            found.append(Recent(self._describe(command), status, failed, status == DONE))
         return found
 
     def _describe(self, command: Command) -> str:

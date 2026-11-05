@@ -1,7 +1,8 @@
 {% extends "base.html" %}
+{% from "_ui.html" import crumbs %}
 {% block main %}
 <header class="page-head">
-  <p class="crumb"><a href="/connections">Back to the connections</a></p>
+  {{ crumbs([("Connections", "/connections")], "Add a connection") }}
   <h1>Add a connection</h1>
   {% if unsure %}
   {% elif chosen %}
@@ -10,7 +11,7 @@
   <p class="lead">Which chat app do you want to connect?</p>
   {% endif %}
 </header>
-{% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
+{% if problem %}<p class="alert" role="alert">{{ problem }}</p>{% endif %}
 {% if unsure %}
 <p>Check <a href="{{ gateway_link }}">Switch's Gateway</a> before you add it again, so it isn't added twice. Anything secret you typed was not kept.</p>
 {% elif chosen %}

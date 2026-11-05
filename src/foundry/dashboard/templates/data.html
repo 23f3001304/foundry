@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% from "_ui.html" import saved %}
 {% block main %}
 <header class="page-head">
   <h1>Data</h1>
   <p class="lead">Each business's brand kit, source documents and tables, which the desk and the makers read. A file is used as soon as it is saved: the tools and checks read the new file straight away, on jobs that are already running too, and the desk reads the documents again within a few seconds. The agents also have a copy of the brand kit in their room, which this does not change, so a change to the voice or the guidance also has to be made in Switch.</p>
 </header>
-{% if notice %}<p class="status" role="status">{{ notice }}</p>{% endif %}
-{% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
+{% if notice %}{{ saved(notice) }}{% endif %}
+{% if problem %}<p class="alert" role="alert">{{ problem }}</p>{% endif %}
 {% if not clients %}
 <p class="empty">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
 {% endif %}

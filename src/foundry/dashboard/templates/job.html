@@ -1,22 +1,30 @@
 {% extends "base.html" %}
+{% from "_ui.html" import sprite, crumbs, job_tabs %}
 {% block main %}
-<header class="page-head with-action">
+<header class="page-head with-sprite">
   <div>
-    <p class="crumb"><a href="/jobs">Jobs</a></p>
+    {{ crumbs([("Jobs", "/jobs")], job.row.title) }}
     <h1>{{ job.row.title }}</h1>
     <p class="page-meta"><span class="stage {{ job.row.tone }}">{{ job.row.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.row.client }}</span>{% endif %}</p>
     {% for line in job.row.waiting %}<p class="small">{{ line }}</p>{% endfor %}
   </div>
-  <a class="button" href="/log?job={{ job.row.id }}">This job's timeline</a>
+  {{ sprite(job.row.sprite, 96, plays=job.row.tone in ("stuck", "done") or job.row.sprite == "tap") }}
 </header>
+{{ job_tabs(tabs, "job") }}
 
-<div class="split">
-<div class="split-main">
+<div class="grid">
+<div class="stacked span-8">
+<div class="card job-progress">
+  <ol class="stepper stepper-named {{ job.row.tone }}" aria-label="Stages, with this job at {{ job.row.stage }}">
+    {% for step in job.row.steps %}<li class="step-{{ step.state }}"{% if step.state == "now" %} aria-current="step"{% endif %}>{% if step.state != "skipped" %}<span>{{ step.name }}</span>{% endif %}</li>{% endfor %}
+  </ol>
+</div>
+
 {% if job.answer_offer.buttons or job.answer_offer.changes or job.answer_offer.notice or job.restart.buttons or job.restart.notice or job.due_offer.buttons or job.due_offer.notice %}
-<section class="panel">
-  <h2>What you can do</h2>
+<section class="card card-action" id="act">
+  <div class="card-head"><h2>What you can do</h2></div>
   {% if job.answer_offer.buttons or job.answer_offer.changes %}
-  <p class="lead-in">{{ job.answer.title }}</p>
+  <p class="lead-in card-text">{{ job.answer.title }}</p>
   <form class="stack" method="post" action="/jobs/{{ job.row.id }}/answer">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="request_id" value="{{ job.answer.request_id }}">
@@ -42,7 +50,7 @@
   {% endif %}
   {% if job.restart.notice %}<p class="small">{{ job.restart.notice }}</p>{% endif %}
   {% if job.due_offer.buttons %}
-  <p class="lead-in">{{ job.due.title }}</p>
+  <p class="lead-in card-text">{{ job.due.title }}</p>
   <form class="buttons" method="post" action="/jobs/{{ job.row.id }}/act">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     {% for action, label in job.due_offer.buttons %}<button type="submit" name="action" value="{{ action }}">{{ label }}</button>{% endfor %}
@@ -54,9 +62,9 @@
 {% endif %}
 
 {% if job.items %}
-<section>
-  <h2>Who owes what</h2>
-  <p>{{ job.row.owes }}</p>
+<section class="card">
+  <div class="card-head"><h2>Who owes what</h2></div>
+  <p class="card-text">{{ job.row.owes }}</p>
   <div class="scroll">
   <table class="list items-table">
     <thead><tr><th>Who</th><th>Input</th><th>Exact measure</th><th>Due</th><th>Where it stands</th></tr></thead>
@@ -77,35 +85,34 @@
 {% endif %}
 
 {% if job.attention %}
-<section>
-  <h2>Needs attention</h2>
+<section class="card" id="attention">
+  <div class="card-head"><h2>Needs attention</h2></div>
   <ul class="plain">{% for line in job.attention %}<li>{{ line }}</li>{% endfor %}</ul>
 </section>
 {% endif %}
 
 {% if job.brief %}
-<section>
-  <h2>What was asked for</h2>
+<section class="card">
+  <div class="card-head"><h2>What was asked for</h2></div>
   <pre class="text">{{ job.brief }}</pre>
 </section>
 {% endif %}
 {% if job.report %}
-<section>
-  <h2>Report</h2>
+<section class="card">
+  <div class="card-head"><h2>Report</h2></div>
   <pre class="text">{{ job.report }}</pre>
 </section>
 {% endif %}
 </div>
 
-{% if job.files or recent %}
-<div class="split-side">
+<div class="stacked span-4">
 {% if job.files %}
-<section>
-  <h2>Files</h2>
+<section class="card">
+  <div class="card-head"><h2>Files</h2></div>
   <ul class="rows">
     {% for file in job.files %}<li>{{ file.name }}</li>{% endfor %}
   </ul>
-  <p><a href="/work">All versions and downloads</a></p>
+  <p class="card-foot"><a href="/work?job={{ job.row.id }}">All versions and downloads</a></p>
   {% if job.can_flag %}
   {% for file in job.files %}
   <form class="stack flag-form" method="post" action="/log/flag">
@@ -125,6 +132,5 @@
 {% endif %}
 {% include "_recent.html" %}
 </div>
-{% endif %}
 </div>
 {% endblock %}

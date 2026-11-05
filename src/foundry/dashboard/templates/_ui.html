@@ -1,0 +1,49 @@
+{# One definition of each thing a page is built from. DESIGN.md lists them. #}
+
+{% macro sprite(name, size=48, plays=False) -%}
+<span class="sprite sprite-{{ size }} sheet-{{ name }}-{{ size }}{% if plays %} plays{% endif %}" aria-hidden="true"></span>
+{%- endmacro %}
+
+{% macro crumbs(trail, here) %}
+<nav class="crumbs" aria-label="Breadcrumb">
+  <ol>
+    {% for name, href in trail %}<li><a href="{{ href }}">{{ name }}</a></li>{% endfor %}
+    <li aria-current="page">{{ here }}</li>
+  </ol>
+</nav>
+{% endmacro %}
+
+{% macro job_tabs(tabs, here) %}
+<nav class="tabs" aria-label="This job's pages">
+  <a href="/jobs/{{ tabs.id }}"{% if here == "job" %} aria-current="page"{% endif %}>Job</a>
+  <a href="/log?job={{ tabs.id }}"{% if here == "timeline" %} aria-current="page"{% endif %}>Timeline</a>
+  <a href="/work?job={{ tabs.id }}"{% if here == "files" %} aria-current="page"{% endif %}>Files <span class="pill">{{ tabs.files }}</span></a>
+  {% if tabs.flags %}<a href="/log/flagged/{{ tabs.flags[0][0] }}"{% if here == "chain" %} aria-current="page"{% endif %}>Chain <span class="pill">{{ tabs.flags|length }}</span></a>{% endif %}
+</nav>
+{% endmacro %}
+
+{% macro empty_state(pose, words, href="", next="") %}
+<div class="empty-state">
+  {{ sprite(pose, 96, plays=True) }}
+  <div>
+    <p class="empty">{{ words }}</p>
+    {% if href %}<a class="button" href="{{ href }}">{{ next }}</a>{% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+{% macro switcher(user, business, path, stage="") %}
+{% if user.businesses|length > 1 %}
+<nav class="chips" aria-label="Which business to show">
+  <span class="chips-label">Showing</span>
+  <a class="chip-link" href="{{ link(path, stage=stage) }}"{% if not business %} aria-current="true"{% endif %}>All businesses</a>
+  {% for bucket in user.businesses %}
+  <a class="chip-link" href="{{ link(path, stage=stage, business=bucket) }}"{% if business == bucket %} aria-current="true"{% endif %}>{{ bucket|client }}</a>
+  {% endfor %}
+</nav>
+{% endif %}
+{% endmacro %}
+
+{% macro saved(words) %}
+<p class="alert alert-done" role="status">{{ sprite("nod", 48, plays=True) }}<span>{{ words }}</span></p>
+{% endmacro %}

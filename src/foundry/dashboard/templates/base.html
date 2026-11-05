@@ -6,31 +6,75 @@
 <title>{{ title }} - Foundry</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
+{% macro nav_item(key, href, name, count=0, says="waiting") %}
+<li><a class="nav-item" href="{{ href }}"{% if page == key %} aria-current="page"{% endif %}><span class="icon icon-{{ key }}" aria-hidden="true"></span><span class="nav-name">{{ name }}</span>{{ badge(count, says) }}</a></li>
+{% endmacro %}
+{% macro badge(count, says) %}{% if count %}<span class="pill{% if says == 'stuck' %} pill-stuck{% endif %}">{{ count }}<span class="hidden"> {{ says }}</span></span>{% endif %}{% endmacro %}
+{% macro tab(key, href, name, full="", count=0, says="waiting") %}
+<a class="tab" href="{{ href }}"{% if full %} aria-label="{{ full }}"{% endif %}{% if page == key %} aria-current="page"{% endif %}><span class="icon icon-{{ key }}" aria-hidden="true"></span>{{ name }}{{ badge(count, says) }}</a>
+{% endmacro %}
+{% macro sign_out() %}
+<form class="who" method="post" action="/logout">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <span title="{{ user.login }}">{{ user.login }}</span>
+  <button class="quiet" type="submit">Sign out</button>
+</form>
+{% endmacro %}
 <body class="{{ 'shell' if user else 'bare' }}{% if page %} page-{{ page }}{% endif %}">
 <a class="skip" href="#main">Skip to the page</a>
-<header class="bar">
-  <div class="bar-inner">
-  <a class="mark" href="/">Foundry</a>
-  {% if user %}
-  <nav aria-label="Pages">
-    <a href="/"{% if page == "overview" %} aria-current="page"{% endif %}>Overview</a>
-    <a href="/connections"{% if page == "connections" %} aria-current="page"{% endif %}>Connections</a>
-    <a href="/data"{% if page == "data" %} aria-current="page"{% endif %}>Data</a>
-    <a href="/jobs"{% if page == "jobs" %} aria-current="page"{% endif %}>Jobs</a>
-    <a href="/work"{% if page == "work" %} aria-current="page"{% endif %}>Generated work</a>
-    <a href="/responses"{% if page == "responses" %} aria-current="page"{% endif %}>Responses</a>
-    <a href="/log"{% if page == "log" %} aria-current="page"{% endif %}>Action log</a>
+{% if user %}
+<aside class="side">
+  <a class="mark" href="{{ link('/', business=business) }}">Foundry</a>
+  <nav class="side-nav" aria-label="Pages">
+    <div>
+      <p class="nav-group" id="nav-work">Work</p>
+      <ul class="nav-list" aria-labelledby="nav-work">
+        {{ nav_item("overview", link("/", business=business), "Overview") }}
+        {{ nav_item("jobs", link("/jobs", business=business), "Jobs", counts.stuck, "stuck") }}
+        {{ nav_item("responses", "/responses", "Responses", counts.waiting) }}
+        {{ nav_item("work", "/work", "Generated work") }}
+      </ul>
+    </div>
+    <div>
+      <p class="nav-group" id="nav-records">Records</p>
+      <ul class="nav-list" aria-labelledby="nav-records">
+        {{ nav_item("log", "/log", "Action log") }}
+      </ul>
+    </div>
+    <div>
+      <p class="nav-group" id="nav-setup">Setup</p>
+      <ul class="nav-list" aria-labelledby="nav-setup">
+        {{ nav_item("connections", "/connections", "Connections") }}
+        {{ nav_item("data", "/data", "Data") }}
+      </ul>
+    </div>
   </nav>
-  <form class="who" method="post" action="/logout">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <span title="{{ user.login }}">{{ user.login }}</span>
-    <button class="quiet" type="submit">Sign out</button>
-  </form>
-  {% endif %}
-  </div>
-</header>
+  {{ sign_out() }}
+</aside>
+{% else %}
+<header class="bare-head"><a class="mark" href="/">Foundry</a></header>
+{% endif %}
 <main id="main">
 {% block main %}{% endblock %}
 </main>
+{% if user %}
+<nav class="tabbar" aria-label="Pages">
+  {{ tab("overview", link("/", business=business), "Overview") }}
+  {{ tab("jobs", link("/jobs", business=business), "Jobs", "", counts.stuck, "stuck") }}
+  {{ tab("responses", "/responses", "Responses", "", counts.waiting) }}
+  {{ tab("work", "/work", "Work", "Generated work") }}
+  <details class="more{% if page in ('log', 'connections', 'data') %} is-current{% endif %}">
+    <summary class="tab"><span class="icon icon-more" aria-hidden="true"></span>More</summary>
+    <div class="more-panel">
+      <ul class="nav-list">
+        {{ nav_item("log", "/log", "Action log") }}
+        {{ nav_item("connections", "/connections", "Connections") }}
+        {{ nav_item("data", "/data", "Data") }}
+      </ul>
+      {{ sign_out() }}
+    </div>
+  </details>
+</nav>
+{% endif %}
 </body>
 </html>

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% macro row(card) %}
-<li class="response">
+<li class="response" id="card-{{ card.request_id }}">
   <h3>{{ card.title }}</h3>
   <p class="small">{{ card.kind }}{% if user.businesses|length > 1 %}. {{ card.client }}{% endif %}</p>
   <p class="response-status"><span class="stage {{ {'open': 'waiting', 'answered': 'done'}.get(card.state, 'idle') }}">{{ card.status }}</span></p>
@@ -34,7 +34,7 @@
 {% set past = cards|rejectattr("state", "in", ["open", "queued"])|list %}
 <section>
   <h2>Waiting for an answer</h2>
-  {% if open_cards %}<ul class="rows">{% for card in open_cards %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is open.</p>{% endif %}
+  {% if open_cards %}<ul class="rows">{% for card in open_cards %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is open. <a href="/jobs">See the jobs</a></p>{% endif %}
 </section>
 <section>
   <h2>Waiting for their turn</h2>

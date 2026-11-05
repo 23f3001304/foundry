@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% from "_ui.html" import saved %}
 {% block main %}
 <header class="page-head">
   <h1>Connections</h1>
   <p class="lead">The chat apps Switch is connected to, and whether each one is working. Foundry asks Switch as you and keeps none of it.</p>
 </header>
-{% if notice %}<p class="status" role="status">{{ notice }}</p>{% endif %}
-{% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
+{% if notice %}{{ saved(notice) }}{% endif %}
+{% if problem %}<p class="alert" role="alert">{{ problem }}</p>{% endif %}
 {% if not user.businesses %}
 <p class="empty">This login isn't listed for any business, so there is nothing to show. A business lists its logins in the dashboard part of its pack.</p>
 {% else %}

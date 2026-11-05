@@ -3,6 +3,7 @@
 Usage: uv run --no-project --with pillow --with numpy tools/gen_assets.py [name ...]
 Needs: `gcloud auth application-default login` and GOOGLE_CLOUD_PROJECT.
 With no names it makes every asset that doesn't exist yet. Raw output stays in assets/raw/.
+With --recut and names it cuts those again from what is in assets/raw/, without calling the model.
 """
 
 import base64
@@ -25,6 +26,8 @@ MODEL = os.environ.get("FOUNDRY_IMAGE_MODEL", "").strip() or "gemini-nano-banana
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "assets" / "raw"
 GRID, COLOURS, CELL, CANVAS = 115, 30, 4, 512
+# The two ends of the ramp the dashboard's shapes are painted in.
+DUOTONE = (np.array((0.08, 0.08, 0.09)), np.array((0.21, 0.22, 0.18)))
 
 CHARACTER_STYLE = (
     "Clean flat-colour chibi cartoon with a big head, thick dark outlines, flat colours with a single shadow tone, "
@@ -55,6 +58,7 @@ POSES = {
     "revise": "holds a big pencil next to a blue circular arrow, looking thoughtful.",
     "blocked": "stands with both palms raised next to a red octagon sign with a plain white horizontal bar.",
     "celebrate": "jumps with both arms up as orange, yellow, blue and green confetti bursts around them.",
+    "wave": "raises one open hand high beside their head and waves hello with a friendly smile, the other arm relaxed at their side holding the small hammer.",
 }
 
 LOGO_STYLE = (
@@ -134,19 +138,13 @@ ASSETS = {
         "in three overlapping rounded swells of different sizes. Colour runs from magenta pink at the crests through hot coral and orange "
         "to pale peach where it meets the corner.",
         "out": "src/foundry/dashboard/static/art/molten.webp",
-        "cut": "art",
+        "cut": "duotone",
     },
     "dashboard-tide": {
         "prompt": DASHBOARD_ART + " The form is one wide smooth sweeping arc that enters from the top-right corner, curves down and to the left like a dune, and ends in a smooth rounded tip well inside the frame, with pure black all around the tip, so that it touches only the top and right edges. "
         "Colour runs from pale ice blue along its edge to clear sky blue and a deeper cornflower blue in the corner.",
         "out": "src/foundry/dashboard/static/art/tide.webp",
-        "cut": "art",
-    },
-    "dashboard-ember": {
-        "prompt": DASHBOARD_ART + " The form is a single soft rounded lobe, like a drop of hot metal just starting to fall, that enters "
-        "from the top-right corner. Colour runs from warm orange at the edge through coral to a deep rose in the corner.",
-        "out": "src/foundry/dashboard/static/art/ember.webp",
-        "cut": "art",
+        "cut": "duotone",
     },
 }
 
@@ -254,16 +252,31 @@ def cut_art(image: Image.Image) -> Image.Image:
     return Image.fromarray((cut * 255).astype(np.uint8), "RGBA")
 
 
+def duotone(image: Image.Image) -> Image.Image:
+    """Cut like the rest of the art, then repaint it in one ramp from dark grey to a pale grey with a touch of the dashboard's lime, so the shapes bring no colour of their own."""
+    cut = np.asarray(cut_art(image), dtype=np.float32) / 255
+    light = cut[..., :3].max(axis=2) * 0.45 + cut[..., :3].mean(axis=2) * 0.55
+    low, floor = light[cut[..., 3] > 0.5].min(), DUOTONE[0]
+    share = np.clip((light - low) / max(light[cut[..., 3] > 0.5].max() - low, 0.01), 0, 1)[..., None]
+    colour = floor + (DUOTONE[1] - floor) * share
+    return Image.fromarray((np.dstack((colour, cut[..., 3])) * 255).astype(np.uint8), "RGBA")
+
+
 def finish(name: str, spec: dict) -> Path:
     out = ROOT / spec["out"]
     out.parent.mkdir(parents=True, exist_ok=True)
     image = Image.open(RAW / f"{name}.png")
-    cut = {"logo": cut_logo, "pixel": pixelate, "art": cut_art}.get(spec.get("cut"))
+    cut = {"logo": cut_logo, "pixel": pixelate, "art": cut_art, "duotone": duotone}.get(spec.get("cut"))
     (cut(image) if cut else image.convert("RGB")).save(out, optimize=True, quality=72, method=6)
     return out
 
 
 def main(names: list[str]) -> None:
+    if names and names[0] == "--recut":
+        # Cut again from the raw picture already on disk, with nothing asked of the model.
+        for name in names[1:]:
+            print(f"  -> {finish(name, ASSETS[name]).relative_to(ROOT)}")
+        return
     project = os.environ["GOOGLE_CLOUD_PROJECT"]
     bearer = token()
     wanted = names or [n for n, s in ASSETS.items() if not (ROOT / s["out"]).exists()]

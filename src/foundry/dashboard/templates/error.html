@@ -3,6 +3,10 @@
 <header class="page-head">
   <h1>Not done</h1>
 </header>
-<p class="problem" role="alert">{{ message }}</p>
-<p><a href="{{ '/' if user else '/login' }}">{{ 'Back to the overview' if user else 'Back to sign in' }}</a></p>
+<p class="alert" role="alert">{{ message }}</p>
+{% if user %}
+<p class="buttons"><a class="button" href="/">Back to the overview</a><a class="button" href="/jobs">See the jobs</a></p>
+{% else %}
+<p class="buttons"><a class="button" href="/login">Back to sign in</a></p>
+{% endif %}
 {% endblock %}

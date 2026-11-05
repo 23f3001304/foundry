@@ -1,30 +1,40 @@
 {% extends "base.html" %}
+{% from "_ui.html" import crumbs, job_tabs, empty_state %}
 {% block main %}
+{% if tabs %}
+<header class="page-head">
+  {{ crumbs([("Jobs", "/jobs"), (tabs.title, "/jobs/" ~ tabs.id)], "Timeline") }}
+  <h1>{{ tabs.title }}</h1>
+</header>
+{{ job_tabs(tabs, "timeline") }}
+{% else %}
 <header class="page-head">
   <h1>Action log</h1>
   <p class="lead">Each job's timeline, and the things the approver flagged. The log is not open for browsing. A chain opens for one flagged thing only.</p>
 </header>
+{% endif %}
 
+{% if flagged or not tabs %}
 <section>
   <h2>Flagged things</h2>
   {% if flagged %}
   <ul class="rows">
     {% for item in flagged %}
-    <li class="flagged-row"><a class="row-link" href="/log/flagged/{{ item.id }}">{{ item.text }}</a> <span class="small">Flagged by {{ item.who }}, {{ item.at }}{% if user.businesses|length > 1 %}. {{ item.client }}{% endif %}</span></li>
+    <li class="flagged-row" id="flag-{{ item.id }}"><a class="row-link" href="/log/flagged/{{ item.id }}">{{ item.text }}</a> <span class="small">Flagged by {{ item.who }}, {{ item.at }}{% if user.businesses|length > 1 %}. {{ item.client }}{% endif %}</span></li>
     {% endfor %}
   </ul>
   {% else %}
-  <p class="note">Nothing has been flagged. The person who approves a job can flag a file, a message, or a number in a file.</p>
+  <p class="note">Nothing has been flagged. The person who approves a job can flag a file, a message, or a number in a file. <a href="/jobs">See the jobs</a></p>
   {% endif %}
 </section>
+{% endif %}
 
-{% if not jobs %}<section><p class="empty">No jobs yet.</p></section>{% endif %}
-{% if only %}<section><p><a href="/log">Back to the newest jobs</a></p></section>{% endif %}
-{% if more %}<section><p class="note">These are the newest jobs. To see an older one, open it from the jobs page and choose its timeline.</p></section>{% endif %}
+{% if not jobs %}<section>{{ empty_state("reviewer", "No jobs yet.", "/connections", "See the connections") }}</section>{% endif %}
+{% if more %}<section><p class="note">These are the newest jobs. To see an older one, open it from the jobs page and choose its timeline. <a href="/jobs">See the jobs</a></p></section>{% endif %}
 {% for job in jobs %}
 <section id="log-{{ job.id }}">
   <div class="section-head">
-    <h2>{{ job.title }}</h2>
+    <h2>{% if tabs %}Timeline{% else %}<a class="row-link" href="/log?job={{ job.id }}">{{ job.title }}</a>{% endif %}</h2>
     <p class="page-meta"><span class="stage {{ job.tone }}">{{ job.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.client }}</span>{% endif %}</p>
   </div>
   {% if job.moments %}
@@ -54,7 +64,7 @@
   </table>
   </div>
   {% endif %}
-  {% if job.can_flag and job.files %}<p class="small">To flag one number or statement in a file, open the job.</p>{% endif %}
+  {% if job.can_flag and job.files %}<p class="small">To flag one number or statement in a file, <a href="/jobs/{{ job.id }}">open the job</a>.</p>{% endif %}
 </section>
 {% endfor %}
 {% include "_recent.html" %}

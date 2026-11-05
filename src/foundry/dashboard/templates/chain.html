@@ -1,11 +1,22 @@
 {% extends "base.html" %}
+{% from "_ui.html" import crumbs, job_tabs, empty_state %}
 {% block main %}
 <header class="page-head">
-  <p class="crumb"><a href="/log">Back to the action log</a></p>
+  {{ crumbs([("Action log", "/log"), (chain.flagged.text, "/log#flag-" ~ chain.flagged.id)], "Chain") }}
   <h1>{{ chain.flagged.text }}</h1>
   <p class="page-meta"><a href="/jobs/{{ chain.job_id }}">{{ chain.job_title }}</a></p>
   <p class="lead">Flagged by {{ chain.flagged.who }}{% if chain.via_dashboard %} on the dashboard{% endif %}, {{ chain.flagged.at }}. This is everyone and every agent behind this one thing, and nothing else.</p>
 </header>
+{% if tabs %}
+{{ job_tabs(tabs, "chain") }}
+{% if tabs.flags|length > 1 %}
+<nav class="chips" aria-label="The things flagged on this job">
+  {% for id, text in tabs.flags %}
+  <a class="chip-link" href="/log/flagged/{{ id }}"{% if id == chain.flagged.id %} aria-current="true"{% endif %}>{{ text }}</a>
+  {% endfor %}
+</nav>
+{% endif %}
+{% endif %}
 {% if chain.steps %}
 <div class="chain-head" aria-hidden="true"><span>When</span><span>Who and what</span><span>Source</span></div>
 <ol class="chain">
@@ -21,6 +32,6 @@
   {% endfor %}
 </ol>
 {% else %}
-<p class="empty">Nothing in this job is behind it.</p>
+{{ empty_state("reviewer", "Nothing in this job is behind it.", "/log", "Back to the action log") }}
 {% endif %}
 {% endblock %}

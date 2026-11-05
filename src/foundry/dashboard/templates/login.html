@@ -1,9 +1,11 @@
 {% extends "base.html" %}
+{% from "_ui.html" import sprite %}
 {% block main %}
 <div class="sign-in">
+  {{ sprite("wave", 96, plays=True) }}
   <h1>Sign in</h1>
   <p class="lead">Use your Switch login. Foundry passes your password to Switch and doesn't keep it.</p>
-  {% if error %}<p class="problem" role="alert">{{ error }}</p>{% endif %}
+  {% if error %}<p class="alert" role="alert">{{ error }}</p>{% endif %}
   <form class="stack" method="post" action="/login">
     <div class="field">
       <label for="login">Login</label>
@@ -13,7 +15,7 @@
       <label for="password">Password</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
     </div>
-    <button class="primary" type="submit">Sign in</button>
+    <button class="primary button-wide" type="submit">Sign in</button>
   </form>
 </div>
 {% endblock %}

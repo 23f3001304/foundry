@@ -1,49 +1,38 @@
 {% extends "base.html" %}
+{% from "_ui.html" import sprite, empty_state, switcher %}
+{% macro figure(label, value, note, href, go, pose="", chart="", stuck=False) %}
+<div class="figure{% if stuck %} is-stuck{% endif %}">
+  <dt>{{ label }}</dt>
+  <dd>{{ value }}</dd>
+  <dd class="figure-note">{{ note }}</dd>
+  {% if pose %}<dd class="figure-sprite">{{ sprite(pose, 48, plays=True) }}</dd>{% endif %}
+  {% if chart %}<dd class="figure-chart">{{ chart }}</dd>{% endif %}
+  <dd class="figure-go"><a href="{{ href }}">{{ go }} <span class="go" aria-hidden="true"></span></a></dd>
+</div>
+{% endmacro %}
 {% block main %}
-<header class="page-head board-title">
+<header class="page-head">
   <h1>Jobs</h1>
 </header>
+{{ switcher(user, business, "/jobs", stage) }}
 {% if not board.total %}
-<div class="card empty-card">
-  <span class="tile tile-brief" aria-hidden="true"></span>
-  <p class="empty">No jobs yet.</p>
-</div>
+{{ empty_state("apprentice", "No jobs yet. A job starts when someone asks for something in a room Foundry works in.", "/connections", "See the connections") }}
 {% else %}
 <dl class="figures figures-strip">
-  <div class="tile-card">
-    <dt>Open jobs</dt>
-    <dd>{{ board.open_jobs }}</dd>
-    <dd class="small">Of {{ board.total }} in all</dd>
-  </div>
-  <div class="tile-card{% if board.stuck %} is-stuck{% endif %}">
-    <dt>Stuck</dt>
-    <dd>{{ board.stuck }}</dd>
-    <dd class="small">Waiting for someone to restart them</dd>
-  </div>
-  <div class="tile-card">
-    <dt>Need you</dt>
-    <dd>{{ board.yours }}</dd>
-    <dd class="small">A card about the job is addressed to you</dd>
-  </div>
-  <div class="tile-card">
-    <dt>Inputs in</dt>
-    <dd>{{ board.inputs_in }}</dd>
-    <dd class="small">Of {{ board.inputs_total }} asked for, on open jobs</dd>
-    <dd class="chart-slot">{{ charts.meter(board.inputs_in, board.inputs_total, "Inputs in", "accent") }}</dd>
-  </div>
+  {{ figure("Open jobs", board.open_jobs, "Of " ~ board.total ~ " in all", link("/jobs", business=business), "See them all") }}
+  {{ figure("Stuck", board.stuck, "Waiting for someone to restart them", link("/jobs", stage="stuck", business=business), "See the stuck jobs", "blocked" if board.stuck else "", "", board.stuck > 0) }}
+  {{ figure("Need you", board.yours, "A card about the job is addressed to you", "/responses", "See the cards", "tap" if board.yours else "") }}
+  {{ figure("Inputs in", board.inputs_in, "Of " ~ board.inputs_total ~ " asked for, on open jobs", link("/jobs", stage="collecting", business=business), "See the jobs collecting", "", charts.meter(board.inputs_in, board.inputs_total, "Inputs in", "accent")) }}
 </dl>
 
 <nav class="chips" aria-label="Filter the jobs by stage">
   {% for key, name, count, current in board.chips %}
-  <a class="chip-link{% if key == 'stuck' and count %} chip-stuck{% endif %}" href="/jobs{% if key %}?stage={{ key }}{% endif %}"{% if current %} aria-current="true"{% endif %}>{{ name }} <b>{{ count }}</b></a>
+  <a class="chip-link{% if key == 'stuck' and count %} chip-stuck{% endif %}" href="{{ link('/jobs', stage=key, business=business) }}"{% if current %} aria-current="true"{% endif %}>{{ name }} <b>{{ count }}</b></a>
   {% endfor %}
 </nav>
 
 {% if not board.rows %}
-<div class="card empty-card">
-  <span class="tile tile-brief" aria-hidden="true"></span>
-  <p class="empty">No job is at this stage right now.</p>
-</div>
+{{ empty_state("smith", "No job is at this stage right now.", link("/jobs", business=business), "Show all jobs") }}
 {% else %}
 <div class="job-head" aria-hidden="true">
   <span>Job</span>
@@ -53,10 +42,11 @@
 <ul class="job-rows">
   {% for row in board.rows %}
   <li class="job-row{% if row.tone == 'stuck' %} is-stuck{% elif row.yours %} is-yours{% endif %}">
+    {{ sprite(row.sprite, 48, plays=row.tone == "stuck") }}
     <div class="job-title">
       <a class="row-link" href="/jobs/{{ row.id }}">{{ row.title }}</a>
       {% if row.yours %}<span class="pill pill-accent">Needs you</span>{% endif %}
-      {% if user.businesses|length > 1 %}<span class="small block">{{ row.client }}</span>{% endif %}
+      {% if user.businesses|length > 1 and not business %}<span class="small block">{{ row.client }}</span>{% endif %}
       {% for line in row.waiting %}<span class="small block">{{ line }}</span>{% endfor %}
     </div>
     <div class="job-stage">

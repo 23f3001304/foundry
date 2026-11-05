@@ -7,7 +7,7 @@ import secrets
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 import jinja2
@@ -29,7 +29,7 @@ from foundry.commands import DUE_ACTIONS, KIT, CommandStore
 from foundry.dashboard import charts, gateway
 from foundry.dashboard import data as brand_data
 from foundry.dashboard.auth import COOKIE, LIFETIME, REFUSED, User, csrf_ok, current_user, end_session, find_session, start_session, switch_login
-from foundry.dashboard.queries import MEDIA, PICTURES, ConnectionRow, Reader, is_made_file
+from foundry.dashboard.queries import MEDIA, PICTURES, ConnectionRow, NavCounts, Reader, bucket_name, is_made_file
 from foundry.desk import Settings
 
 logger = logging.getLogger(__name__)
@@ -83,9 +83,17 @@ def whole_number(value: object) -> int | None:
     return int(text) if text.isascii() and text.isdigit() and len(text) <= MOST_DIGITS else None
 
 
+def link(path: str, **query: str) -> str:
+    # An address for a page, with whichever of these have a value. Used in templates, so a filter is kept the one way everywhere.
+    kept = {key: value for key, value in query.items() if value}
+    return f"{path}?{urlencode(kept)}" if kept else path
+
+
 def render(request: Request, name: str, user: User | None = None, status: int = 200, **context) -> Response:
     found = find_session(request)
-    return request.app.state.templates.TemplateResponse(request, name, {"user": user, "csrf": found[1].csrf if found else "", **context}, status_code=status)
+    # A page reached some other way than a signed-in handler, like an address that isn't here, shows no counts.
+    counts = getattr(request.state, "counts", None) or NavCounts()
+    return request.app.state.templates.TemplateResponse(request, name, {"user": user, "csrf": found[1].csrf if found else "", "counts": counts, **context}, status_code=status)
 
 
 def check_body(request: Request, most: int) -> None:
@@ -112,12 +120,21 @@ def signed_in(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
             if not csrf_ok(request, form.get("csrf")):
                 raise HTTPException(403, FORM_EXPIRED)
             arguments = (request, user, form)
+        request.state.counts = await run_in_threadpool(request.app.state.reader.nav_counts, user)
         # A handler that waits on Switch is async and runs on the loop. The rest are plain functions that read SQLite or files, so they run in the thread pool and not on the event loop.
         if inspect.iscoroutinefunction(handler):
             return await handler(*arguments)
         return await run_in_threadpool(handler, *arguments)
 
     return guarded
+
+
+def in_view(request: Request, user: User) -> tuple[User, str]:
+    # The login with only the business the address names. A name that isn't one of theirs shows them all, the same as any filter nobody knows.
+    wanted = request.query_params.get("business", "")
+    if len(user.businesses) > 1 and wanted in user.businesses:
+        return User(user.login, {wanted: user.businesses[wanted]}), wanted
+    return user, ""
 
 
 def job_of(request: Request, user: User, job_id: str):
@@ -207,16 +224,17 @@ async def own_connection(request: Request, user: User, bridge_id: str) -> Connec
 
 @signed_in
 async def overview(request: Request, user: User) -> Response:
-    figures = await run_in_threadpool(request.app.state.reader.overview, user)
+    shown, business = in_view(request, user)
+    figures = await run_in_threadpool(request.app.state.reader.overview, shown)
     health = {}
-    if user.businesses:
+    if shown.businesses:
         # Nothing else on the page needs Switch, so Switch being down only changes this line.
         try:
-            health = request.app.state.reader.health(user, await connection_rows(request, user, gateway.READ_TIMEOUT))
+            health = request.app.state.reader.health(shown, await connection_rows(request, shown, gateway.READ_TIMEOUT))
         except gateway.SwitchProblem as trouble:
-            health = dict.fromkeys(user.businesses, trouble.message)
-    boards = await run_in_threadpool(request.app.state.reader.boards, user)
-    return render(request, "overview.html", user, title="Overview", page="overview", figures=figures, health=health, boards=boards)
+            health = dict.fromkeys(shown.businesses, trouble.message)
+    boards = await run_in_threadpool(request.app.state.reader.boards, shown)
+    return render(request, "overview.html", user, title="Overview", page="overview", figures=figures, health=health, boards=boards, business=business)
 
 
 # Connections
@@ -413,7 +431,9 @@ def data_add(request: Request, user: User, form: FormData) -> Response:
 
 @signed_in
 def jobs(request: Request, user: User) -> Response:
-    return render(request, "jobs.html", user, title="Jobs", page="jobs", board=request.app.state.reader.job_board(user, request.query_params.get("stage", "")))
+    shown, business = in_view(request, user)
+    stage = request.query_params.get("stage", "")
+    return render(request, "jobs.html", user, title="Jobs", page="jobs", board=request.app.state.reader.job_board(shown, stage), business=business, stage=stage)
 
 
 @signed_in
@@ -421,7 +441,7 @@ def job(request: Request, user: User) -> Response:
     page = request.app.state.reader.job_page(user, request.path_params["job_id"])
     if page is None:
         raise HTTPException(404)
-    return render(request, "job.html", user, title=page.row.title, page="jobs", job=page, recent=recent(request, user))
+    return render(request, "job.html", user, title=page.row.title, page="jobs", job=page, tabs=request.app.state.reader.job_nav(user, page.row.id), recent=recent(request, user))
 
 
 @signed_in
@@ -452,7 +472,12 @@ def job_answer(request: Request, user: User, form: FormData) -> Response:
 
 @signed_in
 def work(request: Request, user: User) -> Response:
-    return render(request, "work.html", user, title="Generated work", page="work", jobs=request.app.state.reader.work(user))
+    # One job's files, for that job's own tab. A job of another client is not found, so nobody can tell it exists.
+    reader, only = request.app.state.reader, request.query_params.get("job")
+    tabs = reader.job_nav(user, only) if only else None
+    if only and tabs is None:
+        raise HTTPException(404)
+    return render(request, "work.html", user, title=tabs.title if tabs else "Generated work", page="jobs" if tabs else "work", jobs=reader.work(user, only), tabs=tabs)
 
 
 @signed_in
@@ -493,7 +518,12 @@ def action_log(request: Request, user: User) -> Response:
     timelines, more = reader.job_logs(user, only)
     if only and not timelines:
         raise HTTPException(404)
-    return render(request, "log.html", user, title="Action log", page="log", jobs=timelines, more=more, only=only, flagged=reader.flagged(user), recent=recent(request, user))
+    flagged = reader.flagged(user)
+    # A job's timeline is one of that job's pages, so what it lists is that job's.
+    tabs = reader.job_nav(user, only) if only else None
+    if tabs:
+        flagged = [item for item in flagged if item.job_id == only]
+    return render(request, "log.html", user, title=tabs.title if tabs else "Action log", page="jobs" if tabs else "log", jobs=timelines, more=more, only=only, flagged=flagged, tabs=tabs, recent=recent(request, user))
 
 
 @signed_in
@@ -528,7 +558,7 @@ def chain(request: Request, user: User) -> Response:
     page = request.app.state.reader.chain(user, request.path_params["flag_id"])
     if page is None:
         raise HTTPException(404)
-    return render(request, "chain.html", user, title="Chain", page="log", chain=page)
+    return render(request, "chain.html", user, title="Chain", page="log", chain=page, tabs=request.app.state.reader.job_nav(user, page.job_id) if page.job_id else None)
 
 
 # Around the pages
@@ -591,7 +621,9 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
     reader = Reader(settings)
     environment = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     environment.filters["when"] = reader.when
+    environment.filters["client"] = bucket_name
     environment.globals["charts"] = charts
+    environment.globals["link"] = link
     app.state.settings, app.state.reader, app.state.commands = settings, reader, CommandStore(settings.commands_path)
     app.state.templates = Jinja2Templates(env=environment)
     # Without a secret from the environment each run has its own, so a restart signs everyone out.

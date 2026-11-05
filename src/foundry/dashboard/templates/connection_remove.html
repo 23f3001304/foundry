@@ -1,16 +1,17 @@
 {% extends "base.html" %}
+{% from "_ui.html" import crumbs %}
 {% block main %}
 <header class="page-head">
-  {% if not row or unsure or not row.removable %}<p class="crumb"><a href="/connections">Back to the connections</a></p>{% endif %}
+  {{ crumbs([("Connections", "/connections")], "Remove a connection") }}
   <h1>{% if row %}Remove {{ row.name }}{% else %}Remove a connection{% endif %}</h1>
 </header>
-{% if problem %}<p class="problem" role="alert">{{ problem }}</p>{% endif %}
+{% if problem %}<p class="alert" role="alert">{{ problem }}</p>{% endif %}
 {% if row and unsure %}
 <p>Check what is left in <a href="{{ gateway_link }}">Switch's Gateway</a> before you do anything else.</p>
 {% elif row %}
 {% set count = row.room_total %}
 <div class="confirm">
-  <p class="problem">Removing this connection deletes every room on it, {{ count }} {{ 'room' if count == 1 else 'rooms' }} in all, with the conversations in them. That can't be undone, and connecting the same chat app again does not bring them back.</p>
+  <p class="alert">Removing this connection deletes every room on it, {{ count }} {{ 'room' if count == 1 else 'rooms' }} in all, with the conversations in them. That can't be undone, and connecting the same chat app again does not bring them back.</p>
   {% if row.rooms %}
   <p>Foundry works in these rooms for {{ row.clients }}, so its jobs there would lose their chat:</p>
   <ul class="rows">
