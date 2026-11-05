@@ -326,6 +326,11 @@ class CardQueue:
         self.pump()
         return [item for item in (self.get(item_id) for item_id in card.data[ITEMS]) if item.state == ANSWERED]
 
+    def nothing_clean(self, card: Card) -> bool:
+        # True when nothing still on a merged card is clean, so a press on Approve everything clean would approve nothing and send all of it to the next set time.
+        items = (self.get(item_id) for item_id in card.data[ITEMS])
+        return not any(_is_clean(item) for item in items if item.state == IN_ROUTINE)
+
     def waiting(self, bucket: str) -> list[Card]:
         return self._select("WHERE bucket = ? AND state = ? ORDER BY rowid", bucket, QUEUED)
 
