@@ -247,6 +247,8 @@ For a client of your own, add a folder under `brands/` and run:
 uv run --env-file .env python tools/create_rooms.py agency <room-name> <brand-folder>
 ```
 
+Both work with any set of connected chat apps. Switch puts the account in `SWITCH_EMAIL` in each room it makes and won't make one on an app where that account has no linked identity, so the rooms go on apps it is linked on. The outside room takes Telegram first, then Mattermost, then any other, and a business whose pack names its people on Mattermost takes Mattermost first. The inside rooms take Mattermost if the account is linked there, and otherwise the same app as the outside room. To choose the app for outside people, add `--outside-bridge <app>` to either command. If no connected app is linked, or you choose one that isn't, nothing is made and the message says what to do.
+
 An agent that already exists keeps the instructions it was made with, because this only puts it back in its slot. So a stack made before the design guide does not get the guide by running this again: the new rooms hold it, and the old agents are never told to read it. To get it, run these steps again on a wiped Switch stack, or run `create_rooms` first, which gives the makers their tools and new rooms with the guide, and then change those agents' instructions in Switch Console to the ones in `templates/foundry.template.yaml`. Restart the makers either way, because they pick up `foundry-design` and `state_style` when they start. The desk names any room with no guide in its start log. It can't read an agent's instructions, so it can't name an agent.
 
 #### 5. Start the desk

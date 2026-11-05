@@ -3,8 +3,11 @@
 uv run --env-file .env python scripts/demo_seed.py [demo]
 
 With a demo's name, it_firm, investment_firm, agency or coffee_shop, only that demo's rooms are made. tools/foundry_setup.py runs it this way.
+
+To choose the chat app for outside people, add --outside-bridge Mattermost. Left out, tools/create_rooms.py chooses one your account is linked on.
 """
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -15,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from create_rooms import main as create_rooms
-from create_rooms import remember_rooms
+from create_rooms import names_people_on_mattermost, remember_rooms
 from demo_people import find_bridge, switch_url
 from register_desk import save
 
@@ -62,13 +65,13 @@ def still_to_make(existing: set[str], seed: tuple[tuple[str, str, str], ...] = S
 
 
 def needs_bridge(brand: str) -> bool:
-    pack = BRANDS / brand / "pack.md"
-    return pack.is_file() and "{bridge}" in pack.read_text(encoding="utf-8")
+    return names_people_on_mattermost(BRANDS / brand)
 
 
-def main(demo: str | None = None) -> None:
+def main(demo: str | None = None, outside_bridge: str = "") -> None:
     url = switch_url()
     seed = seed_for(demo)
+    chosen = {"outside_bridge": outside_bridge} if outside_bridge else {}
     # First, because the template shows the agents the approver each pack names, and that holds the bridge's id.
     bridge = find_bridge() if any(needs_bridge(brand) for _, _, brand in seed) else None
     if bridge:
@@ -83,9 +86,17 @@ def main(demo: str | None = None) -> None:
         if needs_bridge(brand) and not bridge:
             print(NO_BRIDGE.format(room=name, brand=brand))
         else:
-            create_rooms(mode, name, brand)
+            create_rooms(mode, name, brand, **chosen)
     print("Start the desk now, or restart it if it is running, so it follows these rooms.")
 
 
+def command() -> None:
+    parser = argparse.ArgumentParser(description="Creates the rooms of every demo business that doesn't have them yet.")
+    parser.add_argument("demo", nargs="?", default=None, help="Only this demo: it_firm, investment_firm, agency or coffee_shop.")
+    parser.add_argument("--outside-bridge", default="", help="The connected chat app for the rooms outside people use, by its name in Switch or its kind. Left out, it is one your account is linked on.")
+    args = parser.parse_args()
+    main(args.demo, args.outside_bridge)
+
+
 if __name__ == "__main__":
-    main(*sys.argv[1:2])
+    command()
