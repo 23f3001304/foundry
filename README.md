@@ -6,7 +6,7 @@ A business's team asks for work in the chat they already use, by text or voice n
 
 The same setup also turns a messy note from the field into a clean report, and shows the person signing it exactly which words changed and which document backs each change.
 
-Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shilagate Homes, Morpankh Systems, Kasauti Capital Partners, Bhorvela Studio, Phatakha Pop and Ambaryug Teas are fictional, and so is everything in their folders, including every figure.
+Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shilagate Homes, Morpankh Systems, Kasauti Capital Partners, Bhorvela Studio, Phatakha Pop and Ambaryug Teas are fictional, and so is everything in their folders, including every figure. The dashboard pages in the demo film come from those live runs, with part of the 14-day chart history seeded.
 
 ## What sets it apart
 
