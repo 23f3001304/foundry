@@ -104,12 +104,16 @@ Each agency client made from now on has its own set of these four, named with it
 
 ## Run it
 
-There are two commands. On Windows, use `.\setup.ps1` wherever this says `./setup.sh`, with the same flags.
+There are two commands. On Windows, use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` wherever this says `./setup.sh`, with the same flags. A default Windows machine refuses to run a script any other way. The Bypass applies only to that one run and changes no setting on your machine.
 
 **To look at it, with no agents and nothing else installed but [uv](https://docs.astral.sh/uv/):**
 
 ```bash
 ./setup.sh --try
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 --try
 ```
 
 This starts the dashboard on made-up data and prints its address and a made-up login that exists for this mode only. No agents run, and pressing a button sends nothing anywhere. It opens no connection to anything outside this machine, doesn't read or write a real `.env`, and every page has a banner that says the data is made up. It takes about half a minute: 28 seconds on a fast connection with uv fetching Python and the packages, and 20 seconds once it has them. Press Ctrl+C to stop it.
@@ -121,21 +125,21 @@ This starts the dashboard on made-up data and prints its address and a made-up l
 ```
 
 ```powershell
-.\setup.ps1
+powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
 
 From a fresh clone, this gets you a working Foundry on your machine. It takes under 3 minutes when Docker already has the images and uv its packages, which is the only way it has been timed, and we'd guess 15 to 20 minutes on a machine with neither, for 2.5 GB of images. It asks which demo you want rooms for, or give it `--demo it_firm`, `--demo investment_firm`, `--demo agency` or `--demo coffee_shop`, and `--yes` to accept what it would otherwise ask. In order, it:
 
 1. Checks this machine and says everything that's missing at once, with where to get it.
-2. Chooses ports. If one is in use, it says which and takes the next free one.
+2. Chooses ports. If one is in use, it says which and asks before taking the next free one. With `--yes` it takes it without asking. With nobody to ask and no `--yes`, it stops and says so.
 3. Clones Switch at the pinned commit `2d72c57` into `.foundry/switch`.
-4. Writes Switch's `.env` with generated secrets, agent management on and generated admin logins.
-5. Starts Switch's containers under a compose project of its own, on image versions pinned by digest.
+4. Writes Switch's `.env` with generated secrets, agent management on, generated admin logins and third-party avatars off. A run after that never changes these secrets, not even when the pinned commit moves.
+5. Starts Switch's containers under a compose project of its own. Switch's own three images are pinned by digest. `postgres:16-alpine` and `mattermost:11.9.0` are the tags Switch's compose file names.
 6. Waits until Switch answers.
 7. Builds the agent controller.
 8. Gets an enrolment code and enrols the controller.
 9. Starts the controller.
-10. Writes Foundry's `.env`, with `FOUNDRY_REVIEWER_PROVIDER=claude` and `FOUNDRY_QUIET_SECONDS=8`.
+10. Writes Foundry's `.env`, with `FOUNDRY_REVIEWER_PROVIDER=claude`, `FOUNDRY_QUIET_SECONDS=8` and its databases and uploads in `.foundry/data`, so any `foundry-*.db` already in this folder is not touched.
 11. Runs `uv sync`.
 12. Registers the desk.
 13. Makes the demo's rooms with fresh agents, the scripted people and the earlier history.
@@ -147,7 +151,7 @@ It never prints a secret. Each step checks whether it is already done, so if one
 You need:
 
 - [Docker](https://www.docker.com/products/docker-desktop/), running. Nothing can install it for you.
-- [uv](https://docs.astral.sh/uv/). If it's missing, the command says so and asks before installing it.
+- [uv](https://docs.astral.sh/uv/). If it's missing, the command says so and asks first. Saying yes fetches uv's official install script and runs it, and that script may change your shell profile or PATH, as [uv's own page](https://docs.astral.sh/uv/reference/installer/) says for macOS and Linux.
 - [Node](https://nodejs.org/) 24 or newer, because Switch's console needs it. Its corepack gets the right pnpm.
 - A signed-in [Claude Code](https://claude.com/claude-code). **Codex is not needed.** Codex alone can't run the real path, because the makers reach their deck and picture tools through a `.mcp.json` file that only Claude Code reads, and the desk's classifier uses Claude Code's login or `ANTHROPIC_API_KEY`. This comes from reading the code, not from a run: Codex is out of usage here until Dec 4. With the reviewer on Claude, a vendor is checking its own work.
 - About 10 GB of free disk.
@@ -157,8 +161,8 @@ Then:
 | Command | What it does |
 |---|---|
 | `./setup.sh --status` | Says what's up and what isn't. |
-| `./setup.sh --stop` | Stops what it started, and nothing else. |
-| `./setup.sh --reset` | Removes only what it created, after asking: its containers, volumes and images it pulled, `.foundry`, and the `.env` it wrote. |
+| `./setup.sh --stop` | Stops only processes it recorded starting, once each one's number and start time show it is the same process, and what those started. A maker's tool server it can't connect to them is left running, and it says which to close. |
+| `./setup.sh --reset` | Says what will go, asks, then removes only what it recorded making: its containers, volumes and network, the images it pulled, its parts of `.foundry`, the `.env` it wrote, `.venv` if it made it, and the agents' folder if its controller made it. Anything else stays, and it says what. With Docker off it refuses and changes nothing. |
 
 To play a demo once it's up, see steps 6 to 9 below. Your addresses are the ones it printed, which may not be the ports written there.
 
@@ -336,8 +340,7 @@ Then open the files each client was given and read them. Phatakha Pop's set shou
 
 ### Good to know
 
-- **A blocked `.\setup.ps1`:** a Windows machine that hasn't been set to run scripts refuses it. Run `powershell -ExecutionPolicy Bypass -File .\setup.ps1` with the same flags instead.
-- **What the one command leaves behind:** everything is in `.foundry` and `.env`, both git-ignored, apart from Docker's containers, volumes and images under a compose project named `foundry-` and eight letters and numbers, and the agents' working folder at `~/.switch/agents/127.0.0.1-<port>`. `--reset` removes those too. It leaves what Claude Code and Switch keep about each session in their own folders, `~/.claude/projects` and `~/.local/state/switch/sdk-sessions`, because those are theirs. It refuses to run over a `.env` it didn't write, so run it from a fresh clone if you already have a Foundry.
+- **What the one command leaves behind:** what it makes is in `.foundry`, `.env` and `.venv`, all git-ignored, along with uv's own Python and cache, and uv itself if you let it install uv. The rest is Docker's containers, volumes and images under a compose project named `foundry-` and eight letters and numbers, and the agents' working folder at `~/.switch/agents/127.0.0.1-<port>`. `--reset` removes those too. It leaves what Claude Code and Switch keep about each session in their own folders, `~/.claude/projects` and `~/.local/state/switch/sdk-sessions`, because those are theirs. It refuses to run over a `.env` it didn't write, so run it from a fresh clone if you already have a Foundry.
 - **Two Foundrys on one machine:** Switch's README says to run one agent controller per machine. A second with its own data folder and its own server ran beside a live one here without either touching the other.
 - **A maker that says its services failed to connect:** its session says `CONNECT_TIMEOUT`, meaning the deck, data and log tool servers did not answer within 30 seconds. In our run other test suites were running on the machine, and a later run with nothing else going on did not time out, so load looks likely, but that was not proven. Pressing Approve on the stuck card asks again in the same session, which keeps the failed connection. Restart that maker from Switch's agent management (stop it and start it) first, then press Approve.
 - **A reviewer can ask for what the fixed layouts can't do.** The deck and graphic tools have fixed layouts, so a review note such as a different background, the logo's place or a separate date line makes the maker send `WORK_BLOCKED`, and the stuck card says the layout has to change or the approver accept it. In the agency run, typing `revise:` in the studio room, to accept the layouts and drop those notes, got both sets passed on the next review. Approve on those cards, which asks again with the same notes, was not tried.
