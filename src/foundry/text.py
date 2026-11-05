@@ -3,6 +3,14 @@
 import re
 
 
+# Control characters, other than the line breaks and tabs a message may hold. Postgres refuses NUL in text, so a message with one is never stored, and the rest have no reason to be there.
+CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
+def no_controls(text: str) -> str:
+    return CONTROL.sub("", text)
+
+
 def quiet(text: str | None) -> str:
     # What people wrote must not wake an agent when the desk passes it on.
     return (text or "").replace("@", "@\u200b")

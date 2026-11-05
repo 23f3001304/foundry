@@ -14,6 +14,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
+from foundry.text import no_controls
 from foundry.tools.layout import MakerError
 
 logger = logging.getLogger(__name__)
@@ -210,9 +211,13 @@ def _decode(data: bytes, name: str) -> str:
     for mark, encoding in BOMS:
         if data.startswith(mark):
             try:
-                return data.decode(encoding)
+                text = data.decode(encoding)
             except UnicodeDecodeError as error:
                 raise MakerError(NOT_TEXT.format(name=name)) from error
+            # UTF-16 writes a NUL byte beside most letters, so with a mark it is the decoded text that can't hold one.
+            if "\x00" in text:
+                raise MakerError(NOT_TEXT.format(name=name))
+            return text
     if b"\x00" in data:
         raise MakerError(NOT_TEXT.format(name=name))
     for encoding in ("utf-8", "cp1252"):
@@ -237,7 +242,7 @@ def _read_csv(data: bytes, name: str) -> Table:
         for number, cells in enumerate(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter), start=1):
             if len(cells) > MOST_COLUMNS:
                 raise MakerError(TOO_WIDE.format(name=name, most=MOST_COLUMNS))
-            cells = [cell.strip() or None for cell in cells]
+            cells = [no_controls(cell).strip() or None for cell in cells]
             # The headings and every row with something in it. An empty row keeps its number, so the rows after it keep theirs.
             if any(cell is not None for cell in cells):
                 if delimiter == ";" and records:
@@ -255,7 +260,7 @@ def _plain(value: object) -> object:
     if isinstance(value, (datetime, date, time)):
         return value.isoformat()
     if isinstance(value, str):
-        return value.strip() or None
+        return no_controls(value).strip() or None
     return value
 
 
