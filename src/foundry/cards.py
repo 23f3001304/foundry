@@ -398,11 +398,13 @@ class CardQueue:
     def _give_up(self, card: Card) -> None:
         # Only what was said in the room that has gone goes with it. The rest of the business's items get a card of their own.
         items = [self.get(item_id) for item_id in card.data.get(ITEMS, ())]
+        # Chosen before the card ends and puts what is left on it back in the queue. An item that already ended on it stays ended.
+        carried = [item.request_id for item in items if item.room_id != card.room_id and item.state == IN_ROUTINE]
         for item in items:
             if item.room_id == card.room_id:
                 self.finish(item.request_id, CLOSED)
         self.finish(card.request_id, CLOSED)
-        others = [self.get(item.request_id) for item in items if item.room_id != card.room_id]
+        others = [self.get(request_id) for request_id in carried]
         if others:
             self._open_routine(card.person, card.bucket, others)
 
