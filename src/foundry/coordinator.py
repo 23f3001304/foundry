@@ -1486,8 +1486,9 @@ class Coordinator:
         # Asked once. What they said is kept and read again with their reply, and if that is still unclear nothing more is asked.
         if not heard.again:
             burst = heard.burst
-            self._asked_which[(burst.sender, heard.bucket)] = (burst.first_at, burst.text)
             self.client.post_message(burst.room_id, template.format(owner=quiet(self._shown_name_of(burst.sender, heard.bucket)), options=_join(options)))
+            # Only once it has been put. A question Switch refused is asked again, and the message that led to it is not taken for the reply to it.
+            self._asked_which[(burst.sender, heard.bucket)] = (burst.first_at, burst.text)
         return True
 
     def _labels(self, options: list[Item]) -> list[str]:
