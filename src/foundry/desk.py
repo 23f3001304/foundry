@@ -590,7 +590,7 @@ class Desk:
             self._take_work(job, payload, text)
         elif marker == WORK_BLOCKED:
             if agent in job.waiting_on:
-                self._stop(job, text or MAKER_STUCK)
+                self._stop(job, self._maker_said(job, text))
         elif job.pending_fix:
             # The reviewer looked at work made before the sender's fix, so a pass or a fail from them is no verdict on what the fix asks for.
             # The makers go back to it, with the reviewer's notes if they gave any, and nothing goes to sign-off.
@@ -749,6 +749,11 @@ class Desk:
         said = self._reviewer_said(job, room, reviewer_said)
         self.gate.ask(job, FINAL_WORK_TITLE.format(title=self._title(job)), "\n\n".join(part for part in (lines, said, SIGNOFF) if part), room)
         self._sticker(room, "needs_input")
+
+    def _maker_said(self, job: Job, words: str) -> str:
+        # The person a stuck card asks reads why, unless that is a client approving their own work, whose card would name agents, tools and folders they never see. The words stay in the log.
+        room = self._approval_room(job)
+        return MAKER_STUCK if not words or (room == job.room_id and not self.settings.is_internal(job.room_id)) else words
 
     def _reviewer_said(self, job: Job, room: str, words: str) -> str:
         # A reviewer can pass work and still ask the approver to check something, so the person signing off reads it here. In a client's own room that person is the client, and the words name agents and people they never see.
