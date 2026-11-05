@@ -12,13 +12,14 @@ LOG_TOOL = "foundry.tools.log_server"
 DATA_TOOL = "foundry.tools.data_server"
 DOC_TOOL = "foundry.tools.doc_server"
 IMAGE_TOOL = "foundry.tools.image_server"
+DESIGN_TOOL = "foundry.tools.design_server"
 # The tools both makers share read what the desk writes, and the name each goes by in a maker's tool list. A maker's own tool goes by the maker's name.
 SHARED = {LOG_TOOL: "foundry-log", DATA_TOOL: "foundry-data"}
-NAMES = {**SHARED, DOC_TOOL: "foundry-doc", IMAGE_TOOL: "foundry-image"}
-# Each maker gets the tool that makes its files, the data tool and the log tool. The deck maker also writes the copy. The brief agent and the reviewer get no tool, so the reviewer is handed its inputs in a message.
+NAMES = {**SHARED, DOC_TOOL: "foundry-doc", IMAGE_TOOL: "foundry-image", DESIGN_TOOL: "foundry-design"}
+# Each maker gets the tool that makes its files, the tool that lets it see them, the data tool and the log tool. The deck maker also writes the copy. The brief agent and the reviewer get no tool, so the reviewer is handed its inputs in a message.
 SERVERS = {
-    "foundry-deck": ["foundry.tools.deck_server", DOC_TOOL, DATA_TOOL, LOG_TOOL],
-    "foundry-visual": ["foundry.tools.graphic_server", DATA_TOOL, LOG_TOOL],
+    "foundry-deck": ["foundry.tools.deck_server", DOC_TOOL, DESIGN_TOOL, DATA_TOOL, LOG_TOOL],
+    "foundry-visual": ["foundry.tools.graphic_server", DESIGN_TOOL, DATA_TOOL, LOG_TOOL],
 }
 # The places the desk writes, with the names it uses when the environment names none: its databases, and the folder it keeps files sent as answers in.
 DATABASES = {"FOUNDRY_LOG_DB": "foundry-log.db", "FOUNDRY_JOBS_DB": "foundry-jobs.db", "FOUNDRY_WORK_DB": "foundry-work.db", "FOUNDRY_INPUTS_DIR": "foundry-inputs"}

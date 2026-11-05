@@ -1027,6 +1027,11 @@ def _print_sources(slide, brand: Brand, links: list[Link], layout: str) -> None:
     _text_box(slide, brand, look, "body", look.source, box, [source_line(links)], *SOURCE_SIZES)
 
 
+def _name_layout(deck: Presentation, layout: str) -> None:
+    # A slide's name shows nowhere on it. check_design reads it, because a layout can't be told from where its shapes fell.
+    deck.slides[-1]._element.cSld.set("name", layout)
+
+
 @mcp.tool()
 def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, highlight: str = "", sources: list[dict] | None = None, subtitle: str = "", bullets: list[str] | None = None) -> str:
     """Build an on-brand .pptx and return its absolute path. The title slide comes first, from title, with subtitle as a smaller line under it when you give one,
@@ -1082,8 +1087,10 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
         raise MakerError("bullets are for a deck of one slide. Put these on a slide of their own in slides.")
     if slides:
         _title_slide(deck, brand, title, subtitle, highlight)
+        _name_layout(deck, "title")
     else:
         _one_slide(deck, brand, title, subtitle, bullets or [], highlight)
+        _name_layout(deck, "content")
     links = _sources_of({"title": title, "subtitle": subtitle, "sources": sources} if slides else {"title": title, "subtitle": subtitle, "bullets": bullets or [], "sources": sources}, 1)
     if links:
         _print_sources(deck.slides[-1], brand, links, "title" if slides else "content")
@@ -1093,6 +1100,7 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
             raise MakerError(f"Unknown layout {spec.get('layout')!r}. Use one of: {', '.join(LAYOUTS)}.")
         given = _sources_of(spec, number)
         layout(deck, brand, spec)
+        _name_layout(deck, spec["layout"])
         if given:
             _print_sources(deck.slides[-1], brand, given, spec["layout"])
             links += given

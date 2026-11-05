@@ -77,9 +77,9 @@ A report skips the brief and the makers. The desk writes it from the note, asks 
 |---|---|---|
 | `foundry-desk` | Foundry's own process | Reads every room, sorts messages, runs approvals, delivers |
 | `foundry-brief` | Claude | Turns a request into a one-page brief |
-| `foundry-deck` | Claude, with the `build_deck` and `write_copy` tools | Makes on-brand slides and a branded PDF of written copy |
-| `foundry-visual` | Claude, with the `render_graphic` tool | Makes on-brand graphics |
-| `foundry-reviewer` | Set by `FOUNDRY_REVIEWER_PROVIDER`. Claude in the recent runs, and Codex in the earlier run by another vendor. OpenCode works too | Checks the work against the brief and the brand kit |
+| `foundry-deck` | Claude, with the `build_deck`, `write_copy`, `render_pictures` and `check_design` tools | Makes on-brand slides and a branded PDF of written copy, looks at pictures of them and fixes what it sees |
+| `foundry-visual` | Claude, with the `render_graphic`, `render_pictures` and `check_design` tools | Makes on-brand graphics in a composition it chooses, looks at them and fixes what it sees |
+| `foundry-reviewer` | Set by `FOUNDRY_REVIEWER_PROVIDER`. Claude in the recent runs, and Codex in the earlier run by another vendor. OpenCode works too | Checks the work against the brief, the brand kit and the design guide, from pictures of every slide |
 
 Each agency client made from now on has its own set of these four, named with its own ending, such as `foundry-deck-phatakha`, each in its own folder. That includes Lalten Cafe's and Green Valley's rooms on a fresh stack, because the rule that one client's work stays out of another's is not only for the demos. **Rooms already in your `.env` have no ending, so they keep the shared agents until their rooms are made again,** and the desk says so in its log at start. An internal company or department shares one set across its rooms. When `FOUNDRY_IMAGES=on`, both makers also get a `generate_image` tool.
 
@@ -96,8 +96,8 @@ Each agency client made from now on has its own set of these four, named with it
 | Approvals with buttons | Approval cards on an agent session |
 | Questions with their answers as choices | Question cards on an agent session |
 | Notes and answers on WhatsApp | The open adapter from sandbox-quantum/switch#1166 with our button and list cards, in `integrations/whatsapp` |
-| Brand kit and business pack | Room documents, in the inside rooms only |
-| Deck, graphic, copy and picture tools | MCP servers in each maker's `.mcp.json` |
+| Brand kit, business pack and design guide | Room documents, in the inside rooms only |
+| Deck, graphic, copy, picture and design check tools | MCP servers in each maker's `.mcp.json` |
 | Sending files and stickers | Room media route |
 | Agents on a machine you control | Agent controller, and the `agent_management` flag |
 | Keeping clients out of the workrooms | Separate rooms grouped and linked by label, with the desk alone in both |
