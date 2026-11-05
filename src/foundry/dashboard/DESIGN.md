@@ -8,7 +8,7 @@ Everything visible comes from `static/style.css`, the macros in `templates/_ui.h
 - **One saturated moment a page.** The overview has its hero shape, and a job's page has its banner when something happened. The rest of the page stays quiet so that one thing lands. A job that is just running has no banner, because nothing happened.
 - **A clear order on every page.** Title, then tabs, then state pills, then the big thing, then the charts, then the detail. Hairlines before boxes: a table has no card round it, and a section is a row with a chevron.
 - **Colour is only written in the tokens block.** A rule names a token, and a component reads `--fam-grad`, `--fam-dot`, `--fam-text`, `--fam-wash` and `--fam-line` from whichever family it sits in. It never names a colour.
-- **The 4px rule.** Every padding, margin, gap, height, radius and offset is a token. Only 1px borders and the 2px focus ring are off the grid.
+- **The 4px rule.** Every padding, margin, gap, height, radius and offset is a token. Only 1px borders and the 2px focus ring are off the grid, and a border is taken out of the padding beside it, so what you measure from a shape's edge is on the scale.
 - **Everything leads somewhere.** A figure, a "needs you" row, a stage and a job row each link to the list or the place where it can be acted on, and each answers the mouse and the press.
 - **Every empty or result page offers the next step.**
 - **No scripts and no inline styles.** The Content-Security-Policy stays as it is in `app.py`. Fonts, pictures and icons come from `/static`, and shapes and charts are drawn on the server.
@@ -25,7 +25,7 @@ Each runs from a bright hue to a deeper one and is shown as a gradient, a dot, a
 | Ember | `--ember-*` | Needs someone: a stuck job or a card waiting on this login. Nothing else may use it |
 | Azure | `--azure-*` | Foundry at work: being made, cards opening, files, and the Setup group |
 | Orchid | `--orchid-*` | Being checked: the reviewer and sign-off |
-| Sun | `--sun-*` | With the people: the brief and the inputs being collected, and the Records group |
+| Sun | `--sun-*` | With the people: the brief and the inputs being collected, a connection someone has to look at, and the Records group |
 
 `queries.py` ties each stage to its family in `STEP_FAMILIES`, and `family_of` says stuck is ember and done is lime whatever the stage. `.fam-lime` and the rest set a family on an element, and the state classes `.working`, `.waiting`, `.done`, `.idle` and `.stuck` bring one for a status mark that has none. Every family also has a forge glow for a banner, `--forge-lime` and the rest: near black on the left, and heat from behind the button on the right, in five stops of its own (`--lime-forge-1` to `-5`). Lime cools through green and sun through amber, so neither turns olive or muddy on the way down. Words are white and the button is white in every family, and the words stop at 62% of the banner, so a long line wraps before white stops passing on what is behind it. On a phone the button is full width, so the heat comes up from under it, and its height is fixed so a long message can't reach it.
 
@@ -38,7 +38,7 @@ Drawn in `shapes.py` as our own paths, in one family each. `shapes.defs()` puts 
 | Shape | Function | Where |
 |---|---|---|
 | Cut-out | `shapes.cut_out(family)` | The overview's hero: long curves and one sharp cusp hugging the bottom of a rounded panel, with the figures in a dark bar over it. Ember when something is stuck or waiting on this login, otherwise lime |
-| Grid tile | `shapes.grid_tile(family)` | Sign-in and empty states: a family's gradient with thin dark lines, and a dark card overlapping it and running off the edge |
+| Grid tile | `shapes.grid_tile(family)` | Sign-in, empty states and Generated work's header: a family's gradient with thin dark lines, and a dark card overlapping it and running off the edge |
 | Icon tile | `tile(icon, family)` | Beside a section's title, a small square in its family's gradient |
 
 ## Tokens
@@ -47,15 +47,44 @@ Drawn in `shapes.py` as our own paths, in one family each. `shapes.defs()` puts 
 |---|---|
 | Space | `--space-` 4, 8, 12, 16, 20, 24, 32, 40, 48, 64 |
 | Type | `--text-` / `--line-` 12/16, 14/20, 16/24, 20/28, 24/32, 32/40 |
-| Radius | `--radius-` 4 (chip), 8 (control), 12 (panel), 16 (card), 24 (hero and sign-in) |
-| Control height | `--control-` 32, 36, 40 |
+| Radius | `--radius-` 4 (chip, and a row in a small menu), 8 (control), 16 (panel, banner, card, the hero's dark bar), 24 (hero and sign-in) |
+| Control height | `--control-` 24 (a button in a table), 32, 36, 40 |
 | Icons and sprites | `--size-` 16, 24, 32, 48, 64, 96 |
-| Layout | `--gutter`, `--gap`, `--sidebar`, `--side-folded`, `--rail`, `--content`, `--measure`, `--form`, `--sign-in`, `--sign-in-art`, `--hero`, `--hero-shape`, `--col-*`, `--step`, `--tabbar` |
+| Layout | `--gutter`, `--gap`, `--section`, `--sidebar`, `--side-folded`, `--rail`, `--content`, `--measure`, `--form`, `--sign-in`, `--sign-in-art`, `--hero`, `--hero-shape`, `--col-*`, `--step`, `--tabbar` |
 | Motion | `--dur-fast` 120ms, `--dur-base` 200ms, `--dur-slow` 320ms, `--dur-reveal` 640ms, `--frame` 120ms, `--frame-slow` 320ms, `--ease-out` |
 | Neutrals | `--paper --side --panel --sunken --hover --current --rule --rule-strong --field --ink --ink-soft --ink-faint`, leaning very slightly toward the logo's olive |
 | Accent and focus | `--primary --primary-hover --primary-ink --focus` |
 | The dark bar and words on colour | `--bar --bar-hover --bar-rule --bar-ink --bar-soft --on-bright --on-deep --grid-line` |
 | Gradients | `--grad-lime --grad-ember --grad-azure --grad-orchid --grad-sun --grad-none`, and `--forge-lime --forge-ember --forge-azure --forge-orchid --forge-sun` with `--forge-shape`. A gradient is only written here |
+
+## Spacing
+
+One step for one kind of relationship. Things that belong together sit closer than things that don't, and every gap of a kind on a page is the same.
+
+| Step | Between |
+|---|---|
+| 4 | A label and its value, and a value and its note |
+| 8 | A title and its tabs. A cell's head and what is under it. A chip and the next chip. A shape and the shape nested in it |
+| 12 | A figure and its chart, a chart and its legend, a section's head and what it heads |
+| 16 | The padding of a cell, a banner and a row: the inner edge |
+| `--gap`, 16 and 12 on a phone | Panel to panel, and each thing in a page's stack: head, tabs, pills, banner, panel, folds |
+| `--section`, 40 and 32 on a phone | Section to section |
+
+**The two left edges.** Titles and section heads sit on the page's outer edge. Everything inside a panel, a banner or a list row sits on the inner edge, 16 in from it, so banner words, a panel's strip, a chart cell, a fold's chevron and a row's first word all line up, and a row's last chevron ends at the same place in every list. What is inside a fold is already on that edge, so a table there takes no more. The hero is the one exception: it is the page's biggest shape, so its words sit 32 in, on a phone 24, and the figures in its bar line up with them.
+
+**A shape nested in a rounded shape.** Equal insets on the sides it is near, and its radius is the outer radius minus that inset, so the corners run parallel:
+
+| Outer | Inset | Inner |
+|---|---|---|
+| `.hero` 24 | 8 | `.hero-bar` 16 |
+| `.hero-bar` 16 | 8 | `.figure` 8 |
+| `.banner` 16, on a phone | 8 | `.banner-go` 8 |
+| `.more-panel` 16 | 8 | `.nav-item` 8 |
+| `.switcher-menu` 8 | 4 | `.switcher-item` 4 |
+
+The hero's "See the jobs" takes the other honest form: a clean end cell of the bar, split by a hairline and running to its edges, so it takes the bar's own outer corners. Beside the words of a banner on a wider screen the button sits well inside the corner, so there is nothing to run parallel to: it is an ordinary control of radius 8, with 32 above, right and below for as long as the words fit two lines. Longer words make the banner taller, and the right stays 32.
+
+**Rows.** A list row is 40 tall with one line and 56 with a second, hairline included, in a table or not. A table's head row is 32. A fold's row is 48.
 
 ## Components
 
@@ -72,18 +101,20 @@ Each has one definition, with its states: rest, hover, focus (one shared ring), 
 | Delta | `.delta` | A soft chip beside a chart's title. `.delta-good`, `.delta-flat`, `.delta-stuck` |
 | Legend | `legend()`, `.legend` | Diamonds in the line's own colour, with mono values |
 | Icon tile | `tile()`, `.tile` | One family's gradient beside a section title |
-| Figure | `.figure` | Label, number and an arrow, on the hero's dark bar. The whole figure is the link |
+| Figure | `.figure` | Label with its arrow beside it, and the number under them, on the hero's dark bar. The whole figure is the link |
 | Pill | `.pill` | A short fact or a count. `.pill-needs` needs you, `.pill-stuck` stuck |
 | Chip | `.chip-link` | A filter, kept in the address, with a dot in the stage's family |
 | Button | `button` `.button` | `.primary`, `.danger` (inverted, not red), `.quiet`, `.button-wide` |
 | Nav item | `.nav-item` `.tab` | Side bar and bottom bar. Where you are is a soft filled row |
 | Switcher | `switcher()`, `.switcher` | Which business, built with details |
-| Table | `table.list` | No card round it, hairlines only, small grey heads, and a row turns into a short block on a phone |
+| Table | `table.list` | No card round it, hairlines only, small grey heads, and a row turns into a short block on a phone. Jobs, Connections, Data, flagged things, timelines and files are all this |
+| Link row | `.link-row` | A table row that is one link, with a chevron at its end |
+| Card row | `.response-row` | A card as one row of name, kind and status, in the same columns as a table. What it says and asks opens under it, already open when it is waiting for an answer |
 | Section | `.fold` | A row with a chevron and a tile, built with details |
 | Rail | `.rail`, `.facts` | Label and value pairs beside a job, then its stages |
 | Stepper | `.stepper` `.stepper-named` | The stage it is at wears its state's shape. In the rail each stage says its status |
 | Progress bar | `charts.meter` | Fills on load |
-| Status mark | `.stage` with `.done .working .waiting .idle .stuck` | A soft fill and matching words, and a dot, diamond, ring, dash or square. Drawn with borders alone |
+| Status mark | `.stage` with `.done .working .waiting .idle .stuck .trouble` | A soft fill and matching words, and a dot, diamond, ring, dash, square or triangle. Drawn with borders alone. `.trouble` is a connection that isn't working, which is not a stuck job |
 | Alert | `.alert` `.alert-done` | Marked with `!` and a border |
 | Avatar | `avatar()`, `.avatar` | Initials in a quiet circle. No colour, because no person is ever ranked or marked |
 | Empty state | `empty_state()` | A grid tile, a character at rest, what is true and the next step |
@@ -115,7 +146,7 @@ One character per context: on the overview's hero, at the stage a job is at in i
 | State | Character | Reaction |
 |---|---|---|
 | Brief | Apprentice | Still |
-| Collecting, or a card waiting | Smith with a question | Foot taps twice |
+| Collecting, or a card waiting | Smith with a question | The question mark bobs twice. Nothing taps, because nobody is being hurried |
 | Being made | Designer | Still |
 | Review | Reviewer | Still |
 | Sign-off | Smith | Still |

@@ -37,7 +37,7 @@ PICTURES = (".png", ".jpg", ".jpeg")
 STAGES = {
     State.RECEIVED: ("Drafting the brief", "apprentice"),
     State.BRIEF_PENDING: ("Brief waiting for approval", "apprentice"),
-    State.COLLECTING: ("Collecting inputs from people", "tap"),
+    State.COLLECTING: ("Collecting inputs from people", "ask"),
     State.MAKING: ("Being made", "designer"),
     State.REVIEWING: ("Being checked by the reviewer", "reviewer"),
     State.SIGNOFF_PENDING: ("Work waiting for sign-off", "smith"),
@@ -408,6 +408,7 @@ class WorkJob:
     stage: str
     files: list[WorkFile]
     tone: str
+    family: str = "none"
 
 
 @dataclass
@@ -429,6 +430,7 @@ class JobLog:
     files: list[FileRow]
     can_flag: bool
     tone: str
+    family: str = "none"
 
 
 @dataclass
@@ -1030,7 +1032,7 @@ class Reader:
                         status = f"{status.rstrip('.')}. {FILE_GONE}"
                     versions.append(Version(number, entry.id, name_of(entry, known[job.bucket]), self.when(entry.at), status, newest and here and Path(path).suffix.lower() in MEDIA))
                 files.append(WorkFile(Path(path).name, Path(path).suffix.lower() in PICTURES, versions[::-1]))
-            found.append(WorkJob(job.id, bucket_name(job.bucket), title_of(job), stage, files, tone_of(job)))
+            found.append(WorkJob(job.id, bucket_name(job.bucket), title_of(job), stage, files, tone_of(job), family_of(tone_of(job), STEP_OF.get(job.state, ""))))
         return found
 
     def file_for(self, user: User, entry_id: int) -> tuple[Path, str] | None:
@@ -1064,7 +1066,7 @@ class Reader:
         for job in shown:
             entries = [entry for entry in self.entries_of(job) if not (entry.kind == "file_made" and not is_made_file(entry))]
             moments = [self._moment(entry, known[job.bucket], user.businesses[job.bucket] == job.approver) for entry in entries]
-            found.append(JobLog(job.id, bucket_name(job.bucket), title_of(job), stage_of(job)[0], moments, self._files(entries), user.businesses[job.bucket] == job.approver, tone_of(job)))
+            found.append(JobLog(job.id, bucket_name(job.bucket), title_of(job), stage_of(job)[0], moments, self._files(entries), user.businesses[job.bucket] == job.approver, tone_of(job), family_of(tone_of(job), STEP_OF.get(job.state, ""))))
         return found, only is None and len(jobs) > MOST_TIMELINES
 
     def _moment(self, entry: Entry, known: dict[str, str], can_flag: bool) -> Moment:

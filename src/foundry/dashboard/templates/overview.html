@@ -52,7 +52,7 @@
   {% set family = "ember" if f.stuck or b.needs else "lime" %}
   <div class="hero">
     {{ shapes.cut_out(family) }}
-    {{ sprite("blocked" if f.stuck else "tap" if b.needs else "cheer" if b.delivered_total else "smith", 96, plays=True) }}
+    {{ sprite("blocked" if f.stuck else "ask" if b.needs else "cheer" if b.delivered_total else "smith", 96, plays=True) }}
     <div class="hero-words">
       <h2>
         {%- if f.stuck and f.waiting %}{{ f.stuck }} {{ "job is" if f.stuck == 1 else "jobs are" }} stuck, and {{ f.waiting }} {{ "card is" if f.waiting == 1 else "cards are" }} waiting

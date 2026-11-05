@@ -194,7 +194,7 @@
       <span>{{ step.name }}</span>
       {% if step.state == "now" %}
       <span class="step-status">{{ {"stuck": "Stuck here", "done": "Finished", "waiting": "Waiting on a person", "working": "Foundry is working"}.get(job.row.tone, "Here") }}</span>
-      {{ sprite(job.row.sprite, 48, plays=job.row.tone in ("stuck", "done") or job.row.sprite == "tap") }}
+      {{ sprite(job.row.sprite, 48, plays=job.row.tone in ("stuck", "done") or job.row.sprite == "ask") }}
       {% else %}
       <span class="step-status">{{ {"past": "Completed", "next": "Not started"}[step.state] }}</span>
       {% endif %}

@@ -6,6 +6,15 @@
   {{ page_title([("Jobs", "/jobs")], tabs.title) }}
 </header>
 {{ job_tabs(tabs, "files") }}
+{% elif jobs %}
+<header class="page-head work-head">
+  {{ shapes.grid_tile("azure") }}
+  <div class="work-card">
+    {{ page_title([], "Generated work") }}
+    {% set made = jobs|map(attribute="files")|map("length")|sum %}
+    <p class="lead">{{ made }} {{ "file" if made == 1 else "files" }} from {{ jobs|length }} {{ "job" if jobs|length == 1 else "jobs" }}. Every version, who made it and where it stands.</p>
+  </div>
+</header>
 {% else %}
 <header class="page-head">
   {{ page_title([], "Generated work") }}
@@ -18,7 +27,7 @@
 <section>
   <div class="section-head">
     <h2>{% if tabs %}Files{% else %}<a class="row-link" href="/jobs/{{ job.id }}">{{ job.title }}</a>{% endif %}</h2>
-    <p class="page-meta"><span class="stage {{ job.tone }}">{{ job.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.client }}</span>{% endif %}</p>
+    <p class="page-meta"><span class="stage {{ job.tone }} fam-{{ job.family }}">{{ job.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.client }}</span>{% endif %}</p>
   </div>
   <div class="scroll">
   <table class="list work-table">

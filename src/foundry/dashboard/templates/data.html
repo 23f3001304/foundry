@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_ui.html" import saved %}
+{% from "_ui.html" import saved, tile %}
 {% block main %}
 <header class="page-head">
   <h1 class="title">Data</h1>
@@ -12,19 +12,24 @@
 {% endif %}
 {% for c in clients %}
 <section id="data-{{ c.bucket }}">
-  <h2>{{ c.client }}</h2>
+  <div class="section-head">{{ tile("data", "azure") }}<h2>{{ c.client }}</h2></div>
   {% if not c.has_folder %}
   <p class="note">This business has no brand folder on this machine, so there is nothing to show or change.</p>
   {% else %}
   {% if c.files %}
-  <ul class="rows">
+  <table class="list data-table">
+    <thead><tr><th>Name</th><th>Kind</th><th>Changed</th><th aria-label="Open the file"></th></tr></thead>
+    <tbody>
     {% for f in c.files %}
-    <li class="file-row">
-      <h3><a class="row-link" href="/data/{{ c.link }}/{{ f.file|urlencode }}">{{ f.file }}</a></h3>
-      <p class="small">{{ f.kind }}. Changed {{ f.changed|when }}.</p>
-    </li>
+    <tr class="link-row file-row">
+      <td class="title-cell"><a class="row-link" href="/data/{{ c.link }}/{{ f.file|urlencode }}">{{ f.file }}</a></td>
+      <td data-label="Kind">{{ f.kind }}</td>
+      <td data-label="Changed">{{ f.changed|when }}</td>
+      <td class="go-cell"><span class="go" aria-hidden="true"></span></td>
+    </tr>
     {% endfor %}
-  </ul>
+    </tbody>
+  </table>
   {% else %}
   <p class="note">This folder has no kit or source documents yet.</p>
   {% endif %}

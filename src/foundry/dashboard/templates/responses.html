@@ -1,29 +1,38 @@
 {% extends "base.html" %}
-{% macro row(card) %}
+{% from "_ui.html" import tile %}
+{% macro row(card, opened=False) %}
+{% set more = card.detail or card.offer.buttons or card.offer.changes or card.offer.notice %}
 <li class="response" id="card-{{ card.request_id }}">
-  <h3>{{ card.title }}</h3>
-  <p class="small">{{ card.kind }}{% if user.businesses|length > 1 %}. {{ card.client }}{% endif %}</p>
-  <p class="response-status"><span class="stage {{ {'open': 'waiting', 'answered': 'done'}.get(card.state, 'idle') }}">{{ card.status }}</span></p>
-  {% if card.detail %}<pre class="text">{{ card.detail }}</pre>{% endif %}
-  {% if card.offer.buttons or card.offer.changes %}
-  <form class="stack" method="post" action="/responses/answer">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <input type="hidden" name="request_id" value="{{ card.request_id }}">
-    {% if card.offer.changes %}
-    <div class="field">
-      <label for="notes-{{ card.request_id }}">What should change (needed to ask for changes)</label>
-      <textarea id="notes-{{ card.request_id }}" name="notes" rows="3"></textarea>
-    </div>
+  {% if more %}<details class="response-fold"{% if opened %} open{% endif %}><summary class="response-row">{% else %}<div class="response-row">{% endif %}
+    <h3>{{ card.title }}</h3>
+    <span class="response-kind">{{ card.kind }}{% if user.businesses|length > 1 %}. {{ card.client }}{% endif %}</span>
+    <span class="response-status"><span class="stage {{ {'open': 'waiting', 'answered': 'done'}.get(card.state, 'idle') }}{% if card.state == 'open' %} fam-azure{% endif %}">{{ card.status }}</span></span>
+    {% if more %}<span class="icon icon-chevron" aria-hidden="true"></span>{% endif %}
+  {% if more %}</summary>
+  <div class="response-body">
+    {% if card.detail %}<pre class="text">{{ card.detail }}</pre>{% endif %}
+    {% if card.offer.buttons or card.offer.changes %}
+    <form class="stack" method="post" action="/responses/answer">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="request_id" value="{{ card.request_id }}">
+      {% if card.offer.changes %}
+      <div class="field">
+        <label for="notes-{{ card.request_id }}">What should change (needed to ask for changes)</label>
+        <textarea id="notes-{{ card.request_id }}" name="notes" rows="3"></textarea>
+      </div>
+      {% endif %}
+      <div class="buttons">
+        {% for choice, label in card.offer.buttons %}<button{% if card.offer.buttons|length == 1 %} class="primary"{% endif %} type="submit" name="choice" value="{{ choice }}">{{ label }}</button>{% endfor %}
+        {% if card.offer.changes %}<button type="submit" name="choice" value="revise">Ask for changes</button>{% endif %}
+      </div>
+    </form>
     {% endif %}
-    <div class="buttons">
-      {% for choice, label in card.offer.buttons %}<button{% if card.offer.buttons|length == 1 %} class="primary"{% endif %} type="submit" name="choice" value="{{ choice }}">{{ label }}</button>{% endfor %}
-      {% if card.offer.changes %}<button type="submit" name="choice" value="revise">Ask for changes</button>{% endif %}
-    </div>
-  </form>
-  {% endif %}
-  {% if card.offer.notice %}<p class="small">{{ card.offer.notice }}</p>{% endif %}
+    {% if card.offer.notice %}<p class="small">{{ card.offer.notice }}</p>{% endif %}
+  </div>
+  </details>{% else %}</div>{% endif %}
 </li>
 {% endmacro %}
+{% macro heads() %}<div class="response-row response-head" aria-hidden="true"><span>Name</span><span>Kind</span><span>Status</span></div>{% endmacro %}
 {% block main %}
 <header class="page-head">
   <h1 class="title">Responses</h1>
@@ -32,18 +41,23 @@
 {% set open_cards = cards|selectattr("state", "equalto", "open")|list %}
 {% set queued = cards|selectattr("state", "equalto", "queued")|list %}
 {% set past = cards|rejectattr("state", "in", ["open", "queued"])|list %}
-<section>
-  <h2>Waiting for an answer</h2>
-  {% if open_cards %}<ul class="rows">{% for card in open_cards %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is open. <a href="/jobs">See the jobs</a></p>{% endif %}
+<nav class="chips" aria-label="Go to a part of this page">
+  <a class="chip-link" href="#waiting"><span class="dot fam-azure" aria-hidden="true"></span>Waiting for an answer <b>{{ open_cards|length }}</b></a>
+  <a class="chip-link" href="#their-turn"><span class="dot fam-sun" aria-hidden="true"></span>Waiting for their turn <b>{{ queued|length }}</b></a>
+  <a class="chip-link" href="#finished"><span class="dot fam-none" aria-hidden="true"></span>Answered, closed or ran out <b>{{ past|length }}{% if hidden %}+{% endif %}</b></a>
+</nav>
+<section id="waiting">
+  <div class="section-head">{{ tile("responses", "azure") }}<h2>Waiting for an answer</h2></div>
+  {% if open_cards %}{{ heads() }}<ul class="rows response-rows">{% for card in open_cards %}{{ row(card, True) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is open. <a href="/jobs">See the jobs</a></p>{% endif %}
 </section>
-<section>
-  <h2>Waiting for their turn</h2>
-  <p class="small">A person gets one card at a time for each business. A card opens when the one in front is answered, and a routine item opens at its set time.</p>
-  {% if queued %}<ul class="rows">{% for card in queued %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is waiting.</p>{% endif %}
+<section id="their-turn">
+  <div class="section-head">{{ tile("inputs", "sun") }}<h2>Waiting for their turn</h2></div>
+  <p class="small section-note">A person gets one card at a time for each business. A card opens when the one in front is answered, and a routine item opens at its set time.</p>
+  {% if queued %}{{ heads() }}<ul class="rows response-rows">{% for card in queued %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">Nothing is waiting.</p>{% endif %}
 </section>
-<section>
-  <h2>Answered, closed or ran out</h2>
-  {% if past %}<ul class="rows">{% for card in past %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">No card has finished yet.</p>{% endif %}
+<section id="finished">
+  <div class="section-head">{{ tile("brief", "none") }}<h2>Answered, closed or ran out</h2></div>
+  {% if past %}{{ heads() }}<ul class="rows response-rows">{% for card in past %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">No card has finished yet.</p>{% endif %}
   {% if hidden %}<p class="note">{{ hidden }} older finished cards are not shown here.</p>{% endif %}
 </section>
 {% include "_recent.html" %}

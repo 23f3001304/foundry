@@ -1,41 +1,6 @@
 {% extends "base.html" %}
-{% from "_ui.html" import page_title, job_tabs, empty_state %}
-{% block main %}
-{% if tabs %}
-<header class="page-head">
-  {{ page_title([("Jobs", "/jobs")], tabs.title) }}
-</header>
-{{ job_tabs(tabs, "timeline") }}
-{% else %}
-<header class="page-head">
-  {{ page_title([], "Action log") }}
-  <p class="lead">Each job's timeline, and the things the approver flagged. The log is not open for browsing. A chain opens for one flagged thing only.</p>
-</header>
-{% endif %}
-
-{% if flagged or not tabs %}
-<section>
-  <h2>Flagged things</h2>
-  {% if flagged %}
-  <ul class="rows">
-    {% for item in flagged %}
-    <li class="flagged-row" id="flag-{{ item.id }}"><a class="row-link" href="/log/flagged/{{ item.id }}">{{ item.text }}</a> <span class="small">Flagged by {{ item.who }}, {{ item.at }}{% if user.businesses|length > 1 %}. {{ item.client }}{% endif %}</span></li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="note">Nothing has been flagged. The person who approves a job can flag a file, a message, or a number in a file. <a href="/jobs">See the jobs</a></p>
-  {% endif %}
-</section>
-{% endif %}
-
-{% if not jobs %}<section>{{ empty_state("reviewer", "No jobs yet.", "/connections", "See the connections", "sun") }}</section>{% endif %}
-{% if more %}<section><p class="note">These are the newest jobs. To see an older one, open it from the jobs page and choose its timeline. <a href="/jobs">See the jobs</a></p></section>{% endif %}
-{% for job in jobs %}
-<section id="log-{{ job.id }}">
-  <div class="section-head">
-    <h2>{% if tabs %}Timeline{% else %}<a class="row-link" href="/log?job={{ job.id }}">{{ job.title }}</a>{% endif %}</h2>
-    <p class="page-meta"><span class="stage {{ job.tone }}">{{ job.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.client }}</span>{% endif %}</p>
-  </div>
+{% from "_ui.html" import page_title, job_tabs, empty_state, tile %}
+{% macro timeline(job) %}
   {% if job.moments %}
   <div class="scroll">
   <table class="list log-table">
@@ -63,8 +28,72 @@
   </table>
   </div>
   {% endif %}
-  {% if job.can_flag and job.files %}<p class="small">To flag one number or statement in a file, <a href="/jobs/{{ job.id }}">open the job</a>.</p>{% endif %}
+  {% if job.can_flag and job.files %}<p class="small section-foot">To flag one number or statement in a file, <a href="/jobs/{{ job.id }}">open the job</a>.</p>{% endif %}
+{% endmacro %}
+{% block main %}
+{% if tabs %}
+<header class="page-head">
+  {{ page_title([("Jobs", "/jobs")], tabs.title) }}
+</header>
+{{ job_tabs(tabs, "timeline") }}
+{% else %}
+<header class="page-head">
+  {{ page_title([], "Action log") }}
+  <p class="lead">Each job's timeline, and the things the approver flagged. The log is not open for browsing. A chain opens for one flagged thing only.</p>
+</header>
+{% endif %}
+
+{% if flagged or not tabs %}
+<section>
+  <div class="section-head">{{ tile("stuck", "orchid") }}<h2>Flagged things</h2></div>
+  {% if flagged %}
+  <table class="list flagged-table">
+    <thead><tr><th>Name</th><th>Flagged by</th><th>When</th>{% if user.businesses|length > 1 %}<th>Business</th>{% endif %}<th aria-label="Open the chain"></th></tr></thead>
+    <tbody>
+    {% for item in flagged %}
+    <tr class="link-row flagged-row" id="flag-{{ item.id }}">
+      <td class="title-cell"><a class="row-link" href="/log/flagged/{{ item.id }}">{{ item.text }}</a></td>
+      <td data-label="Flagged by">{{ item.who }}</td>
+      <td data-label="When">{{ item.at }}</td>
+      {% if user.businesses|length > 1 %}<td data-label="Business">{{ item.client }}</td>{% endif %}
+      <td class="go-cell"><span class="go" aria-hidden="true"></span></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="note">Nothing has been flagged. The person who approves a job can flag a file, a message, or a number in a file. <a href="/jobs">See the jobs</a></p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if not jobs %}<section>{{ empty_state("reviewer", "No jobs yet.", "/connections", "See the connections", "sun") }}</section>{% endif %}
+{% if more %}<section><p class="note">These are the newest jobs. To see an older one, open it from the jobs page and choose its timeline. <a href="/jobs">See the jobs</a></p></section>{% endif %}
+{% if jobs and not tabs %}
+<div class="section-head log-jobs-head">{{ tile("log", "sun") }}<h2>Timelines</h2></div>
+{% endif %}
+<div class="{{ 'log-one' if tabs else 'folds log-jobs' }}">
+{% for job in jobs %}
+<section id="log-{{ job.id }}">
+  {% if tabs %}
+  <div class="section-head">
+    <h2>Timeline</h2>
+    <p class="page-meta"><span class="stage {{ job.tone }} fam-{{ job.family }}">{{ job.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.client }}</span>{% endif %}</p>
+  </div>
+  {{ timeline(job) }}
+  {% else %}
+  <details class="fold">
+    <summary>
+      <span class="icon icon-chevron" aria-hidden="true"></span>
+      <h3><a class="row-link" href="/log?job={{ job.id }}">{{ job.title }}</a></h3>
+      <span class="fold-meta">{{ job.moments|length }} {{ "thing" if job.moments|length == 1 else "things" }}{% if user.businesses|length > 1 %}. {{ job.client }}{% endif %}</span>
+      <span class="stage {{ job.tone }} fam-{{ job.family }}">{{ job.stage }}</span>
+    </summary>
+    <div class="fold-body">{{ timeline(job) }}</div>
+  </details>
+  {% endif %}
 </section>
 {% endfor %}
+</div>
 {% include "_recent.html" %}
 {% endblock %}

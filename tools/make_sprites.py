@@ -100,21 +100,6 @@ def whole(frame: np.ndarray, dx: int = 0, dy: int = 0) -> np.ndarray:
     return moved(frame, (0, 0, size, size), dx, dy)
 
 
-def right_foot(frame: np.ndarray) -> tuple[int, int, int, int]:
-    # The last run of drawn columns along the bottom of the figure.
-    size = frame.shape[0]
-    rows = np.nonzero((frame[..., 3] > 0).any(axis=1))[0]
-    bottom = int(rows.max()) + 1
-    top = bottom - max(size // 16, 3)
-    columns = (frame[top:bottom, :, 3] > 0).any(axis=0)
-    xs = np.nonzero(columns)[0]
-    end = int(xs.max()) + 1
-    start = end - 1
-    while start > 0 and columns[start - 1]:
-        start -= 1
-    return start, top, end, bottom
-
-
 def specks(frame: np.ndarray) -> np.ndarray:
     # Drawn pixels that aren't joined to the figure: the confetti.
     size = frame.shape[0]
@@ -178,11 +163,11 @@ def shake(small: np.ndarray, unit: int) -> list[np.ndarray]:
     return [small, whole(small, dx=-unit), small, whole(small, dx=unit)]
 
 
-def tap(small: np.ndarray, unit: int) -> list[np.ndarray]:
-    # The foot taps and the question mark bobs with it.
+def ask(small: np.ndarray, unit: int) -> list[np.ndarray]:
+    # Only the question mark bobs. A question is being asked, and nobody is being hurried.
     size = small.shape[0]
     mark = box_of(size, 0.645, 0.08, 0.86, 0.38)
-    up = moved(moved(small, right_foot(small), dy=-unit), mark, dy=-unit)
+    up = moved(small, mark, dy=-unit)
     return [small, up, small, up]
 
 
@@ -216,7 +201,7 @@ def wave(small: np.ndarray, unit: int) -> list[np.ndarray]:
 
 
 # Only these have a coloured prop. Everyone else keeps every colour they were drawn in.
-TINTED = ("tap", "nod")
+TINTED = ("ask", "nod")
 SHEETS = {
     "apprentice": ("assets/team/apprentice.png", idle("apprentice"), (48, 96), "apprentice"),
     "designer": ("assets/team/designer.png", idle("designer"), (48, 96), "designer"),
@@ -224,7 +209,7 @@ SHEETS = {
     "smith": ("assets/team/smith.png", idle("smith"), (48, 96), "smith"),
     "shipped": ("stickers/base/shipped.png", still, (48, 96), None),
     "blocked": ("stickers/base/blocked.png", shake, (48, 96), None),
-    "tap": ("stickers/base/needs_input.png", tap, (48, 96), None),
+    "ask": ("stickers/base/needs_input.png", ask, (48, 96), None),
     "cheer": ("stickers/base/celebrate.png", cheer, (48, 96), None),
     "nod": ("stickers/base/approved.png", nod, (48,), None),
     "wave": ("stickers/base/wave.png", wave, (96,), None),
