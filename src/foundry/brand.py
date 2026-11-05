@@ -8,7 +8,11 @@ from pathlib import Path
 import yaml
 from mcp.server.mcpserver.exceptions import ToolError
 
-FRONT_MATTER = re.compile(r"\A---\s*\n(.*?)\n---[ \t]*(?:\r?\n(.*))?\Z", re.DOTALL)
+# The opening is dashes and the end of the line, and nothing that can be matched more than one way. A pattern that could take the line breaks after the dashes in more than one way took longer for every one of them.
+FRONT_MATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n(.*))?\Z", re.DOTALL)
+# What a deck, a prompt or a file name can't take inside a word: the controls, which XML refuses. A voice may run over several lines, so it may have those.
+CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+LINE_BREAKS = "\n\r\t"
 HEX_COLOUR = re.compile(r"#[0-9A-Fa-f]{6}")
 REQUIRED = ("name", "colors", "fonts", "voice")
 COLOURS = ("primary", "accent", "ink", "paper")
@@ -21,6 +25,7 @@ MOST_QUOTED = 30
 MOST_SHOWN = 200
 ALIASES = "The brand kit can't use YAML aliases (&name and *name). Write each value out."
 TOO_DEEP = "The brand kit's front matter is nested too deeply."
+NOT_CLOSED = "The brand kit's front matter has no closing --- line."
 LOGO = "logo.png"
 
 
@@ -37,10 +42,12 @@ class _NoAliases(yaml.SafeLoader):
         return super().compose_node(parent, index)
 
 
-def _words(value: object, what: str) -> str:
+def _words(value: object, what: str, lines: bool = False) -> str:
     # Every maker, check and sticker uses these as text, so a number or a list is stopped here and not found later by whatever reads it.
     if not isinstance(value, str):
         raise BrandError(f"The brand kit's {what} must be words, not a number or a list.")
+    if CONTROL.search(value.translate(str.maketrans("", "", LINE_BREAKS)) if lines else value):
+        raise BrandError(f"The brand kit's {what} can't hold control characters.")
     return value
 
 
@@ -62,6 +69,9 @@ class Brand:
 
 def load_brand(text: str, assets_dir: Path) -> Brand:
     match = FRONT_MATTER.match(text)
+    if match is None and text.startswith("---"):
+        # Opened and never closed. Reading it as YAML would take the dashes for a document and the rest for its first part.
+        raise BrandError(NOT_CLOSED)
     tokens, guidance = (match.group(1), match.group(2) or "") if match else (text, "")
     try:
         data = yaml.load(tokens, Loader=_NoAliases)
@@ -71,10 +81,11 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
         raise BrandError(TOO_DEEP) from None
     if not isinstance(data, dict):
         raise BrandError("The brand kit's front matter must list its fields.")
-    missing = [field for field in REQUIRED if not data.get(field)]
+    # Only spaces is as good as nothing.
+    missing = [field for field in REQUIRED if not data.get(field) or (isinstance(data[field], str) and not data[field].strip())]
     if missing:
         raise BrandError(f"The brand kit is missing: {', '.join(missing)}")
-    name, voice = _words(data["name"], "name"), _words(data["voice"], "voice")
+    name, voice = _words(data["name"], "name"), _words(data["voice"], "voice", lines=True)
     colours = data["colors"]
     if not isinstance(colours, dict):
         raise BrandError('The brand kit\'s colors must list names and colours, like primary: "#7A3E1D".')
@@ -90,6 +101,8 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
     fonts = data["fonts"]
     if not isinstance(fonts, dict) or not all(isinstance(fonts.get(role), str) and fonts[role].strip() for role in ("heading", "body")):
         raise BrandError("The brand kit's fonts need a heading and a body.")
+    for role in ("heading", "body"):
+        _words(fonts[role], f"{role} font")
     # Left out, or left blank, these are nothing and the ordinary look. Anything else has to be words.
     style = "band" if data.get("style") is None else _words(data["style"], "style")
     business_type = "" if data.get("business_type") is None else _words(data["business_type"], "business_type")

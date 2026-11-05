@@ -35,6 +35,8 @@ NOT_ALLOWED = "Switch says your login isn't allowed to change connections. A Swi
 TROUBLE = "Switch had a problem with that. Try again in a moment."
 NOT_ACCEPTED = "Switch did not accept those details. Check them and enter them again."
 GONE = "Switch no longer has that connection."
+# A remove it refuses was refused before anything was deleted, and there were no details for anyone to enter.
+REMOVE_REFUSED = "Switch would not remove that connection, so nothing was deleted."
 # Looking is not changing, so a refusal to show something is not told as a form filled in wrong or a change a login may not make.
 READ_NOT_ALLOWED = "Switch says your login isn't allowed to see its connections."
 READ_REFUSED = "Switch would not give that list just now. Try again in a moment."
@@ -107,21 +109,29 @@ def open_gateway(request: Request, timeout: float) -> httpx.AsyncClient:
 
 
 def squash(text: str) -> str:
-    return re.sub(r"[^0-9a-z]", "", text.casefold())
+    # Letters and digits in any script, in one case. A secret in Cyrillic or Chinese is as much a secret, and would be nothing if only the ASCII were kept.
+    return re.sub(r"[\W_]", "", text.casefold())
+
+
+def unspaced(text: str) -> str:
+    return re.sub(r"\s+", "", text.casefold())
+
+
+def stretches(secret: str, window: int) -> list[str]:
+    return [secret] if len(secret) <= window else [secret[start : start + window] for start in range(len(secret) - window + 1)]
 
 
 def echoes(text: str, secrets: Sequence[str]) -> bool:
     # Any stretch of a typed secret, however it is cut, cased or spaced, and its two ends when the middle is hidden. A whole copy is the least of it.
     flat, hidden = squash(text), MASK.search(text) is not None
-    for secret in map(squash, secrets):
+    for typed in secrets:
+        # A secret made only of marks has no letters or digits to compare, so it is compared as it was typed. Nothing at all is never a match.
+        secret, where = (squash(typed), flat) if squash(typed) else (unspaced(typed), unspaced(text))
         if not secret:
             continue
-        if len(secret) <= ECHO_WINDOW:
-            if secret in flat:
-                return True
-        elif any(secret[start : start + ECHO_WINDOW] in flat for start in range(len(secret) - ECHO_WINDOW + 1)):
+        if any(part in where for part in stretches(secret, ECHO_WINDOW)):
             return True
-        elif hidden and len(secret) >= 2 * ECHO_END and (secret[:ECHO_END] in flat or secret[-ECHO_END:] in flat):
+        if hidden and len(secret) >= 2 * ECHO_END and (secret[:ECHO_END] in where or secret[-ECHO_END:] in where):
             return True
     return False
 
@@ -138,7 +148,7 @@ def plain_detail(answer: httpx.Response, secrets: Sequence[str]) -> str | None:
     return None if not detail or len(detail) > MOST_DETAIL or echoes(detail, secrets) else detail
 
 
-def problem_for(answer: httpx.Response, secrets: Sequence[str], missing: str | None, trouble: str, writing: bool) -> SwitchProblem:
+def problem_for(answer: httpx.Response, secrets: Sequence[str], missing: str | None, trouble: str, writing: bool, refused: str) -> SwitchProblem:
     code = answer.status_code
     if code == 401:
         return SwitchProblem(401, SIGNED_OUT)
@@ -148,13 +158,13 @@ def problem_for(answer: httpx.Response, secrets: Sequence[str], missing: str | N
         return SwitchProblem(404, missing)
     if 400 <= code < 500 and code != 404:
         # Only what a person typed can be wrong in a way they can fix, so a read that is refused is not told that way.
-        return SwitchProblem(400, (plain_detail(answer, secrets) or NOT_ACCEPTED) if writing else READ_REFUSED)
+        return SwitchProblem(400, (plain_detail(answer, secrets) or refused) if writing else READ_REFUSED)
     # Anything else, a redirect included, is not a change that worked. After a write it may have got part of the way.
     return SwitchProblem(502, trouble, unsure=writing)
 
 
 async def ask(
-    switch: httpx.AsyncClient, method: str, path: str, secrets: Sequence[str] = (), missing: str | None = None, trouble: str = TROUBLE, lost: str = TROUBLE, **options
+    switch: httpx.AsyncClient, method: str, path: str, secrets: Sequence[str] = (), missing: str | None = None, trouble: str = TROUBLE, lost: str = TROUBLE, refused: str = NOT_ACCEPTED, **options
 ) -> httpx.Response:
     # Nothing about the request goes in a log or an error, because it may hold a token. Nor does anything Switch said back.
     writing = method != "GET"
@@ -168,7 +178,7 @@ async def ask(
         raise SwitchProblem(503, SWITCH_DOWN) from None
     if not answer.is_success:
         logger.warning("Switch answered %s to %s %s.", answer.status_code, method, path)
-        raise problem_for(answer, secrets, missing, trouble, writing)
+        raise problem_for(answer, secrets, missing, trouble, writing, refused)
     return answer
 
 
@@ -259,4 +269,4 @@ async def delete_bridge(switch: httpx.AsyncClient, bridge_id: str) -> None:
     # Quoting leaves dots alone, and an address that ends in .. is a step up from the one meant, so such an id is not a connection that can be asked for.
     if bridge_id in (".", ".."):
         raise SwitchProblem(404, GONE)
-    await ask(switch, "DELETE", f"/collaborations/{quote(bridge_id, safe='')}", missing=GONE, trouble=PART_WAY, lost=DELETE_LOST)
+    await ask(switch, "DELETE", f"/collaborations/{quote(bridge_id, safe='')}", missing=GONE, trouble=PART_WAY, lost=DELETE_LOST, refused=REMOVE_REFUSED)

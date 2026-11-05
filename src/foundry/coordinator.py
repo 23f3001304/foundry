@@ -503,7 +503,11 @@ class Coordinator:
     def tick(self, now: datetime) -> None:
         for job in self.store.all():
             if job.kind == "work" and job.state is State.COLLECTING and self.settings.is_internal(job.room_id):
-                self._look_after(job, now)
+                try:
+                    self._look_after(job, now)
+                except Exception:
+                    # One job's trouble, of any kind, must not keep the next job from being looked after.
+                    logger.exception("Could not look after job %s, so it is tried again on the next tick.", job.id)
 
     def _look_after(self, job: Job, now: datetime) -> None:
         for item in self._open_items(job):

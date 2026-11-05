@@ -13,7 +13,7 @@ from foundry.coordinator import ASK_AGAIN, ASK_SOMEONE_ELSE, GO_WITHOUT
 from foundry.jobs import Job
 from foundry.switch_client import Outcome, _choice_ids
 
-ACTIONS = ("answer_card", "ask_again", "ask_someone_else", "go_without", "restart", "flag", "reload_pack")
+ACTIONS = ("answer_card", "ask_again", "ask_someone_else", "go_without", "restart", "flag", "reload_pack", "note_connection")
 # The due-time card's buttons, which the jobs page offers as actions of their own. Their words are the coordinator's, because that is what the card says.
 DUE_ACTIONS = {"ask_again": ASK_AGAIN, "ask_someone_else": ASK_SOMEONE_ELSE, "go_without": GO_WITHOUT}
 # A card with no choices of its own is an approval, and these are its two answers.
@@ -56,6 +56,20 @@ LOG_CHANGED = "Changed {what}, then read the pack again {via}"
 # The change was made, and the pack could not be read again. The log says so, since the file is changed all the same.
 LOG_CHANGED_BUT = "Changed {what}, but the pack could not be read again, so the old one stays: {why} {via}"
 LOG_NOT_READ = "Could not read the pack again, so the old one stays: {why} {via}"
+# The file was changed, and the login that changed it is not one the client's pack lists now. The pack is not read, and the log says who it came from.
+LOG_NOT_LISTED = '{what}. It came from the login "{login}", which is no longer listed for this client, so the pack was not read again {via}'
+# A connection added or removed in Switch, which the desk writes down because only the desk writes the log.
+LOG_CONNECTIONS = {
+    ("added", True): "Added the connection {name} ({kind}) {via}",
+    ("removed", True): "Removed the connection {name} ({kind}) and its {rooms} {via}",
+    ("added", False): "Tried to add the connection {name} ({kind}), and Switch did not say whether it was added {via}",
+    ("removed", False): "Tried to remove the connection {name} ({kind}), and Switch did not say whether it or its rooms were deleted {via}",
+}
+NO_NAME = "(no name)"
+UNKNOWN_KIND = "unknown"
+MOST_NAME = 80
+KIND = re.compile(r"[a-z0-9_-]{1,40}")
+CONTROLS = re.compile(r"[\x00-\x1f\x7f]")
 
 # The files in a business's brand folder that the dashboard may change: its kit, and its source documents. The pack is not one of them, because it says who may use the dashboard.
 KIT = "kit.md"
@@ -86,6 +100,11 @@ def changed_file(payload: dict) -> str:
     if not is_data_file(file):
         return ""
     return f"{file} (now {fingerprint})" if isinstance(fingerprint, str) and FINGERPRINT.fullmatch(fingerprint) else file
+
+
+def plain_name(value: object) -> str:
+    # A connection's name as a line of the log reads it: one line, no control characters, and not long.
+    return " ".join(CONTROLS.sub(" ", value if isinstance(value, str) else "").split())[:MOST_NAME]
 
 
 class Refused(Exception):

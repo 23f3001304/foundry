@@ -5,7 +5,7 @@ import logging
 import os
 import secrets
 import sqlite3
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -60,6 +60,8 @@ JOB_ANSWERS = ("approve", "revise")
 MOST_CHOICE = 300
 # A form with a file in it can be a little over the file's own limit. Anything bigger is refused before it is read, and so is one that doesn't say how big it is.
 MOST_BODY = brand_data.MOST_TABLE + 500_000
+# A sign-in is a login and a password.
+MOST_LOGIN_BODY = 20_000
 # More digits than this is not a number a form could mean, and is cheap to refuse before it is read as one.
 MOST_DIGITS = 9
 MOST_NAME = 80
@@ -86,6 +88,17 @@ def render(request: Request, name: str, user: User | None = None, status: int = 
     return request.app.state.templates.TemplateResponse(request, name, {"user": user, "csrf": found[1].csrf if found else "", **context}, status_code=status)
 
 
+def check_body(request: Request, most: int) -> None:
+    # A form says how big it is, once, and is no bigger than the most its page takes. One sent in pieces is not read, whatever length it also claims.
+    if "transfer-encoding" in request.headers:
+        raise HTTPException(411)
+    length = whole_number(request.headers.get("content-length"))
+    if length is None:
+        raise HTTPException(411)
+    if length > most:
+        raise HTTPException(413)
+
+
 def signed_in(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
     # Every page and every action needs a login. A form also has to carry the token its own page gave it.
     async def guarded(request: Request) -> Response:
@@ -94,11 +107,7 @@ def signed_in(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
             return RedirectResponse("/login", 303)
         arguments: tuple = (request, user)
         if request.method == "POST":
-            length = whole_number(request.headers.get("content-length"))
-            if length is None:
-                raise HTTPException(411)
-            if length > MOST_BODY:
-                raise HTTPException(413)
+            check_body(request, MOST_BODY)
             form = await request.form()
             if not csrf_ok(request, form.get("csrf")):
                 raise HTTPException(403, FORM_EXPIRED)
@@ -123,6 +132,15 @@ def ask(request: Request, user: User, action: str, payload: dict, bucket: str) -
     request.app.state.commands.add(action, {"bucket": bucket, **payload}, user.login, user.businesses[bucket])
 
 
+def note_connection(request: Request, user: User, buckets: Sequence[str], what: str, name: str, kind: str, rooms: int = 0, sure: bool = True) -> None:
+    # Switch has done it, or may have, as this person. The desk writes it in the action log of each business the person acts for, as it writes a change to the data. Nothing typed as a secret is in it.
+    for bucket in buckets:
+        try:
+            ask(request, user, "note_connection", {"what": what, "name": name, "kind": kind, "rooms": rooms, "sure": sure}, bucket)
+        except Exception:
+            logger.exception("Could not leave a note of the connection change for %s to write in the log.", bucket)
+
+
 def recent(request: Request, user: User):
     return request.app.state.reader.recent(request.app.state.commands, user.login)
 
@@ -141,6 +159,7 @@ async def login_submit(request: Request) -> Response:
     origin = request.headers.get("origin")
     if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
         return render(request, "login.html", title="Sign in", status=403, error=NOT_FROM_HERE)
+    check_body(request, MOST_LOGIN_BODY)
     form = await request.form()
     login, password = str(form.get("login") or "").strip(), str(form.get("password") or "")
     if not login or not password:
@@ -251,7 +270,7 @@ async def connection_add(request: Request, user: User, form: FormData) -> Respon
     # What is typed here goes to Switch and nowhere else. It is not logged, not kept, and never put back in a page.
     if not user.businesses:
         raise HTTPException(403)
-    kinds, chosen = [], None
+    kinds, chosen, name = [], None, ""
     try:
         async with gateway.open_gateway(request, gateway.WRITE_TIMEOUT) as switch:
             kinds = await gateway.bridge_types(switch)
@@ -264,8 +283,11 @@ async def connection_add(request: Request, user: User, form: FormData) -> Respon
                 return add_page(request, user, kinds, chosen, problem, 400)
             await gateway.add_bridge(switch, chosen, name, config, secrets_typed)
     except gateway.SwitchProblem as trouble:
+        if trouble.unsure:
+            note_connection(request, user, list(user.businesses), "added", name, chosen.key, sure=False)
         return add_page(request, user, kinds, chosen, trouble.message, trouble.status, trouble.unsure)
     logger.info("%s added a %s connection.", user.login, chosen.key)
+    note_connection(request, user, list(user.businesses), "added", name, chosen.key)
     return RedirectResponse("/connections?done=added", 303)
 
 
@@ -303,8 +325,11 @@ async def connection_remove(request: Request, user: User, form: FormData) -> Res
         async with gateway.open_gateway(request, gateway.WRITE_TIMEOUT) as switch:
             await gateway.delete_bridge(switch, row.id)
     except gateway.SwitchProblem as trouble:
+        if trouble.unsure and row is not None:
+            note_connection(request, user, row.serves, "removed", row.name, row.kind, row.room_total, sure=False)
         return remove_page(request, user, row, trouble.message, trouble.status, trouble.unsure)
     logger.info("%s removed connection %s and its %d rooms.", user.login, row.id, row.room_total)
+    note_connection(request, user, row.serves, "removed", row.name, row.kind, row.room_total)
     return RedirectResponse("/connections?done=removed", 303)
 
 

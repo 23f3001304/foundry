@@ -16,7 +16,7 @@ from foundry.brand import BrandError, load_brand
 from foundry.checks import cell_number
 from foundry.commands import KIT, SOURCE_NAME, SOURCES, TABLE_SUFFIXES, is_source_name
 from foundry.desk import Settings
-from foundry.tables import read_file
+from foundry.tables import read_file, read_upload
 from foundry.tools.layout import MakerError
 
 logger = logging.getLogger(__name__)
@@ -166,6 +166,9 @@ def text_of(raw: bytes) -> tuple[str, str | None]:
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         return "", NOT_TEXT
+    # A byte order mark alone is bytes, and decodes to nothing.
+    if not text.strip():
+        return "", EMPTY
     return ("", NOT_TEXT) if "\x00" in text else (text, None)
 
 
@@ -186,29 +189,27 @@ def opens_too_big(raw: bytes) -> bool:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
             parts = archive.infolist()
             return len(parts) > MOST_PARTS or sum(part.file_size for part in parts) > MOST_UNPACKED
-    except zipfile.BadZipFile:
-        # Not a spreadsheet at all, which reading it will say.
+    except (zipfile.BadZipFile, NotImplementedError, ValueError, OSError):
+        # Not a spreadsheet at all, or one this machine can't open, which reading it will say in plain words.
         return False
 
 
 def table_problem(name: str, raw: bytes) -> str | None:
-    # Read the way the data tools read it, from a copy in a folder of its own, and only if it has a row of data and a figure to work with.
+    # Read the way the data tools read it, and only if it has a row of data and a figure to work with.
     if len(raw) > MOST_TABLE:
         return TABLE_TOO_BIG
     if not raw.strip():
         return EMPTY
     if name.endswith(".xlsx") and opens_too_big(raw):
         return SHEET_TOO_BIG
-    with tempfile.TemporaryDirectory() as scratch:
-        copy = Path(scratch) / name
-        copy.write_bytes(raw)
-        try:
-            table = read_file(copy)
-        except MakerError as error:
-            return str(error)
-        except Exception:
-            logger.exception("Could not read an uploaded table.")
-            return TABLE_UNREADABLE.format(name=name)
+    # Read where it is, without writing a copy of a client's file anywhere to be read.
+    try:
+        table = read_upload(name, raw)
+    except MakerError as error:
+        return str(error)
+    except Exception:
+        logger.exception("Could not read an uploaded table.")
+        return TABLE_UNREADABLE.format(name=name)
     if not table.rows:
         return TABLE_NO_ROWS
     if not any(cell_number(cell) is not None for row in table.rows for cell in row.cells):

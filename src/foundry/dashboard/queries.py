@@ -12,7 +12,7 @@ from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, ONE_BY_ONE, OPE
 from foundry.cards import COLUMNS as CARD_COLUMNS
 from foundry.checks import shown_words
 from foundry.chain import LINK_MARK, SAID, NotFlagged, Step, chain_for, name_of, names
-from foundry.commands import CLAIMED, DUE_ACTIONS, JOB_APPROVALS, KIT, LABELS, Command, CommandStore, is_data_file, still_waits_on
+from foundry.commands import CLAIMED, DUE_ACTIONS, JOB_APPROVALS, KIT, LABELS, NO_NAME, Command, CommandStore, is_data_file, plain_name, still_waits_on
 from foundry.dashboard import data as brand_data
 from foundry.dashboard.auth import User
 from foundry.dashboard.gateway import Bridge, Room
@@ -776,6 +776,10 @@ class Reader:
             card = self.card(str(payload.get("request_id", "")))
             choice = payload.get("choice", "")
             return f"Answered {card.title if card else 'a card'} with {LABELS.get(choice, choice)}"
+        if command.action == "note_connection":
+            name = plain_name(payload.get("name")) or NO_NAME
+            done = {("added", True): "Added", ("removed", True): "Removed", ("added", False): "Tried to add", ("removed", False): "Tried to remove"}
+            return f"{done.get((payload.get('what'), payload.get('sure') is True), 'Noted')} the connection {name}"
         if command.action == "reload_pack":
             file = payload.get("file")
             return f"Changed {file} and read the business's pack again" if is_data_file(file) else "Read the business's pack again"

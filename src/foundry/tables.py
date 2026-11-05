@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from pathlib import Path
@@ -22,10 +23,13 @@ TABLE_KINDS = (".csv", ".xlsx")
 MOST_ROWS_READ = 50_000
 # A sheet can claim a million rows and hold forty, so reading stops after this many empty rows in a row.
 MOST_EMPTY_ROWS = 1000
+# Columns past this are refused. A real table has dozens, and a sheet can claim sixteen thousand with one cell in each row, which padded out would take hundreds of megabytes.
+MOST_COLUMNS = 1000
 DELIMITERS = ",;\t"
 NOT_A_TABLE = "I can read {kinds} files, not {name}."
 NO_FILE = "There is no file named {name}."
 NO_ROWS = "{name} has no rows."
+TOO_WIDE = "{name} has more than {most} columns, which is too many to read."
 TOO_MANY_ROWS = "{name} has more than {most} rows, which is too many to read."
 NOT_TEXT = "{name} is not a text file I can read."
 NOT_OPENED = "I couldn't open {name}. It may be in use by another program."
@@ -132,13 +136,24 @@ def read_file(source: Path | str) -> Table:
         # Asking whether it is there can be refused too, and a refusal is told like any other file that cannot be opened.
         if not path.is_file():
             raise MakerError(NO_FILE.format(name=path.name))
-        table = _read_csv(path) if kind == ".csv" else _read_xlsx(path)
+        table = _read_csv(path.read_bytes(), path.name) if kind == ".csv" else _read_xlsx(lambda: path, path.name)
     except OSError as error:
         # A file another program holds open, or a disk that fails, is told in plain words like any other file that cannot be read.
         logger.warning("Could not open %s: %s", path.name, error)
         raise MakerError(NOT_OPENED.format(name=path.name)) from error
     if not table.columns:
         raise MakerError(NO_ROWS.format(name=path.name))
+    return table
+
+
+def read_upload(name: str, content: bytes) -> Table:
+    # A file that has just been sent, read as it is, without putting it on disk first. It is the same table read_file makes of it once it is saved.
+    kind = Path(name).suffix.lower()
+    if kind not in TABLE_KINDS:
+        raise MakerError(NOT_A_TABLE.format(kinds=" and ".join(TABLE_KINDS), name=name))
+    table = _read_csv(content, name) if kind == ".csv" else _read_xlsx(lambda: io.BytesIO(content), name)
+    if not table.columns:
+        raise MakerError(NO_ROWS.format(name=name))
     return table
 
 
@@ -175,6 +190,7 @@ def _table(name: str, records: list[tuple[int, list]], unsaved: set[tuple[int, i
     (_, heading), body = records[0], records[1:]
     if len(body) > MOST_ROWS_READ:
         raise MakerError(TOO_MANY_ROWS.format(name=name, most=MOST_ROWS_READ))
+    # Every row is made as wide as the widest, which is why a row wider than the limit was refused as it was read. One among many would be a table of far more cells than the file holds.
     width = max(len(heading), *(len(cells) for _, cells in body)) if body else len(heading)
     rows = [Row(number, tuple(cells) + (None,) * (width - len(cells))) for number, cells in body]
     return Table(_headings(heading, width), rows, sheet, frozenset(unsaved), notes=notes)
@@ -203,13 +219,15 @@ def _decimal_comma(cell: str | None) -> str | None:
     return f"{found['mark']}{found['whole'].replace('.', '')}.{found['part']}{found['rest']}" if found else None
 
 
-def _read_csv(path: Path) -> Table:
-    text = _decode(path.read_bytes(), path.name)
+def _read_csv(data: bytes, name: str) -> Table:
+    text = _decode(data, name)
     first = next((line for line in text.splitlines() if line.strip()), "")
     delimiter = max(DELIMITERS, key=first.count) if any(mark in first for mark in DELIMITERS) else ","
     records, converted = [], False
     try:
         for number, cells in enumerate(csv.reader(io.StringIO(text, newline=""), delimiter=delimiter), start=1):
+            if len(cells) > MOST_COLUMNS:
+                raise MakerError(TOO_WIDE.format(name=name, most=MOST_COLUMNS))
             cells = [cell.strip() or None for cell in cells]
             # The headings and every row with something in it. An empty row keeps its number, so the rows after it keep theirs.
             if any(cell is not None for cell in cells):
@@ -220,8 +238,8 @@ def _read_csv(path: Path) -> Table:
                 if len(records) > MOST_ROWS_READ + 1:
                     break
     except csv.Error as error:
-        raise MakerError(NOT_TEXT.format(name=path.name)) from error
-    return _table(path.name, records, set(), notes=(DECIMAL_COMMAS_READ,) if converted else ())
+        raise MakerError(NOT_TEXT.format(name=name)) from error
+    return _table(name, records, set(), notes=(DECIMAL_COMMAS_READ,) if converted else ())
 
 
 def _plain(value: object) -> object:
@@ -232,17 +250,26 @@ def _plain(value: object) -> object:
     return value
 
 
-def _read_xlsx(path: Path) -> Table:
+def _read_xlsx(open_source: Callable[[], Path | io.BytesIO], name: str) -> Table:
+    values = None
     try:
-        values, formulas = load_workbook(path, data_only=True, read_only=True), load_workbook(path, data_only=False, read_only=True)
+        values = load_workbook(open_source(), data_only=True, read_only=True)
+        formulas = load_workbook(open_source(), data_only=False, read_only=True)
     except Exception as error:
-        # Whatever stops openpyxl opening it, the file is one the desk cannot read.
-        logger.warning("Could not open the spreadsheet %s: %s", path.name, error)
-        raise MakerError(NOT_A_SPREADSHEET.format(name=path.name)) from error
+        # Whatever stops openpyxl opening it, the file is one the desk cannot read. The first copy is closed, or the file stays open and can't be cleared away.
+        if values is not None:
+            values.close()
+        logger.warning("Could not open the spreadsheet %s: %s", name, error)
+        raise MakerError(NOT_A_SPREADSHEET.format(name=name)) from error
     try:
         sheet = values.active if hasattr(values.active, "iter_rows") else values.worksheets[0]
+        # A sheet that says how wide it is can be refused before a row is read. One that says nothing is caught at its first wide row.
+        if (getattr(sheet, "max_column", None) or 0) > MOST_COLUMNS:
+            raise MakerError(TOO_WIDE.format(name=name, most=MOST_COLUMNS))
         records, unsaved, empty = [], set(), 0
         for number, (saved, cells) in enumerate(zip(sheet.iter_rows(values_only=True), formulas[sheet.title].iter_rows()), start=1):
+            if len(saved) > MOST_COLUMNS:
+                raise MakerError(TOO_WIDE.format(name=name, most=MOST_COLUMNS))
             row = [_plain(value) for value in saved]
             # A formula the program never calculated shows no value, and a row of only those is still a row.
             no_result = [position for position, cell in enumerate(cells) if cell.data_type == "f" and position < len(row) and row[position] is None]
@@ -255,10 +282,12 @@ def _read_xlsx(path: Path) -> Table:
                     break
             elif (empty := empty + 1) > MOST_EMPTY_ROWS:
                 break
+    except MakerError:
+        raise
     except Exception as error:
-        logger.warning("Could not read the spreadsheet %s: %s", path.name, error)
-        raise MakerError(NOT_A_SPREADSHEET.format(name=path.name)) from error
+        logger.warning("Could not read the spreadsheet %s: %s", name, error)
+        raise MakerError(NOT_A_SPREADSHEET.format(name=name)) from error
     finally:
         values.close()
         formulas.close()
-    return _table(path.name, records, unsaved, sheet.title)
+    return _table(name, records, unsaved, sheet.title)

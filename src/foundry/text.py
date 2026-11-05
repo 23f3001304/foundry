@@ -13,7 +13,8 @@ ROOM_OF = "the room of {people}"
 
 def same_login(text: object) -> str:
     # How a login is compared: a pack's list, what is typed at sign-in, and what a command carries all match without regard to case or spaces.
-    return str(text or "").strip().casefold()
+    # Lowered and not case-folded, because that is how Switch tells accounts apart. Folding makes a long s the same as an s, and for Switch they are two accounts.
+    return str(text or "").strip().lower()
 
 
 MOST_HEADLINE_CHARS = 80

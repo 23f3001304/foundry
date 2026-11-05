@@ -34,7 +34,9 @@ from foundry.commands import (
     CANT_READ_ALL,
     LOG_CHANGED,
     LOG_CHANGED_BUT,
+    LOG_CONNECTIONS,
     LOG_FLAGGED,
+    LOG_NOT_LISTED,
     LOG_NOT_READ,
     LOG_RELOADED,
     LOG_RESTARTED,
@@ -55,11 +57,16 @@ from foundry.commands import (
     REVISE,
     VIA_DASHBOARD,
     VOICE_IN_CHAT,
+    DASHBOARD_SESSION,
+    KIND,
+    NO_NAME,
+    UNKNOWN_KIND,
     Command,
     CommandStore,
     Refused,
     changed_file,
     outcome_for,
+    plain_name,
     still_waits_on,
 )
 from foundry.coordinator import DUE_RAN_OUT, Coordinator
@@ -79,6 +86,10 @@ from foundry.voice import Transcript, VoiceError, speak, transcribe, translate
 logger = logging.getLogger(__name__)
 
 BRANDS = Path(__file__).resolve().parents[2] / "brands"
+# How many ticks a message that Switch would not take is kept and tried again, which at the usual three seconds a tick is about five minutes. After that it is let go and the log says so.
+MOST_BURST_TRIES = 100
+# How much of a login is written in the log when a command from one that is no longer listed is turned away.
+MOST_LOGIN_SHOWN = 80
 AGENT_SENDER_PREFIX = "@switch-agent-"
 DESK = "foundry-desk"
 BRIEF_AGENT = "foundry-brief"
@@ -252,6 +263,15 @@ def team_named(ending: str = "") -> Team:
     return Team(BRIEF_AGENT + ending, tuple(maker + ending for maker in MAKERS), REVIEWER + ending)
 
 
+@contextmanager
+def _isolated(what: str) -> Iterator[None]:
+    # One step going wrong must not stop the steps after it, and whatever they are for every other client. It is said in the log and tried again on the next tick.
+    try:
+        yield
+    except Exception:
+        logger.exception("Could not %s, so it is tried again on the next tick.", what)
+
+
 @dataclass(frozen=True)
 class Workrooms:
     studio: str
@@ -390,6 +410,9 @@ class Desk:
             gate.cards = self.cards
         self.items = ItemStore(settings.work_path)
         self.commands = CommandStore(settings.commands_path)
+        # What a message that would not go through has cost so far, and the job a try made before it failed, so the next try carries on with it. Both are forgotten on a restart.
+        self._burst_tries: dict[tuple[str, str], int] = {}
+        self._half_made: dict[tuple[str, str], str] = {}
         # Asked for the model and the clock each time, so a test that swaps either one reaches the coordinator too.
         self.coordinator = Coordinator(client, store, self.items, self.log, self.cards, settings, lambda prompt: self.llm(prompt), lambda: self.clock(), self._ask_makers)
         # Combines the day's notes with the model that writes reports, and hands an approval to the desk like any other.
@@ -406,28 +429,49 @@ class Desk:
             self.on_agent_message(event)
 
     def tick(self, now: datetime) -> None:
-        try:
+        # Every step has its own turn whatever the one before it did, and every message, job and client has its own turn inside a step.
+        with _isolated("read the messages that have gone quiet"):
             for burst in self.buffer.ready(now):
-                with _give_up_if_room_is_gone(f"a message in room {burst.room_id}"):
-                    self._take_burst(burst)
+                self._take_one(burst)
+        with _isolated("ask Switch for the answers waiting"):
             for outcome in self.client.outcomes():
                 try:
                     self._handle_outcome(outcome)
                 except Exception:
                     # Not acknowledged, so Switch hands it over again next tick. The ones behind it still get their turn.
                     logger.exception("Could not handle the outcome for %s, so it comes round again on the next tick.", outcome.request_id)
+        with _isolated("take the dashboard's commands"):
             self.apply_commands()
+        with _isolated("look at the jobs that have gone quiet"):
             self._stop_quiet_jobs(now)
+        with _isolated("look after the jobs waiting on inputs"):
             self.coordinator.tick(now)
-        finally:
-            # One job's trouble must not stop everyone else's cards and set times.
+        with _isolated("open the next cards"):
             self.cards.pump()
-            # Before the set times, so a report built at one is on its card in that same run.
+        # Before the set times, so a report built at one is on its card in that same run.
+        with _isolated("look after the daily reports"):
             self.daily.tick(now)
-            # Every bucket every time, even with nothing waiting, so a set time that passes empty isn't taken for one still to come.
-            for bucket in dict.fromkeys([*map(self.settings.bucket_for, self.settings.all_rooms()), *self.cards.known_buckets()]):
+        # Every bucket every time, even with nothing waiting, so a set time that passes empty isn't taken for one still to come.
+        for bucket in dict.fromkeys([*map(self.settings.bucket_for, self.settings.all_rooms()), *self.cards.known_buckets()]):
+            with _isolated(f"run the set times for {bucket}"):
                 pack = self.settings.pack_for(self.settings.home_room(bucket))
                 self.cards.run_set_times(bucket, pack.set_times, self.settings.utc_offset_minutes, now)
+
+    def _take_one(self, burst: Burst) -> None:
+        # A message stays in the buffer until it has been handled, so Switch being down for a moment loses nobody's, and one client's does not hold up the next.
+        key = (burst.room_id, burst.sender)
+        try:
+            with _give_up_if_room_is_gone(f"a message in room {burst.room_id}"):
+                self._take_burst(burst)
+        except Exception:
+            self._burst_tries[key] = tries = self._burst_tries.get(key, 0) + 1
+            if tries < MOST_BURST_TRIES:
+                logger.exception("Could not take a message in room %s, so it is kept and tried again on the next tick.", burst.room_id)
+                return
+            logger.exception("Gave up on a message in room %s after %d tries, so it is let go.", burst.room_id, tries)
+        self._burst_tries.pop(key, None)
+        self._half_made.pop(key, None)
+        self.buffer.finish(burst)
 
     def _stop_quiet_jobs(self, now: datetime) -> None:
         limit = timedelta(minutes=self.settings.work_timeout_minutes)
@@ -772,7 +816,8 @@ class Desk:
             return
         try:
             self.client.post_file(room_id, path, "")
-        except httpx.HTTPError as error:
+        except Exception as error:
+            # Not only Switch refusing it. A file that is locked would otherwise leave the job half stopped, with a new card for it on every tick.
             logger.warning("Could not send the %s sticker: %s", event, error)
 
     def _sent_at(self, payload: dict) -> datetime:
@@ -1361,6 +1406,20 @@ class Desk:
         return not job.question or bool(job.language) or self.cards.is_open(job.question["request_id"])
 
     def _open_job(self, burst: Burst, kind: str = "work") -> Job:
+        key = (burst.room_id, burst.sender)
+        if (held := self._half_made.get(key)) is not None:
+            # An earlier try of this message got as far as making the job, and failed after. Another job would only be one more that nobody answers.
+            try:
+                job = self.store.get(held)
+            except KeyError:
+                job = None
+            if job is not None and job.kind == kind and job.state is State.RECEIVED:
+                return job
+        job = self._make_job(burst, kind)
+        self._half_made[key] = job.id
+        return job
+
+    def _make_job(self, burst: Burst, kind: str) -> Job:
         job = self.store.create(burst.room_id, burst.sender, self._approver_for(burst), self.settings.bucket_for(burst.room_id))
         # Before anyone is asked about a voice note, because a note is asked about differently.
         job.kind = kind
@@ -1514,6 +1573,8 @@ class Desk:
             self._flag(command)
         elif command.action == "reload_pack":
             self._reload_pack(command)
+        elif command.action == "note_connection":
+            self._note_connection(command)
 
     def _answer_card(self, command: Command, request_id: str, choice: str | None, notes: str | None) -> None:
         card = self.cards.get(request_id)
@@ -1640,17 +1701,28 @@ class Desk:
     def _entries_of(self, job: Job) -> set[int]:
         return {entry.id for entry in self.log.for_job(job.bucket, job.id)} | set(self._opening_ids(job))
 
-    def _reload_pack(self, command: Command) -> None:
-        bucket = str(command.payload.get("bucket", ""))
+    def _pack_rooms(self, command: Command) -> list[str]:
         # Only a client's own rooms count. A bucket the desk doesn't have, or one with no brand folder to read, would load nothing and still say it had.
+        bucket = str(command.payload.get("bucket", ""))
         rooms = [room for room in self.settings.packs if room in self.settings.brands and self.settings.bucket_for(room) == bucket]
         if not rooms:
             raise Refused(NO_PACK_TO_READ)
+        return rooms
+
+    def _is_listed(self, command: Command, rooms: list[str]) -> bool:
         # The route checks this too, and so does the desk, since a command is only a row in a file. The login has to be one the client's own pack lists, as the identity it asks as.
-        if not any(self.settings.packs[room].lists(command.login, command.acts_as) for room in rooms):
-            raise Refused(NOT_LISTED)
+        return any(self.settings.packs[room].lists(command.login, command.acts_as) for room in rooms)
+
+    def _reload_pack(self, command: Command) -> None:
+        bucket = str(command.payload.get("bucket", ""))
+        rooms = self._pack_rooms(command)
         # The file is named only when it is one the dashboard can change, since it came in a command.
         what = changed_file(command.payload)
+        if not self._is_listed(command, rooms):
+            # The dashboard may have changed the file before the login came off the list, so the change is written down, as coming from the login and not as its doing.
+            text = LOG_NOT_LISTED.format(what=f"Changed {what}" if what else "Asked to read the pack again", login=quiet(command.login)[:MOST_LOGIN_SHOWN], via=VIA_DASHBOARD)
+            self.log.add(self.clock(), bucket, self.settings.home_room(bucket), DASHBOARD_SESSION, "dashboard_action", text)
+            raise Refused(NOT_LISTED)
         try:
             fresh = {room: load_pack(BRANDS / self.settings.brands[room]) for room in rooms}
         except Exception as error:
@@ -1663,6 +1735,23 @@ class Desk:
             raise Refused(str(error) if isinstance(error, PackError) else NOT_READ) from None
         self.settings.packs.update(fresh)
         text = LOG_CHANGED.format(what=what, via=VIA_DASHBOARD) if what else LOG_RELOADED.format(via=VIA_DASHBOARD)
+        self._log_dashboard(command, bucket, self.settings.home_room(bucket), text, None, None)
+
+    def _note_connection(self, command: Command) -> None:
+        # Switch has already done it, as the person. This only writes it down, with who, and nothing but the connection's name and kind.
+        rooms = self._pack_rooms(command)
+        if not self._is_listed(command, rooms):
+            raise Refused(NOT_LISTED)
+        payload = command.payload
+        if payload.get("what") not in ("added", "removed"):
+            raise Refused(COULD_NOT)
+        kind = payload.get("kind")
+        count = payload.get("rooms") if isinstance(payload.get("rooms"), int) and not isinstance(payload.get("rooms"), bool) and payload["rooms"] >= 0 else 0
+        text = LOG_CONNECTIONS[payload["what"], payload.get("sure") is True].format(
+            name=quiet(plain_name(payload.get("name")) or NO_NAME), kind=kind if isinstance(kind, str) and KIND.fullmatch(kind) else UNKNOWN_KIND,
+            rooms=f"{count} room{'' if count == 1 else 's'}", via=VIA_DASHBOARD,
+        )
+        bucket = str(payload.get("bucket", ""))
         self._log_dashboard(command, bucket, self.settings.home_room(bucket), text, None, None)
 
     def _job_named(self, command: Command) -> Job:
