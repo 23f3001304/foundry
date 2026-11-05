@@ -34,7 +34,8 @@ WORD_SLACK = 4
 RULE_WIDTH = 9525
 PICTURE_KINDS = (".png", ".jpg", ".jpeg")
 ROWS_SHAPE = 'A table\'s "rows" is a list of rows, and each row is a list of cells. The first row holds the headings.'
-TABLE_TOO_BIG = "This table is too big to fit on one slide. Show fewer rows, shorten the words, or split it over two slides."
+TABLE_TOO_TALL = "This table is too big to fit on one slide, because it is too tall. Show fewer rows, shorten the cells, or split it over two slides."
+TABLE_TOO_WIDE = "This table is too big to fit on one slide, because it is too wide: its longest words do not fit side by side at the smallest size. Use fewer columns or shorter words."
 DRAWING = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 # The small line under a slide's content that says where its numbers came from. It stops short of the corner logo.
 SOURCE_BOX = (56, 500, 780, 28)
@@ -233,14 +234,17 @@ def _column_widths(brand: Brand, cells: list[list[str]], width: int, size: int) 
 
 def _fit_table(brand: Brand, cells: list[list[str]], width: int, height: int) -> tuple[int, list[float], list[float]]:
     # The words are as large as they can be with the whole table on the slide, and each column is wide enough for its words.
+    wide_enough = False
     for size in range(TABLE_SIZES[0], TABLE_SIZES[1] - 1, -1):
         widths = _column_widths(brand, cells, width, size)
         if widths is None:
             continue
+        wide_enough = True
         heights = [_row_height(brand, row, widths, size, header=number == 0) for number, row in enumerate(cells)]
         if sum(heights) <= height:
             return size, widths, heights
-    raise MakerError(TABLE_TOO_BIG)
+    # Too tall when the words fit across the slide at some size and the rows still do not fit down it, and too wide when no size lets the words sit side by side.
+    raise MakerError(TABLE_TOO_TALL if wide_enough else TABLE_TOO_WIDE)
 
 
 def _underline(cell, brand: Brand) -> None:
@@ -413,7 +417,7 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     # A file property holds at most 255 characters, and a title too long for that is the deck's own problem to say, which the slide's check does, so it is cut here and not refused.
     deck.core_properties.title = "".join(character for character in " ".join(title.split()) if character.isprintable())[:MOST_PROPERTY_CHARS]
     _title_slide(deck, brand, title, subtitle, highlight)
-    links = _sources_of({"title": title, "sources": sources}, 1)
+    links = _sources_of({"title": title, "subtitle": subtitle, "sources": sources}, 1)
     if links:
         _print_sources(deck.slides[-1], brand, links, "title")
     for number, spec in enumerate(slides, start=2):

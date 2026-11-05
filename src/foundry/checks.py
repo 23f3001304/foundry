@@ -39,6 +39,10 @@ CURRENCY_BEFORE = re.compile(r"(?:₹|(?<![A-Za-z])Rs\.?|[$€£])\s*$")
 GROUPED = re.compile(r"[1-9]\d{0,2}(?:(?:,\d{3})+|(?:,\d{2})*,\d{3})(?:\.\d+)?")
 DECIMAL = re.compile(r"\d+\.\d+")
 FIGURE = re.compile(rf"(-?)\s*[₹$€£]?\s*({NUMBER.pattern})\s*%?")
+# A period label is a quarter, a financial year, or both, such as Q1, FY26 and Q1 FY2026. It names a period and is no figure, so it is skipped by its shape as a date is.
+# Only that exact shape: a label followed by more digits, a percent sign or a decimal part, a bare Q5, a Q1 followed by a number and 26 before an FY are all figures.
+LABEL_END = r"(?![\w%]|[.,]\d)"
+PERIOD = re.compile(rf"\b(?:Q[1-4]\s*)?FY\s?(?:\d{{4}}|\d{{2}}){LABEL_END}|\bQ[1-4]{LABEL_END}", re.IGNORECASE)
 
 
 def _normal(token: str) -> str:
@@ -50,8 +54,8 @@ def _normal(token: str) -> str:
 
 
 def numbers_in(text: str) -> list[str]:
-    # Dates are written by code or are not measures, so neither counts as a number.
-    text = WRITTEN_DATE.sub(" ", DATE_TOKEN.sub(" ", text))
+    # Dates are written by code or are not measures, so neither counts as a number. Nor does the name of a period.
+    text = PERIOD.sub(" ", WRITTEN_DATE.sub(" ", DATE_TOKEN.sub(" ", text)))
     return list(dict.fromkeys(_normal(match.group()) for match in NUMBER.finditer(text) if not _is_year(text, match)))
 
 
