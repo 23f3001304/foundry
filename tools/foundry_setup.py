@@ -117,7 +117,7 @@ STOPPED = "stopped"
 NOT_RUNNING = "was not running"
 NOT_CONFIRMED = "left alone, because process {pid} can't be confirmed as the one setup started"
 WOULD_NOT_STOP = "would not stop (process {pid}). Close it yourself and run this again"
-MAKERS_LEFT = "  {count} of the makers' tool servers from this folder are still running (process {pids}). Setup can't prove they are its own, so it left them. To close them, close the agent sessions using them or end those process numbers yourself."
+MAKERS_LEFT = "  Left running, because setup can't prove they are its own: makers' tool servers from this folder, with process numbers {pids}. To close them, close the agent sessions using them or end those numbers yourself."
 UNEXPECTED = "Something unexpected stopped this step. The details are in {log}."
 
 
@@ -1131,7 +1131,7 @@ class Setup:
         if had_controller:
             strays = self.machine.leftovers(self.repo)
             if strays:
-                self.ui.say(MAKERS_LEFT.format(count=len(strays), pids=", ".join(str(pid) for pid in strays)))
+                self.ui.say(MAKERS_LEFT.format(pids=", ".join(str(pid) for pid in strays)))
         return fine
 
     def _rooms_mark(self) -> str:
@@ -1355,7 +1355,7 @@ class Setup:
 
 
 # Whatever a real setup or a person's own shell has named, none of it is passed on to try mode.
-NOT_FOR_TRY_MODE = ("FOUNDRY_", "SWITCH_", "MATTERMOST_", "ANTHROPIC_", "SARVAM_", "SLACK_", "TELEGRAM_", "WHATSAPP_", "GOOGLE_", "OPENAI_", "UV_ENV_FILE", "CLAUDE_")
+NOT_FOR_TRY_MODE = ("FOUNDRY_", "SWITCH_", "MATTERMOST_", "ANTHROPIC_", "SARVAM_", "SLACK_", "TELEGRAM_", "WHATSAPP_", "GOOGLE_", "OPENAI_", "UV_ENV_FILE", "CLAUDE_", "VIRTUAL_ENV")
 NO_UV = "Try mode needs uv, and uv is not on your PATH. Get it from https://docs.astral.sh/uv/getting-started/installation/."
 
 

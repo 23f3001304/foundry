@@ -343,7 +343,11 @@ def main(home: Path | None = None) -> int:
     record = home / TRY_RECORD
     logging.basicConfig(level=logging.WARNING)
     port = free_port(FIRST_PORT)
-    running = claim(record, port, Machine())
+    try:
+        running = claim(record, port, Machine())
+    except OSError:
+        print(f"Try mode can't write to {home}, so it could not start. Check that folder's permissions and run this again.", flush=True)
+        return TRY_ALREADY_SAID
     if running:
         print(TRY_RUNNING.format(port=running["port"]), flush=True)
         return 0
