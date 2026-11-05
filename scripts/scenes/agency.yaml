@@ -38,14 +38,14 @@ steps:
   # The makers made it and the reviewer passed it. The Account Director signs off each client's set, and only then does the client get it.
   - as: Account Director
     room: phatakha-studio
-    wait_for: {button: Approve, timeout: 2700}
+    wait_for: {button: Approve, text: "Approve to deliver this work", timeout: 2700}
   - as: Account Director
     room: phatakha-studio
     press: Approve
     wait_for: {room: phatakha, text: "Here is your final work", timeout: 180}
   - as: Account Director
     room: ambaryug-studio
-    wait_for: {button: Approve, timeout: 2700}
+    wait_for: {button: Approve, text: "Approve to deliver this work", timeout: 2700}
   - as: Account Director
     room: ambaryug-studio
     press: Approve
