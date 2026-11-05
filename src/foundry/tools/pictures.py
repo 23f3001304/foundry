@@ -45,14 +45,18 @@ OFFICE_FOLDERS = ("Microsoft Office/root/Office16", "Microsoft Office/Office16")
 OPEN_ALREADY = 3
 # What it exits with when the PowerPoint it quit last time still hasn't gone.
 STILL_GOING = 4
-STILL_LEAVING = "PowerPoint was still closing after the last pictures, so none are available this time and it was left alone; carry on without them."
+STILL_LEAVING = "PowerPoint was still closing after the last pictures, so none are available this time and it was left alone; a person can close it in Task Manager if it stays, so carry on without them."
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 LOCK = "foundry-powerpoint.lock"
 # Which PowerPoint this render quit, as its process number and start time, and the same for one not yet seen to go. Makers are separate processes, so the second lives beside the lock.
 QUIT_NOTE = "quit-note.txt"
 LEAVING = Path(tempfile.gettempdir()) / "foundry-powerpoint-leaving.txt"
-# The scripts wait 20 seconds for PowerPoint to go. This is the longer limit on the step that only watches.
+# How long both scripts wait for PowerPoint to go. It is added to a render's time limit, so it can't read as a hang.
+WAIT_SECONDS = 20
+# The longer limit on the step that only watches.
 WATCH_SECONDS = 30
+# On the note once that wait has been spent. A PowerPoint that stays then costs later renders only a look, until it has gone.
+WAITED = "waited"
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,7 @@ if ($running.Count -gt 0) {
         $leaving = $env:FOUNDRY_LEAVING_ID -and ($running.Count -eq 1) -and ("$($running[0].Id)" -eq $env:FOUNDRY_LEAVING_ID) -and ("$($running[0].StartTime.Ticks)" -eq $env:FOUNDRY_LEAVING_START) -and ($running[0].MainWindowHandle -eq 0)
     } catch { $leaving = $false }
     if (-not $leaving) { exit 3 }
+    if ($env:FOUNDRY_LEAVING_WAITED) { exit 4 }
     try { $running[0] | Wait-Process -Timeout 20 -ErrorAction Stop } catch { exit 4 }
     if (Get-Process -Name POWERPNT -ErrorAction SilentlyContinue) { exit 3 }
 }
@@ -208,18 +213,25 @@ def _powershell(script: str) -> list[str]:
     return ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.b64encode(script.encode("utf-16-le")).decode("ascii")]
 
 
-def _read_note(path: Path) -> tuple[str, str] | None:
+def _read_note(path: Path) -> list[str] | None:
     # A note that can't be read or makes no sense is no evidence of anything.
     try:
         parts = path.read_text(encoding="ascii").split()
     except (OSError, ValueError):
         return None
-    return (parts[0], parts[1]) if len(parts) == 2 and all(part.isdigit() for part in parts) else None
+    return parts if parts[2:] in ([], [WAITED]) and len(parts) >= 2 and all(part.isdigit() for part in parts[:2]) else None
 
 
-def _named(note: tuple[str, str] | None) -> dict[str, str]:
-    process, started = note or ("", "")
-    return {"FOUNDRY_LEAVING_ID": process, "FOUNDRY_LEAVING_START": started}
+def _named(note: list[str] | None) -> dict[str, str]:
+    process, started, *waited = note or ("", "")
+    return {"FOUNDRY_LEAVING_ID": process, "FOUNDRY_LEAVING_START": started, "FOUNDRY_LEAVING_WAITED": "1" if waited else ""}
+
+
+def _noted_as_waited(note: list[str]) -> None:
+    try:
+        LEAVING.write_text(" ".join([*note[:2], WAITED]), encoding="ascii")
+    except OSError as error:
+        logger.warning("Could not note a PowerPoint that has not gone: %s", error)
 
 
 def _forget_leaving() -> None:
@@ -238,11 +250,15 @@ def _watch_it_go(quit_note: Path) -> None:
         # Written first, so the evidence is there even if this process dies while watching.
         LEAVING.write_text(" ".join(ours), encoding="ascii")
         code = _wait_alone(_powershell(LEAVING_SCRIPT), WATCH_SECONDS, env={**os.environ, **_named(ours)})
+    except subprocess.TimeoutExpired:
+        code = STILL_GOING
     except (OSError, subprocess.SubprocessError) as error:
         logger.warning("Could not see PowerPoint go after making pictures: %s", error)
         return
     if code == 0:
         _forget_leaving()
+    elif code == STILL_GOING:
+        _noted_as_waited(ours)
 
 
 def powerpoint(deck: Path, folder: Path, seconds: float) -> bool:
@@ -254,19 +270,22 @@ def powerpoint(deck: Path, folder: Path, seconds: float) -> bool:
     if _gave_up and _left_running:
         raise Unavailable(LEFT_STUCK)
     _gave_up = False
-    # Waiting for another render is no sign of a hang, so the script gets all its time once it starts.
+    # Waiting for another render is no sign of a hang, and nor is the first look's wait, so the script gets all its time for the render.
     with _one_at_a_time(seconds):
-        quit_note = folder / QUIT_NOTE
-        env = {**os.environ, "FOUNDRY_DECK": str(deck), "FOUNDRY_PICTURES_FOLDER": str(folder), "FOUNDRY_PICTURE_WIDTH": str(SLIDE_WIDTH), "FOUNDRY_PICTURE_HEIGHT": str(SLIDE_HEIGHT), "FOUNDRY_RENDER_NOTE": str(quit_note), **_named(_read_note(LEAVING))}
+        quit_note, leaving = folder / QUIT_NOTE, _read_note(LEAVING)
+        limit = seconds + (WAIT_SECONDS if leaving and not leaving[2:] else 0)
+        env = {**os.environ, "FOUNDRY_DECK": str(deck), "FOUNDRY_PICTURES_FOLDER": str(folder), "FOUNDRY_PICTURE_WIDTH": str(SLIDE_WIDTH), "FOUNDRY_PICTURE_HEIGHT": str(SLIDE_HEIGHT), "FOUNDRY_RENDER_NOTE": str(quit_note), **_named(leaving)}
         try:
-            code = _wait_alone(_powershell(POWERPOINT_SCRIPT), seconds, env=env)
+            code = _wait_alone(_powershell(POWERPOINT_SCRIPT), limit, env=env)
         except subprocess.TimeoutExpired:
             _gave_up = True
-            logger.warning("PowerPoint did not finish %s in %.0f seconds. It was left running, and this process will not use it again while that lasts.", deck.name, seconds)
+            logger.warning("PowerPoint did not finish %s in %.0f seconds. It was left running, and this process will not use it again while that lasts.", deck.name, limit)
             raise Unavailable(LEFT_STUCK, stuck=True) from None
         # Past the first look, whichever one the note named has gone.
         if code not in (OPEN_ALREADY, STILL_GOING):
             _forget_leaving()
+        elif code == STILL_GOING and leaving:
+            _noted_as_waited(leaving)
         _watch_it_go(quit_note)
     if code == OPEN_ALREADY:
         raise Unavailable(POWERPOINT_OPEN)
