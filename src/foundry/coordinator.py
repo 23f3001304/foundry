@@ -1178,11 +1178,12 @@ class Coordinator:
         burst, reading = heard.burst, heard.reading
         away = AWAY_UNTIL.format(day=format_date(reading.until)) if reading.until else AWAY
         speaker = self._name_of(burst.sender, heard.bucket)
+        shown = shown_name(speaker, burst.sender)
         reason, job_id = away, None
         # Whoever says it, it is taken only when the person it is about owes an open item. With nothing owed there is nothing to follow, and what was written may be a note with a leave in it.
         # The sender may speak of themselves in the third person, which is still themselves, and by the name a card shows as well as by their login.
-        if not reading.person or _key(reading.person) in (_key(burst.sender), _key(speaker), _key(shown_name(speaker, burst.sender))):
-            who, name, items = burst.sender, speaker, [item for item in heard.own if item.state is ItemState.OPEN]
+        if not reading.person or _key(reading.person) in (_key(burst.sender), _key(speaker), _key(shown)):
+            who, name, told, items = burst.sender, speaker, shown, [item for item in heard.own if item.state is ItemState.OPEN]
             if not items:
                 return False
         else:
@@ -1192,15 +1193,15 @@ class Coordinator:
                 return False
             job_id = items[-1].job_id
             items = [item for item in items if item.job_id == job_id]
-            who, name = items[0].owner or items[0].owner_name, items[0].owner_name
-            reason = AWAY_PER.format(away=away, speaker=speaker)
+            who, name, told = items[0].owner or items[0].owner_name, items[0].owner_name, items[0].shown_owner
+            reason = AWAY_PER.format(away=away, speaker=shown)
         # A reason stops the one reminder and shows in the status, and the item stays open.
         for item in items:
             item.reason = reason
             self.items.save(item)
             self._settle_cards(item, Trigger.REMINDER)
         self.log.add(burst.first_at, heard.bucket, burst.room_id, who, "availability", away, sender_name=name, job_id=job_id, ref=reading.until.isoformat() if reading.until else None)
-        self._tell(burst.room_id, AWAY_NOTED.format(name=quiet(name), away=away))
+        self._tell(burst.room_id, AWAY_NOTED.format(name=quiet(told), away=away))
         return True
 
     def _replace(self, heard: _Heard) -> bool:
