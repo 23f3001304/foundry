@@ -56,7 +56,7 @@
   <nav class="switcher-menu" aria-label="Which business to show">
     {% if whole %}<a class="switcher-item" href="{{ link(path, stage=stage) }}"{% if not business %} aria-current="true"{% endif %}><span class="dot" aria-hidden="true"></span><span class="nav-name">All businesses</span></a>{% endif %}
     {% for bucket in user.businesses %}
-    <a class="switcher-item" href="{{ link(path, stage=stage, business=bucket) }}"{% if business == bucket %} aria-current="true"{% endif %}><span class="dot {{ 'fam-ember' if stuck_in.get(bucket) else 'fam-lime' }}" aria-hidden="true"></span><span class="nav-name">{{ bucket|client }}</span>{% if stuck_in.get(bucket) %}<span class="pill pill-stuck">{{ stuck_in[bucket] }}<span class="hidden"> stuck</span></span>{% endif %}</a>
+    <a class="switcher-item" href="{{ link(path, stage=stage, business=bucket) }}"{% if business == bucket %} aria-current="true"{% endif %}><span class="dot {{ 'fam-ember' if stuck_in.get(bucket) else 'fam-lime' }}" aria-hidden="true"></span><span class="nav-name">{{ bucket|client }}</span>{% if stuck_in.get(bucket) %}<span class="nav-count">{{ stuck_in[bucket] }}<span class="hidden"> stuck</span></span>{% endif %}</a>
     {% endfor %}
   </nav>
 </details>

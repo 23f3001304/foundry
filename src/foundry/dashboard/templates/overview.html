@@ -35,7 +35,6 @@
 {# Someone with several businesses goes on to this business's list, and not to all of them. #}
 {% set own = f.bucket if user.businesses|length > 1 else "" %}
 {% set collecting = link("/jobs", stage="collecting", business=own) %}
-{% set delivered = link("/jobs", stage="delivered", business=own) %}
 {% set stuck = link("/jobs", stage="stuck", business=own) %}
 {% set rest = b.inputs_not_asked + b.inputs_without %}
 {% set needed = b.needs|length + b.needs_more %}
@@ -84,7 +83,7 @@
     <div class="chart-cell span-4">
       <div class="cell-head"><h3>Delivered</h3>{% if b.delivered_change %}<span class="delta delta-{{ 'good' if b.delivered_total > b.delivered_before else 'flat' }}" title="{{ b.delivered_change }}">{{ "%+d"|format(b.delivered_total - b.delivered_before) }} on the 14 days before</span>{% endif %}</div>
       <p class="cell-figure">{{ b.delivered_total }}</p>
-      {{ charts.bars(b.days, [("Delivered", "bar-delivered", b.delivered)], "Work delivered per day", {"bar-delivered": delivered}) }}
+      {{ charts.bars(b.days, [("Delivered", "bar-delivered", b.delivered)], "Work delivered per day") }}
       <ul class="legend">
         <li><span class="diamond fam-lime" aria-hidden="true"></span>These 14 days<b>{{ b.delivered_total }}</b></li>
         {% if b.delivered_change %}<li><span class="diamond fam-none" aria-hidden="true"></span>The 14 days before<b>{{ b.delivered_before }}</b></li>{% endif %}
