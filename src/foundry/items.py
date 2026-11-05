@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 
 OWES_FORMAT = "OWES: <person> | <input> | <measure> | <ISO 8601 due time>"
 OWES_LINE = re.compile(r"[ \t]*OWES:(.*)")
+# The buttons on the reminder card. Pressing one puts its words on the item as the reason.
+CANT_TODAY = "Can't today"
+ALREADY_TOLD = "Already told the asker"
+REMINDER_CHOICES = (CANT_TODAY, ALREADY_TOLD)
+# What the desk writes as the reason when it hears someone is away.
+AWAY = "away"
+AWAY_UNTIL = "away until {day}"
+AWAY_PER = "{away} (per {speaker})"
+AWAY_WRITTEN = re.compile(r"away(?: until [A-Z][a-z]{2} \d{1,2}, \d{4})?(?: \(per .+\))?")
 
 
 class ItemState(Enum):
@@ -100,6 +109,25 @@ def _handed_over(item: Item) -> bool:
     return item.state is ItemState.SKIPPED and item.handed_to is not None
 
 
+def is_a_button(reason: str | None) -> bool:
+    return reason in REMINDER_CHOICES
+
+
+def desk_wrote(item: Item) -> str | None:
+    # What the desk noted on an item: that someone is away, or who was asked instead. It is what is known, and nobody said it.
+    return item.reason if item.reason and (_handed_over(item) or AWAY_WRITTEN.fullmatch(item.reason)) else None
+
+
+def own_words(item: Item) -> str | None:
+    # The one place that decides whether a reason is what a person wrote. Only then can anyone be told they said it, because a kit asks makers to quote it. A button is the card's words, and what the desk noted is the desk's.
+    return item.reason if item.reason and not is_a_button(item.reason) and desk_wrote(item) is None else None
+
+
+def quoted(words: str) -> str:
+    # In the desk's quotation marks, on one line, where nothing in the words can wake an agent or close the quote.
+    return '"' + quiet(" ".join(words.split())).replace('"', "'") + '"'
+
+
 def going_without(items: list[Item]) -> list[Item]:
     return [item for item in items if item.state is ItemState.SKIPPED and not _handed_over(item)]
 
@@ -109,7 +137,17 @@ def owed_items(items: list[Item]) -> list[Item]:
     return [item for item in items if item.asked_at is not None and not _handed_over(item)]
 
 
-def status_line(items: list[Item]) -> str:
+def _why_open(item: Item, for_makers: bool) -> str:
+    name = quiet(item.owner_name)
+    if known := desk_wrote(item):
+        return f"{name} is {quiet(known)}"
+    # A maker can quote what they read, so they aren't given a button's words. The asker is, because that is how they know to go and ask.
+    if for_makers and not own_words(item):
+        return f"{name} gave no reason"
+    return f"{name} said {quoted(item.reason or '')}"
+
+
+def status_line(items: list[Item], for_makers: bool = False) -> str:
     # Built by code from the list, and everything people wrote in it is quieted here.
     items = [item for item in items if not _handed_over(item)]
     parts = [f"{sum(item.state in IN for item in items)} of {len(items)} in"]
@@ -120,7 +158,7 @@ def status_line(items: list[Item]) -> str:
     open_items = [item for item in items if item.state is ItemState.OPEN]
     # A voice answer nobody has confirmed yet is neither silence nor an answer.
     heard = [item for item in open_items if item.answer is not None and not item.confirmed]
-    parts += dict.fromkeys(f'{quiet(item.owner_name)} said "{quiet(item.reason)}"' for item in open_items if item.reason and item not in heard)
+    parts += dict.fromkeys(_why_open(item, for_makers) for item in open_items if item.reason and item not in heard)
     if heard:
         parts.append(f"waiting for {_names(list(dict.fromkeys(quiet(item.owner_name) for item in heard)))} to confirm what Foundry heard")
     silent = [quiet(item.owner_name) if item.owner_name else f"whoever owes {quiet(item.input)}" for item in open_items if not item.reason and item not in heard]

@@ -9,7 +9,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from foundry.chain import Step, chain_for, name_of, names, visible_entries
 from foundry.checks import shown_words
-from foundry.items import Item, ItemStore, status_line
+from foundry.items import Item, ItemStore, desk_wrote, own_words, status_line
 from foundry.jobs import Job, JobStore
 from foundry.log import Entry, Log
 from foundry.text import quiet
@@ -67,8 +67,9 @@ def _entry_line(entry: Entry, known: dict[str, str], inputs_dir: str | None = No
 
 def _item_line(item: Item) -> str:
     owner = _text(item.owner_name) if item.owner_name else "nobody named"
-    reason = f" | said {_text(item.reason)}" if item.reason else ""
-    return f"- {_text(item.input)} | measure {_text(item.measure)} | owner {owner} | {item.state.value}{reason}"
+    words, known = own_words(item), desk_wrote(item)
+    why = f" | said {_text(words)}" if words else f" | known {_text(known)}" if known else ""
+    return f"- {_text(item.input)} | measure {_text(item.measure)} | owner {owner} | {item.state.value}{why}"
 
 
 def _step_line(step: Step) -> str:
@@ -100,7 +101,7 @@ def item_status(token: str) -> str:
     items = ItemStore(_path("FOUNDRY_WORK_DB")).for_job(job.id)
     if not items:
         return NO_ITEMS
-    return "\n".join([AS_DATA, " ".join(status_line(items).split()), *map(_item_line, items)])
+    return "\n".join([AS_DATA, " ".join(status_line(items, for_makers=True).split()), *map(_item_line, items)])
 
 
 @mcp.tool()

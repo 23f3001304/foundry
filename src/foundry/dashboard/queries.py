@@ -17,7 +17,7 @@ from foundry.dashboard import data as brand_data
 from foundry.dashboard.auth import User
 from foundry.dashboard.gateway import Bridge, Room
 from foundry.desk import Settings, approving_confirms_voice
-from foundry.items import Item, ItemState, _item, status_line
+from foundry.items import Item, ItemState, _item, desk_wrote, status_line
 from foundry.items import COLUMNS as ITEM_COLUMNS
 from foundry.jobs import Job, State, _job
 from foundry.jobs import COLUMNS as JOB_COLUMNS
@@ -502,6 +502,8 @@ class Reader:
     def _item_row(self, item: Item) -> ItemRow:
         if item.state in ITEM_STATES:
             status = ITEM_STATES[item.state]
+        elif known := desk_wrote(item):
+            status = known[0].upper() + known[1:]
         elif item.reason:
             status = f"Said: {item.reason}"
         elif item.asked_at is None:

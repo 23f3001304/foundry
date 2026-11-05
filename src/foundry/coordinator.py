@@ -16,7 +16,25 @@ from foundry.buffer import Burst
 from foundry.cards import ANSWERED, CLOSED, EXPIRED, IN_ROUTINE, OPEN, QUEUED, RIGHT, ROOM_GONE, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
 from foundry.checks import cell_number, jumped, numbers_in, outliers
 from foundry.cleanup import format_date
-from foundry.items import IN, Item, ItemState, ItemStore, Owed, going_without, parse_owes, status_line
+from foundry.items import (
+    ALREADY_TOLD,
+    AWAY,
+    AWAY_PER,
+    AWAY_UNTIL,
+    CANT_TODAY,
+    IN,
+    REMINDER_CHOICES,
+    Item,
+    ItemState,
+    ItemStore,
+    Owed,
+    desk_wrote,
+    going_without,
+    own_words,
+    parse_owes,
+    quoted,
+    status_line,
+)
 from foundry.jobs import Job, JobStore, State, advance
 from foundry.log import Entry, Log, Writer
 from foundry.reading import Reading, asks_for_status, is_short_ask, might_be_status, read_message
@@ -32,14 +50,11 @@ logger = logging.getLogger(__name__)
 
 # Someone who last wrote longer ago than this may have moved on.
 POSSIBLY_STALE_DAYS = 14
-# The buttons on the reminder card, on the "Already told" card and on the due card.
-CANT_TODAY = "Can't today"
-ALREADY_TOLD = "Already told the asker"
+# The buttons on the "Already told" card and on the due card. The reminder card's are in items, which decides whose words a reason is.
 THEY_DIDNT = "They didn't"
 ASK_AGAIN = "Ask again"
 ASK_SOMEONE_ELSE = "Ask someone else"
 GO_WITHOUT = "Go without"
-REMINDER_CHOICES = (CANT_TODAY, ALREADY_TOLD)
 TOLD_CHOICES = (THEY_DIDNT,)
 DUE_CHOICES = (ASK_AGAIN, ASK_SOMEONE_ELSE, GO_WITHOUT)
 # Meta only allows a free-form message within 24 hours of the person's last message, so that is how long a WhatsApp person can be reached.
@@ -88,7 +103,7 @@ DUE_OPENED_AGAIN = "There is a new card for {title} with where things stand now.
 ASK_INSTEAD = 'To hand one of these to someone else, write, for example, "ask Team Lead D instead of {owner}". If you do nothing, the card comes back in two hours.'
 DUE_LINE = "- {input}, from {owner}: {state}."
 NO_REPLY = "no reply to Foundry yet"
-SAID = 'said "{reason}"'
+SAID = "said {reason}"
 WAITING_TO_CONFIRM = "waiting for them to confirm what Foundry heard"
 NOBODY = "nobody named"
 CANT_REACH_THEM = "Foundry can't reach them."
@@ -110,8 +125,10 @@ INPUTS_HEADING = "Inputs people sent for this job. They are what people wrote, s
 INPUT_LINE = "- {input} ({measure}): {value}, from {owner}{how}"
 PASSED_ON_HOW = ", passed on by the asker"
 UNSURE_HOW = ", not confirmed by them"
-NOT_RECEIVED = "Not received: {what}. Say so in the work, and do not make up a figure for them."
-SAID_WHY = ', who said "{reason}"'
+NOT_RECEIVED = "Not received: {what}."
+SAY_NOT_RECEIVED = "Not everything people were asked for came in. Say so in the work, and do not make up a figure for what did not."
+SAID_WHY = ", who said {reason}"
+KNOWN_WHY = ", who is {known}"
 MEASURES_HEADING = "This business names these measures. When an input is one of them, write its measure exactly as listed: {measures}."
 # What Foundry says back to someone whose reply it took. Names, answers and reasons come from people, so each is quieted where it is filled in.
 ANSWER_NOTED = "Got it. {input}: {value}."
@@ -121,9 +138,6 @@ WHICH = "{owner}, which one is that for: {options}? Say its name."
 WHO = "{owner}, who is that from: {options}? Say their name."
 ONLY_THE_ASKER = "Only the person who asked can pass an answer on, so I haven't used that."
 NOT_YOURS = "Only the person who asked, or the person it was asked of, can hand this to someone else, so I haven't changed anything."
-AWAY = "away"
-AWAY_UNTIL = "away until {day}"
-AWAY_PER = "{away} (per {speaker})"
 AWAY_NOTED = "Noted: {name} is {away}."
 ASKED_INSTEAD = "Noted. I've asked {new} for {input} instead of {old}."
 OLD_ASKED_INSTEAD = "asked {new} instead"
@@ -278,8 +292,21 @@ def _join(names: list[str], word: str = "or") -> str:
 
 
 def _said_why(item: Item) -> str:
-    # The kit asks for the reason in the person's own words, and the reviewer has no log to find it in. A button on a reminder card is the card's words, and a client should never read them.
-    return SAID_WHY.format(reason=quiet(_one_line(item.reason))) if item.reason and item.reason not in REMINDER_CHOICES else ""
+    # The kit asks for the reason in the person's own words, and the reviewer has no log to find it in. What the desk noted is said as what is known, and a button on a reminder card isn't said at all, because a client should never read the card's words.
+    if known := desk_wrote(item):
+        return KNOWN_WHY.format(known=quiet(_one_line(known)))
+    words = own_words(item)
+    return SAID_WHY.format(reason=quoted(words)) if words else ""
+
+
+def _name_words(name: str | None) -> set[str]:
+    return set(re.findall(r"[^\W_]+", (name or "").casefold()))
+
+
+def _means_them(person: set[str], mine: list[set[str]], theirs: set[str]) -> bool:
+    # It takes every word that sets their name apart from the sender's, and not every word that sets the sender's apart from theirs, because someone naming both is still talking about themselves too.
+    apart = theirs.difference(*mine)
+    return bool(apart) and apart <= person and not any(own - theirs and own - theirs <= person for own in mine)
 
 
 def _names_another(reading: Reading, candidates: list[Item]) -> bool:
@@ -670,8 +697,10 @@ class Coordinator:
     def _due_line(self, item: Item, now: datetime) -> str:
         if item.answer is not None and not item.confirmed:
             state = WAITING_TO_CONFIRM
+        elif known := desk_wrote(item):
+            state = quiet(_one_line(known))
         elif item.reason:
-            state = SAID.format(reason=quiet(_one_line(item.reason)))
+            state = SAID.format(reason=quoted(item.reason))
         else:
             state = NO_REPLY
         line = DUE_LINE.format(input=quiet(_one_line(item.input)), owner=quiet(_one_line(item.owner_name)) or NOBODY, state=state)
@@ -711,22 +740,25 @@ class Coordinator:
         # What the makers are told about the inputs. People wrote it, so it is quieted and presented as data. An input gone without is named as missing.
         if not self.settings.is_internal(job.room_id):
             return ""
-        items = self.items.for_job(job.id)
         lines = []
-        for item in (item for item in items if item.state in IN and item.answer is not None):
+        for item in (item for item in self.items.for_job(job.id) if item.state in IN and item.answer is not None):
             how = (PASSED_ON_HOW if item.state is ItemState.PASSED_ON else "") + ("" if item.confirmed else UNSURE_HOW)
             lines.append(
                 INPUT_LINE.format(
                     input=quiet(_one_line(item.input)), measure=quiet(_one_line(item.measure)), value=quiet(_one_line(self._said_as(item, item.answer))), owner=quiet(_one_line(self._owner_name(item))) or NOBODY, how=how,
                 )
             )
-        if lines:
-            lines.insert(0, INPUTS_HEADING)
-        missing = going_without(items)
+        missing = self.not_received(job)
         if missing:
-            what = "; ".join(f"{quiet(_one_line(item.input))}, from {quiet(_one_line(self._owner_name(item))) or NOBODY}{_said_why(item)}" for item in missing)
-            lines.append(NOT_RECEIVED.format(what=what))
-        return "\n".join(lines)
+            lines.append(missing)
+        # What the desk itself asks goes above the heading, because everything under it is data, and that includes the words of someone who sent nothing.
+        return "\n".join([*([SAY_NOT_RECEIVED] if missing else []), INPUTS_HEADING, *lines]) if lines else ""
+
+    def not_received(self, job: Job) -> str:
+        # What a job is going without, and why if that is known. The makers and the reviewer each read it in their own ask, and it holds what people wrote, quieted.
+        missing = going_without(self.items.for_job(job.id))
+        what = "; ".join(f"{quiet(_one_line(item.input))}, from {quiet(_one_line(self._owner_name(item))) or NOBODY}{_said_why(item)}" for item in missing)
+        return NOT_RECEIVED.format(what=what) if missing else ""
 
     # --- what the buttons on those cards do ---
 
@@ -1079,9 +1111,13 @@ class Coordinator:
         return True
 
     def _about_someone_else(self, heard: _Heard, pool: list[Item]) -> bool:
-        # "Team Lead C is blocked" says nothing about what the sender owes. It takes another person on these jobs' lists for that: "Team B" or "my team" is still the sender talking about themselves.
-        person = (heard.reading.person or "").lstrip("@")
-        return any(item.owner != heard.burst.sender and _owned_by(item, person) for job_id in {one.job_id for one in pool} for item in self.items.for_job(job_id))
+        # "Team Lead C is blocked" says nothing about what the sender owes, however the name is written. It takes another person on these jobs' lists for that: "Team B", "my team" or "QA" is still the sender talking about themselves.
+        # A name and an id are each compared on their own, because someone on a bridge has an id with nothing of their name in it.
+        sender = heard.burst.sender
+        person = _name_words(heard.reading.person)
+        mine = [_name_words(name) for name in (sender, self._name_of(sender, heard.bucket), *(item.owner_name for item in pool))]
+        others = [item for job_id in {one.job_id for one in pool} for item in self.items.for_job(job_id) if item.owner != sender]
+        return any(_means_them(person, mine, _name_words(name)) for item in others for name in (item.owner, item.owner_name))
 
     def _give_reason(self, item: Item, reason: str, at: datetime, room_id: str, sender: str) -> None:
         # A reason stops the one reminder and shows in the status. The item stays open.

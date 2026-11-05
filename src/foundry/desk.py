@@ -106,6 +106,9 @@ MARKER = re.compile(rf"(?:@\S+\s+)*({BRIEF_READY}|{WORK_READY}|{WORK_BLOCKED}|{R
 FILE_KINDS = {".pptx", ".png", ".jpg", ".jpeg", ".pdf"}
 SIGNOFF = "Approve to deliver this work, or ask for changes."
 REVIEWER_SAID = "The reviewer passed it and said: {words}"
+# Short enough that the cut words and the sign-off line still fit on the card, because a longer card goes above it as a message.
+MOST_REVIEWER_CHARS = 500
+REVIEWER_CUT = " ... (cut short, the whole reply is in the review room)"
 NO_SOURCE = "No source found for {numbers} in {name}."
 UNREADABLE = "Could not read {name}, so its numbers were not checked."
 IGNORED_LINK = "Ignored the source link for {values} in {name}, because no entry for this job matches it."
@@ -668,10 +671,18 @@ class Desk:
         # Last round's lines from this check go, because that work has changed. Lines other checks wrote stay.
         job.attention = [line for line in job.attention if not WORK_CHECK_LINE.fullmatch(line)] + self._attention_for_work(job)
         lines = "\n".join(quiet(line) for line in job.attention)
-        # A reviewer can pass work and still ask the approver to check something, so the person signing off reads it here.
-        said = REVIEWER_SAID.format(words=quiet(reviewer_said)) if reviewer_said else ""
+        said = self._reviewer_said(job, room, reviewer_said)
         self.gate.ask(job, f"Final work: {self._title(job)}", "\n\n".join(part for part in (lines, said, SIGNOFF) if part), room)
         self._sticker(room, "needs_input")
+
+    def _reviewer_said(self, job: Job, room: str, words: str) -> str:
+        # A reviewer can pass work and still ask the approver to check something, so the person signing off reads it here. In a client's own room that person is the client, and the words name agents and people they never see.
+        if not words or (room == job.room_id and not self.settings.is_internal(job.room_id)):
+            return ""
+        if len(words) > MOST_REVIEWER_CHARS:
+            cut = words[:MOST_REVIEWER_CHARS]
+            words = f"{cut.rsplit(' ', 1)[0] if ' ' in cut else cut}{REVIEWER_CUT}"
+        return REVIEWER_SAID.format(words=quiet(words))
 
     def _attention_for_work(self, job: Job) -> list[str]:
         sources = self._sources_for(job)
@@ -725,6 +736,9 @@ class Desk:
     def _inputs_for(self, job: Job) -> str:
         given = [entry for entry in self.log.for_job(job.bucket, job.id) if entry.kind in INPUT_KINDS]
         lines = [f"- {quiet(_flat(entry.sender_name or entry.sender))}: {quiet(_flat(shown_words(entry, self.settings.inputs_dir)))}" for entry in given]
+        # The reviewer has no log to find this in, and people's words are in it, so it goes under the same heading.
+        if missing := self.coordinator.not_received(job):
+            lines.append(missing)
         # What code worked out from them, so a total no person gave is not failed for having no source.
         worked = [f"- {quiet(_flat(entry.text))}" for entry in self.log.for_job(job.bucket, job.id) if entry.kind == "calculation"]
         return ("\n\n" + "\n".join([GIVEN_INPUTS, *lines]) if lines else "") + ("\n\n" + "\n".join([GIVEN_CALCULATIONS, *worked]) if worked else "")

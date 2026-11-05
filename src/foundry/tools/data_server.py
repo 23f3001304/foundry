@@ -17,7 +17,7 @@ from mcp.server.mcpserver import MCPServer
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import CALCULATION, ENTRIES, ROWS, SENT_IN, name_of, names
 from foundry.checks import RESULT, cell_number, shown_words
-from foundry.items import IN, ItemState, ItemStore, owed_items
+from foundry.items import IN, ItemState, ItemStore, desk_wrote, owed_items, own_words
 from foundry.jobs import Job
 from foundry.log import Entry, Log
 from foundry.tables import Row, Table, address, column_named, is_file_answer, is_under, job_folder, read_file, squash, words
@@ -171,7 +171,8 @@ def _standing(job: Job) -> dict:
     out = []
     for item in (item for item in owed if item.state not in IN):
         line = {"owner": _clean(_one_line(item.owner_name)) or "nobody named", "input": _clean(_one_line(item.input)), "state": "going without" if item.state is ItemState.SKIPPED else "open"}
-        out.append(line | ({"reason": _clean(_one_line(item.reason))} if item.reason else {}))
+        words, known = own_words(item), desk_wrote(item)
+        out.append(line | ({"reason": _clean(_one_line(words))} if words else {}) | ({"known": _clean(_one_line(known))} if known else {}))
     return {"owed": len(owed), "in": len(owed) - len(out), "not_in": out}
 
 
@@ -182,8 +183,12 @@ def _standing_fields(standing: dict | None) -> dict:
     return dict(standing) | ({"warning": _standing_warning(standing)} if standing["not_in"] else {})
 
 
+def _why_not_in(line: dict) -> str:
+    return f", said {line['reason']!r}" if "reason" in line else f", {line['known']}" if "known" in line else ""
+
+
 def _standing_warning(standing: dict) -> str:
-    names = ", ".join(f"{line['owner']} ({line['state']}{', said ' + repr(line['reason']) if 'reason' in line else ''})" for line in standing["not_in"][:MOST_LISTED])
+    names = ", ".join(f"{line['owner']} ({line['state']}{_why_not_in(line)})" for line in standing["not_in"][:MOST_LISTED])
     more = len(standing["not_in"]) - MOST_LISTED
     return NOT_ALL_IN.format(count=standing["in"], owed=standing["owed"], names=names + (f" and {more} more" if more > 0 else ""))
 
