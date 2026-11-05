@@ -1,6 +1,7 @@
 """MCP tool for maker agents: builds a slide deck whose colours, fonts, logo and layout come from the brand kit."""
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from lxml import etree
@@ -15,9 +16,9 @@ from pptx.util import Pt
 
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
-from foundry.checks import figure
+from foundry.checks import PERIOD, figure
 from foundry.tools import confine
-from foundry.tools.layout import LINE_SPACING, MakerError, fit_size, load_font, wrap
+from foundry.tools.layout import LINE_SPACING, MakerError, contrast, fit_size, load_font, mix, wrap
 
 mcp = MCPServer("foundry-deck")
 
@@ -38,10 +39,44 @@ TABLE_TOO_TALL = "This table is too big to fit on one slide, because it is too t
 TABLE_TOO_WIDE = "This table is too big to fit on one slide, because it is too wide: its longest words do not fit side by side at the smallest size. Use fewer columns or shorter words."
 DRAWING = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 # The small line under a slide's content that says where its numbers came from. It stops short of the corner logo.
-SOURCE_BOX = (56, 500, 780, 28)
+SOURCE_RIGHT, SOURCE_TOP, SOURCE_HEIGHT = 836, 500, 28
 NARROW_SOURCE_BOX = (56, 500, 580, 28)
 SOURCE_SIZES = (11, 7)
 SOURCE_SHAPE = 'Each source is {"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 IST"}.'
+SOLID, BAND = "solid", "band"
+# The accent is deepened only as far as it takes to read at this contrast, the web's measure for large type.
+LIT_CONTRAST = 3
+READ_CONTRAST = 4.5
+# How far the words fade toward the ground for what is second on a slide, and how far the primary colour fades for a stroke that recedes.
+SOFT_SHARE = 0.25
+BACK_ON_DARK, BACK_ON_PAPER = 0.35, 0.65
+BAND_WIDTH, COVER_BAND_WIDTH = 24, 48
+SIDE_MARGINS = {SOLID: 56, BAND: 72}
+TITLE_TOP, TITLE_HEIGHT = 44, 90
+# What a slide holds under its title ends here, above the source line and left of the corner logo.
+BODY_TOP, BODY_BOTTOM, BODY_RIGHT = 150, 490, 850
+NO_BREAK = "\u00a0"
+
+
+@dataclass(frozen=True)
+class Look:
+    """The colours of one slide, worked out from the kit and what the slide is on, so a layout never has to ask which style it is in."""
+
+    ground: str
+    title: str
+    words: str
+    # What is second on the slide: a heading over a column, a figure that is not the lit one.
+    soft: str
+    source: str
+    # The accent, as it reads on this ground.
+    lit: str
+    # A stroke that recedes.
+    back: str
+    # The thin line under a table's row.
+    line: str
+    left: int
+    # The width of the band of the primary colour down the left of a slide, if it has one.
+    band: int
 
 
 def _apply_theme(deck: Presentation, brand: Brand) -> None:
@@ -58,21 +93,53 @@ def _apply_theme(deck: Presentation, brand: Brand) -> None:
     theme._blob = etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
 
 
-def _colour(brand: Brand, name: str) -> RGBColor:
-    return RGBColor.from_string(brand.colors[name].removeprefix("#"))
+def _rgb(colour: str) -> RGBColor:
+    return RGBColor.from_string(colour.removeprefix("#"))
 
 
-def _new_slide(deck: Presentation, brand: Brand, background: str):
+def _faded(words: str, ground: str) -> str:
+    # The words moved toward the ground, no further than they can still be read.
+    shares = (SOFT_SHARE * step / 5 for step in range(5, 0, -1))
+    return next((mix(words, ground, share) for share in shares if contrast(mix(words, ground, share), ground) >= READ_CONTRAST), words)
+
+
+def _readable(colour: str, ground: str, toward: str) -> str:
+    # A colour that already reads on this ground is left as the kit has it. Otherwise it moves toward the words only as far as it needs to.
+    return next((mix(colour, toward, step / 20) for step in range(21) if contrast(mix(colour, toward, step / 20), ground) >= LIT_CONTRAST), toward)
+
+
+def _look(brand: Brand, loud: bool) -> Look:
+    # Loud is a slide with one thing to say: the cover, a statement, a big number and a chart. A solid kit has those on its primary colour.
+    colours = brand.colors
+    dark = brand.style == SOLID and loud
+    ground, words = (colours["primary"], colours["paper"]) if dark else (colours["paper"], colours["ink"])
+    return Look(
+        ground=ground,
+        title=words if dark else colours["primary"],
+        words=words,
+        soft=_faded(words, ground),
+        source=words,
+        lit=_readable(colours["accent"], ground, words),
+        back=mix(colours["primary"], colours["paper"], BACK_ON_DARK if dark else BACK_ON_PAPER),
+        line=colours["ink"],
+        left=SIDE_MARGINS[SOLID if brand.style == SOLID else BAND],
+        band=BAND_WIDTH if brand.style != SOLID else 0,
+    )
+
+
+def _new_slide(deck: Presentation, look: Look, cover: bool = False) -> object:
     slide = deck.slides.add_slide(deck.slide_layouts[TITLE_ONLY])
     slide.background.fill.solid()
-    slide.background.fill.fore_color.rgb = _colour(brand, background)
+    slide.background.fill.fore_color.rgb = _rgb(look.ground)
+    if look.band:
+        _block(slide, look.title, 0, 0, COVER_BAND_WIDTH if cover else look.band, HEIGHT)
     return slide
 
 
-def _block(slide, brand: Brand, colour: str, left: int, top: int, width: int, height: int) -> None:
+def _block(slide, colour: str, left: int, top: int, width: int, height: int) -> None:
     shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Pt(left), Pt(top), Pt(width), Pt(height))
     shape.fill.solid()
-    shape.fill.fore_color.rgb = _colour(brand, colour)
+    shape.fill.fore_color.rgb = _rgb(colour)
     shape.line.fill.background()
     # Behind the text, which was placed first.
     tree = slide.shapes._spTree
@@ -80,15 +147,12 @@ def _block(slide, brand: Brand, colour: str, left: int, top: int, width: int, he
     tree.insert(2, shape._element)
 
 
-def _mark(run, brand: Brand) -> None:
-    run.font.color.rgb = _colour(brand, "ink")
-    fill = run._r.find(f"{DRAWING}rPr/{DRAWING}solidFill")
-    marker = etree.Element(f"{DRAWING}highlight")
-    etree.SubElement(marker, f"{DRAWING}srgbClr", val=brand.colors["accent"].removeprefix("#"))
-    fill.addnext(marker)
+def _periods_together(text: str) -> str:
+    # A quarter such as Q2 FY27 is one thing, so a line never breaks inside it.
+    return PERIOD.sub(lambda found: found.group().replace(" ", NO_BREAK), text)
 
 
-def _write(shape, brand: Brand, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, middle: bool = False, highlight: str = "") -> None:
+def _write(shape, brand: Brand, look: Look, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, middle: bool = False, highlight: str = "") -> None:
     left, top, width, height = box
     shape.left, shape.top, shape.width, shape.height = Pt(left), Pt(top), Pt(width), Pt(height)
     frame = shape.text_frame
@@ -97,55 +161,57 @@ def _write(shape, brand: Brand, role: str, colour: str, box: tuple[int, int, int
     frame.margin_left = frame.margin_right = frame.margin_top = frame.margin_bottom = 0
     frame.vertical_anchor = MSO_ANCHOR.MIDDLE if middle else MSO_ANCHOR.TOP
     size = fit_size("\n".join(paragraphs), brand.font_file(role), width, height - gap * len(paragraphs), largest, smallest)
+    lit = _periods_together(highlight)
     for index, text in enumerate(paragraphs):
         paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
         paragraph.alignment = PP_ALIGN.LEFT
         paragraph.space_after = Pt(gap)
-        for piece in re.split(f"({re.escape(highlight)})", text, maxsplit=1) if highlight else [text]:
+        for piece in re.split(f"({re.escape(lit)})", text, maxsplit=1) if lit else [text]:
             if not piece:
                 continue
             run = paragraph.add_run()
             run.text = piece
             run.font.size = Pt(size)
             run.font.name = brand.fonts[role]
-            run.font.color.rgb = _colour(brand, colour)
-            if piece == highlight:
-                _mark(run, brand)
+            run.font.color.rgb = _rgb(look.lit if piece == lit else colour)
 
 
-def _text_box(slide, brand: Brand, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, highlight: str = "") -> None:
+def _text_box(slide, brand: Brand, look: Look, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, highlight: str = "") -> None:
     shape = slide.shapes.add_textbox(*(Pt(value) for value in box))
-    _write(shape, brand, role, colour, box, paragraphs, largest, smallest, gap, highlight=highlight)
+    _write(shape, brand, look, role, colour, box, paragraphs, largest, smallest, gap, highlight=highlight)
 
 
-def _corner_logo(slide, brand: Brand, on_paper: bool) -> None:
-    if not on_paper:
-        _block(slide, brand, "paper", 860, 440, 100, 100)
+def _title(slide, brand: Brand, look: Look, box: tuple[int, int, int, int], text: str, largest: int, smallest: int, middle: bool = False, highlight: str = "") -> None:
+    _write(slide.shapes.title, brand, look, "heading", look.title, box, [_periods_together(text)], largest, smallest, middle=middle, highlight=highlight)
+
+
+def _corner_logo(slide, brand: Brand, look: Look) -> None:
+    # The logo goes on the paper colour, so on any other ground it brings a piece of paper with it.
+    if look.ground != brand.colors["paper"]:
+        _block(slide, brand.colors["paper"], 860, 440, 100, 100)
     slide.shapes.add_picture(str(brand.logo_path), Pt(872), Pt(452), width=Pt(76))
 
 
 def _title_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, highlight: str = "") -> None:
     _check_highlight(highlight, title)
-    if brand.style == "solid":
-        slide = _new_slide(deck, brand, "primary")
-        _block(slide, brand, "paper", 680, 0, 280, HEIGHT)
+    look = _look(brand, loud=True)
+    accent = brand.colors["accent"]
+    if brand.style == SOLID:
+        slide = _new_slide(deck, look)
+        _block(slide, brand.colors["paper"], 680, 0, 280, HEIGHT)
         if not highlight:
-            _block(slide, brand, "accent", 56, 130, 96, 6)
+            _block(slide, accent, 56, 130, 96, 6)
         slide.shapes.add_picture(str(brand.logo_path), Pt(730), Pt(180), width=Pt(180))
-        _write(slide.shapes.title, brand, "heading", "paper", (56, 150, 580, 230), [title], 54, 22, highlight=highlight)
-        ink = "paper"
-        subtitle_box = (56, 400, 580, 60)
+        title_box, subtitle_box = (56, 150, 580, 230), (56, 400, 580, 60)
     else:
-        slide = _new_slide(deck, brand, "paper")
-        _block(slide, brand, "primary", 0, 0, 48, HEIGHT)
+        slide = _new_slide(deck, look, cover=True)
         if not highlight:
-            _block(slide, brand, "accent", 96, 130, 96, 6)
+            _block(slide, accent, 96, 130, 96, 6)
         slide.shapes.add_picture(str(brand.logo_path), Pt(770), Pt(36), width=Pt(150))
-        _write(slide.shapes.title, brand, "heading", "primary", (96, 150, 640, 230), [title], 54, 22, highlight=highlight)
-        ink = "ink"
-        subtitle_box = (96, 400, 640, 60)
+        title_box, subtitle_box = (96, 150, 640, 230), (96, 400, 640, 60)
+    _title(slide, brand, look, title_box, title, 54, 22, highlight=highlight)
     if subtitle:
-        _text_box(slide, brand, "body", ink, subtitle_box, [subtitle], 24, 14)
+        _text_box(slide, brand, look, "body", look.words, subtitle_box, [_periods_together(subtitle)], 24, 14)
 
 
 def _required(spec: dict, field: str, layout: str) -> str | list:
@@ -165,14 +231,10 @@ def _make_title(deck: Presentation, brand: Brand, spec: dict) -> None:
 
 def _titled_slide(deck: Presentation, brand: Brand, title: str, highlight: str) -> tuple:
     # The start of every slide that holds something under its title, and the box left for it: clear of the corner logo and the source line.
-    slide = _new_slide(deck, brand, "paper")
-    if brand.style == "solid":
-        _block(slide, brand, "primary", 0, 0, WIDTH, 110)
-        _write(slide.shapes.title, brand, "heading", "paper", (56, 22, 848, 70), [title], 34, 16, middle=True, highlight=highlight)
-        return slide, (56, 140, 790, 350)
-    _block(slide, brand, "primary", 0, 0, 24, HEIGHT)
-    _write(slide.shapes.title, brand, "heading", "primary", (72, 44, 780, 90), [title], 36, 16, highlight=highlight)
-    return slide, (72, 150, 780, 340)
+    look = _look(brand, loud=False)
+    slide = _new_slide(deck, look)
+    _title(slide, brand, look, (look.left, TITLE_TOP, BODY_RIGHT - look.left, TITLE_HEIGHT), title, 36, 16, highlight=highlight)
+    return slide, look, (look.left, BODY_TOP, BODY_RIGHT - look.left, BODY_BOTTOM - BODY_TOP)
 
 
 def _make_content(deck: Presentation, brand: Brand, spec: dict) -> None:
@@ -180,19 +242,19 @@ def _make_content(deck: Presentation, brand: Brand, spec: dict) -> None:
     points = [f"• {point}" for point in _required(spec, "bullets", "content")]
     highlight = spec.get("highlight", "")
     _check_highlight(highlight, title, *points)
-    slide, box = _titled_slide(deck, brand, title, highlight)
-    _text_box(slide, brand, "body", "ink", box, points, 32, 13, BULLET_GAP, highlight)
-    _corner_logo(slide, brand, on_paper=True)
+    slide, look, box = _titled_slide(deck, brand, title, highlight)
+    _text_box(slide, brand, look, "body", look.words, box, points, 32, 13, BULLET_GAP, highlight)
+    _corner_logo(slide, brand, look)
 
 
 def _one_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, bullets: list[str], highlight: str) -> None:
     # A deck of one is a page someone reads, not a cover, so it is on the kit's paper like any slide that holds something.
     body = [*([subtitle] if subtitle else []), *(f"• {point}" for point in bullets)]
     _check_highlight(highlight, title, *body)
-    slide, box = _titled_slide(deck, brand, title, highlight)
+    slide, look, box = _titled_slide(deck, brand, title, highlight)
     if body:
-        _text_box(slide, brand, "body", "ink", box, body, 32, 13, BULLET_GAP, highlight)
-    _corner_logo(slide, brand, on_paper=True)
+        _text_box(slide, brand, look, "body", look.words, box, body, 32, 13, BULLET_GAP, highlight)
+    _corner_logo(slide, brand, look)
 
 
 def _cell_text(cell: object) -> str:
@@ -257,10 +319,10 @@ def _fit_table(brand: Brand, cells: list[list[str]], width: int, height: int) ->
     raise MakerError(TABLE_TOO_TALL if wide_enough else TABLE_TOO_WIDE)
 
 
-def _underline(cell, brand: Brand) -> None:
+def _underline(cell, look: Look) -> None:
     # A thin line under a row in the text colour, because the accent is for the one thing that matters most on a slide. It goes first, ahead of the fill, which is where the file format wants it.
     line = etree.Element(f"{DRAWING}lnB", w=str(RULE_WIDTH))
-    etree.SubElement(etree.SubElement(line, f"{DRAWING}solidFill"), f"{DRAWING}srgbClr", val=brand.colors["ink"].removeprefix("#"))
+    etree.SubElement(etree.SubElement(line, f"{DRAWING}solidFill"), f"{DRAWING}srgbClr", val=look.line.removeprefix("#"))
     cell._tc.get_or_add_tcPr().insert(0, line)
 
 
@@ -269,7 +331,7 @@ def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
     cells = _table_cells(spec)
     highlight = spec.get("highlight", "")
     _check_highlight(highlight, title)
-    slide, (left, top, width, height) = _titled_slide(deck, brand, title, highlight)
+    slide, look, (left, top, width, height) = _titled_slide(deck, brand, title, highlight)
     size, widths, heights = _fit_table(brand, cells, width, height)
     table = slide.shapes.add_table(len(cells), len(cells[0]), Pt(left), Pt(top), Pt(width), Pt(sum(heights))).table
     table.horz_banding = False
@@ -283,7 +345,7 @@ def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
         for at, text in enumerate(row):
             cell = table.cell(number, at)
             cell.fill.solid()
-            cell.fill.fore_color.rgb = _colour(brand, "primary" if header else "paper")
+            cell.fill.fore_color.rgb = _rgb(look.title if header else look.ground)
             cell.margin_left = cell.margin_right = cell.margin_top = cell.margin_bottom = Pt(CELL_PAD)
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
             cell.text_frame.word_wrap = True
@@ -293,10 +355,10 @@ def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
             run.text = text
             run.font.size = Pt(size)
             run.font.name = brand.fonts["heading" if header else "body"]
-            run.font.color.rgb = _colour(brand, "paper" if header else "ink")
+            run.font.color.rgb = _rgb(look.ground if header else look.words)
             if not header:
-                _underline(cell, brand)
-    _corner_logo(slide, brand, on_paper=True)
+                _underline(cell, look)
+    _corner_logo(slide, brand, look)
 
 
 def _chart_record(path: Path) -> str:
@@ -325,12 +387,12 @@ def _make_picture(deck: Presentation, brand: Brand, spec: dict) -> None:
     path, (pixels_wide, pixels_high) = _picture(_required(spec, "path", "picture"))
     highlight = spec.get("highlight", "")
     _check_highlight(highlight, title)
-    slide, (left, top, width, height) = _titled_slide(deck, brand, title, highlight)
+    slide, look, (left, top, width, height) = _titled_slide(deck, brand, title, highlight)
     # The whole picture, as large as the room allows, in the middle of it.
     scale = min(width / pixels_wide, height / pixels_high)
     wide, high = pixels_wide * scale, pixels_high * scale
     slide.shapes.add_picture(str(path), Pt(left + (width - wide) / 2), Pt(top), width=Pt(wide), height=Pt(high))
-    _corner_logo(slide, brand, on_paper=True)
+    _corner_logo(slide, brand, look)
     # A chart is an image, so the words and figures it drew go in the notes, where the number check reads the deck's text.
     record = _chart_record(path)
     if record:
@@ -341,14 +403,15 @@ def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
     text = _required(spec, "text", "statement")
     highlight = spec.get("highlight", "")
     _check_highlight(highlight, text)
-    solid = brand.style == "solid"
-    slide = _new_slide(deck, brand, "primary" if solid else "paper")
+    look = _look(brand, loud=True)
+    slide = _new_slide(deck, look)
     if not highlight:
-        _block(slide, brand, "accent", 96, 110, 96, 6)
-    _write(slide.shapes.title, brand, "heading", "paper" if solid else "primary", (96, 130, 740, 290), [text], 60, 22, middle=True, highlight=highlight)
-    _corner_logo(slide, brand, on_paper=not solid)
+        _block(slide, brand.colors["accent"], 96, 110, 96, 6)
+    _title(slide, brand, look, (96, 130, 740, 290), text, 60, 22, middle=True, highlight=highlight)
+    _corner_logo(slide, brand, look)
 
 
+LOUD_LAYOUTS = ("title", "statement")
 LAYOUTS = {"title": _make_title, "content": _make_content, "statement": _make_statement, "table": _make_table, "picture": _make_picture}
 
 
@@ -385,11 +448,10 @@ def _data_words(spec: dict) -> list[str]:
 
 
 def _print_sources(slide, brand: Brand, links: list[Link], layout: str) -> None:
-    # Over the brand's dark colour the words are paper, and elsewhere they are ink.
-    solid = brand.style == "solid"
-    colour = "paper" if solid and layout in ("title", "statement") else "ink"
-    box = NARROW_SOURCE_BOX if solid and layout == "title" else SOURCE_BOX
-    _text_box(slide, brand, "body", colour, box, [source_line(links)], *SOURCE_SIZES)
+    # In the same place on every slide, under whatever the slide holds. The line stays one string, because the number check knows it by those exact words.
+    look = _look(brand, loud=layout in LOUD_LAYOUTS)
+    box = NARROW_SOURCE_BOX if brand.style == SOLID and layout == "title" else (look.left, SOURCE_TOP, SOURCE_RIGHT - look.left, SOURCE_HEIGHT)
+    _text_box(slide, brand, look, "body", look.source, box, [source_line(links)], *SOURCE_SIZES)
 
 
 @mcp.tool()
