@@ -104,9 +104,69 @@ Each agency client made from now on has its own set of these four, named with it
 
 ## Run it
 
-You need Docker, [uv](https://docs.astral.sh/uv/), Node 22.13 or newer with pnpm, a signed-in [Claude Code](https://claude.com/claude-code), and a signed-in [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`, then `codex login`). Commands use a POSIX shell, such as Git Bash on Windows.
+There are two commands. On Windows, use `.\setup.ps1` wherever this says `./setup.sh`, with the same flags.
 
-### 1. Start Switch
+**To look at it, with no agents and nothing else installed but [uv](https://docs.astral.sh/uv/):**
+
+```bash
+./setup.sh --try
+```
+
+This starts the dashboard on made-up data and prints its address and a made-up login that exists for this mode only. No agents run, and pressing a button sends nothing anywhere. It opens no connection to anything outside this machine, doesn't read or write a real `.env`, and every page has a banner that says the data is made up. It takes about half a minute: 28 seconds on a fast connection with uv fetching Python and the packages, and 20 seconds once it has them. Press Ctrl+C to stop it.
+
+**To run the real thing:**
+
+```bash
+./setup.sh
+```
+
+```powershell
+.\setup.ps1
+```
+
+From a fresh clone, this gets you a working Foundry on your machine. It takes under 3 minutes when Docker already has the images and uv its packages, which is the only way it has been timed, and we'd guess 15 to 20 minutes on a machine with neither, for 2.5 GB of images. It asks which demo you want rooms for, or give it `--demo it_firm`, `--demo investment_firm`, `--demo agency` or `--demo coffee_shop`, and `--yes` to accept what it would otherwise ask. In order, it:
+
+1. Checks this machine and says everything that's missing at once, with where to get it.
+2. Chooses ports. If one is in use, it says which and takes the next free one.
+3. Clones Switch at the pinned commit `2d72c57` into `.foundry/switch`.
+4. Writes Switch's `.env` with generated secrets, agent management on and generated admin logins.
+5. Starts Switch's containers under a compose project of its own, on image versions pinned by digest.
+6. Waits until Switch answers.
+7. Builds the agent controller.
+8. Gets an enrolment code and enrols the controller.
+9. Starts the controller.
+10. Writes Foundry's `.env`, with `FOUNDRY_REVIEWER_PROVIDER=claude` and `FOUNDRY_QUIET_SECONDS=8`.
+11. Runs `uv sync`.
+12. Registers the desk.
+13. Makes the demo's rooms with fresh agents, the scripted people and the earlier history.
+14. Starts the desk.
+15. Starts the dashboard, then prints the addresses and which file holds the login.
+
+It never prints a secret. Each step checks whether it is already done, so if one fails, do what its one sentence says and run the command again.
+
+You need:
+
+- [Docker](https://www.docker.com/products/docker-desktop/), running. Nothing can install it for you.
+- [uv](https://docs.astral.sh/uv/). If it's missing, the command says so and asks before installing it.
+- [Node](https://nodejs.org/) 24 or newer, because Switch's console needs it. Its corepack gets the right pnpm.
+- A signed-in [Claude Code](https://claude.com/claude-code). **Codex is not needed.** Codex alone can't run the real path, because the makers reach their deck and picture tools through a `.mcp.json` file that only Claude Code reads, and the desk's classifier uses Claude Code's login or `ANTHROPIC_API_KEY`. This comes from reading the code, not from a run: Codex is out of usage here until Dec 4. With the reviewer on Claude, a vendor is checking its own work.
+- About 10 GB of free disk.
+
+Then:
+
+| Command | What it does |
+|---|---|
+| `./setup.sh --status` | Says what's up and what isn't. |
+| `./setup.sh --stop` | Stops what it started, and nothing else. |
+| `./setup.sh --reset` | Removes only what it created, after asking: its containers, volumes and images it pulled, `.foundry`, and the `.env` it wrote. |
+
+To play a demo once it's up, see steps 6 to 9 below. Your addresses are the ones it printed, which may not be the ports written there.
+
+### Doing it by hand
+
+These are the same steps without the command. Use them to see what each part does, or if the command can't run on your machine. You need Docker, uv, Node 24 or newer with pnpm, and a signed-in [Claude Code](https://claude.com/claude-code). You need a signed-in [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`, then `codex login`) only if you set the reviewer to Codex. Commands use a POSIX shell, such as Git Bash on Windows.
+
+#### 1. Start Switch
 
 These steps were tested at commit `2d72c57`.
 
@@ -131,7 +191,7 @@ docker compose -f deploy/local/standalone-docker-compose.yml --profile collab --
 
 The API is on port 8000 and Mattermost on port 8065. Sign in details are in Switch's `.env`: `GATEWAY_ADMIN_EMAIL` and `GATEWAY_ADMIN_PASSWORD` for the API, `MATTERMOST_ADMIN_USER` and `MATTERMOST_ADMIN_PASSWORD` for Mattermost.
 
-### 2. Start the agent controller
+#### 2. Start the agent controller
 
 This runs the agents on your machine. From `switch/console`:
 
@@ -149,13 +209,13 @@ curl -s -c /tmp/switch -H 'Content-Type: application/json' -d '{"email":"<admin 
 node packages/agent-controller/dist/cli.mjs enroll --server http://127.0.0.1:8000 --code <code> --data-dir ../controller-data
 ```
 
-Leave this running in its own terminal, one where the `codex` command works:
+Leave this running in its own terminal, one where the `claude` command works, and `codex` too if your reviewer uses it:
 
 ```bash
 node packages/agent-controller/dist/cli.mjs run --data-dir ../controller-data --no-self-update
 ```
 
-### 3. Set up Foundry
+#### 3. Set up Foundry
 
 In a new terminal, from this repository:
 
@@ -169,7 +229,7 @@ Put the Switch admin email and password in `.env` as `SWITCH_EMAIL` and `SWITCH_
 uv run --env-file .env python tools/register_desk.py
 ```
 
-### 4. Create the rooms
+#### 4. Create the rooms
 
 This makes rooms for both fictional clients, one internal department to show the other room tree, the four rooms of Morpankh Systems, the fictional IT firm, the six rooms of Kasauti Capital Partners, the fictional investment firm, and the rooms of the marketing agency's two clients, Phatakha Pop and Ambaryug Teas. Each agency client is given agents of its own. The seed also writes each maker's `.mcp.json` and saves the room ids in `.env`.
 
@@ -189,7 +249,7 @@ uv run --env-file .env python tools/create_rooms.py agency <room-name> <brand-fo
 
 An agent that already exists keeps the instructions it was made with, because this only puts it back in its slot. So a stack made before the design guide does not get the guide by running this again: the new rooms hold it, and the old agents are never told to read it. To get it, run these steps again on a wiped Switch stack, or run `create_rooms` first, which gives the makers their tools and new rooms with the guide, and then change those agents' instructions in Switch Console to the ones in `templates/foundry.template.yaml`. Restart the makers either way, because they pick up `foundry-design` and `state_style` when they start. The desk names any room with no guide in its start log. It can't read an agent's instructions, so it can't name an agent.
 
-### 5. Start the desk
+#### 5. Start the desk
 
 Restart it whenever you add rooms, because it only follows the rooms named in `.env` when it starts.
 
@@ -197,7 +257,7 @@ Restart it whenever you add rooms, because it only follows the rooms named in `.
 uv run --env-file .env python -m foundry
 ```
 
-### 6. Try it
+#### 6. Try it
 
 Sign in to Mattermost at http://127.0.0.1:8065 and open the `lalten` room. After a minute of quiet, or `FOUNDRY_QUIET_SECONDS` if you set it lower, the desk picks this up:
 
@@ -211,7 +271,7 @@ The contact sheet lists two electricians at Palm Court, so the desk asks which o
 
 `brands/shilagate-homes/sources/reports.md` has fixed dates. A note that says "the work started 2 days ago" only finds its match when the dates line up, so edit that file to suit the day you try it.
 
-### 7. Play the IT firm demo
+#### 7. Play the IT firm demo
 
 Morpankh Systems is a fictional IT firm, and its client Harsingar Stores is made up too. A Delivery Manager asks for a release status deck, and three Team Leads each owe the figures for it. Team Lead A answers, Team Lead B says "blocked on QA", and Team Lead C says nothing. **The team's messages are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models.**
 
@@ -232,7 +292,7 @@ The inputs are due 8 minutes in. The scene needs a reviewer that can run, or it 
 
 To measure whether a model's confidence catches a garbled note once the desk has asked about it and had a reply, run `tools/confidence_test.py` with the same `uv run --env-file .env python`.
 
-### 8. Play the investment firm demo
+#### 8. Play the investment firm demo
 
 Kasauti Capital Partners is a fictional global investment firm, and every figure in it is made up. An Analyst Lead asks for a quarterly review deck, and Office Heads A to E each owe their office's assets under management. Four answer by chat, and Office Head C sends a file last. Office Head E's figure is made to jump, to more than three times its last quarter's and far from the other offices, and the desk's check for a figure far from its peers names it on the final card. The makers are told to work the deck's charts out with the data tools, from the answers, the file and `brands/demo-investment-firm/sources/quarterly_aum.csv`, so each figure traces to its calculation and its file, and a figure from a sent file to whoever sent it. **The offices' messages and file are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models. Its reports are internal summaries of made-up numbers, never advice.**
 
@@ -251,7 +311,7 @@ uv run --env-file .env python scripts/demo_people.py play investment_firm
 
 The inputs are due 15 minutes in and the deck 60 minutes in. The scene needs a reviewer that can run, or it stops at the review. The brief agent reads the room's earlier messages, so a second play in the same rooms gets a brief that says it repeats the earlier request. Use fresh rooms before recording. See "What has actually been run" for how far it got.
 
-### 9. Play the marketing agency demo
+#### 9. Play the marketing agency demo
 
 Bhorvela Studio is a fictional marketing agency with two fictional clients. Phatakha Pop is a loud fizzy drinks brand, and Ambaryug Teas is a quiet heritage tea house. A Marketing Manager at each asks for a full campaign set: a deck, a poster, social posts at 1080x1080 and 1080x1920, and written copy. Each client's kit leads its set, so the two are meant to come out looking and sounding different, and in the one live run they did. The agency's Account Director approves each brief and each finished set inside the studio rooms, and is a member of each client's review room too, because a long reply of the reviewer's is cut short on the sign-off card and the whole of it is there. The clients see nothing of any of it. **The people's messages are scripted. Everything Foundry says back, and every file, comes from the real desk, real agents and real models.** **This scene has been run live once, on Nov 5, 2026, with every agent on Claude, from a worktree against a running stack and not a fresh clone, and the run needed a person's help twice: the makers' tool servers timed out connecting and were restarted, and the reviewers' notes asked for layouts the tools cannot make. No picture was drawn, and a maker told directly to reach the other client's files was not tried.** See "What has actually been run" for exactly how far it got.
 
@@ -274,6 +334,9 @@ Then open the files each client was given and read them. Phatakha Pop's set shou
 
 ### Good to know
 
+- **A blocked `.\setup.ps1`:** a Windows machine that hasn't been set to run scripts refuses it. Run `powershell -ExecutionPolicy Bypass -File .\setup.ps1` with the same flags instead.
+- **What the one command leaves behind:** everything is in `.foundry` and `.env`, both git-ignored, apart from Docker's containers, volumes and images under a compose project named `foundry-` and eight letters and numbers, and the agents' working folder at `~/.switch/agents/127.0.0.1-<port>`. `--reset` removes those too. It leaves what Claude Code and Switch keep about each session in their own folders, `~/.claude/projects` and `~/.local/state/switch/sdk-sessions`, because those are theirs. It refuses to run over a `.env` it didn't write, so run it from a fresh clone if you already have a Foundry.
+- **Two Foundrys on one machine:** Switch's README says to run one agent controller per machine. A second with its own data folder and its own server ran beside a live one here without either touching the other.
 - **A maker that says its services failed to connect:** its session says `CONNECT_TIMEOUT`, meaning the deck, data and log tool servers did not answer within 30 seconds. In our run other test suites were running on the machine, and a later run with nothing else going on did not time out, so load looks likely, but that was not proven. Pressing Approve on the stuck card asks again in the same session, which keeps the failed connection. Restart that maker from Switch's agent management (stop it and start it) first, then press Approve.
 - **A reviewer can ask for what the fixed layouts can't do.** The deck and graphic tools have fixed layouts, so a review note such as a different background, the logo's place or a separate date line makes the maker send `WORK_BLOCKED`, and the stuck card says the layout has to change or the approver accept it. In the agency run, typing `revise:` in the studio room, to accept the layouts and drop those notes, got both sets passed on the next review. Approve on those cards, which asks again with the same notes, was not tried.
 - **Agents made earlier keep the instructions they were made with.** Switch reuses an existing agent as it is, so on a stack made before a template change the makers have the old instructions, and what they know of the data tools comes from the tool descriptions and the desk's messages. The investment run was on agents made on Nov 4.

@@ -70,7 +70,7 @@ class Log:
         return self._insert(False, at, bucket, room_id, sender, kind, text, sender_name, job_id, item_id, ref)
 
     def add_seeded(self, at: datetime, bucket: str, room_id: str, sender: str, kind: str, text: str = "", *, sender_name: str = "", job_id: str | None = None, item_id: str | None = None, ref: str | None = None) -> Entry:
-        # Earlier history for a demo. Only scripts/seed_history.py may call this.
+        # Earlier history for a demo. Only scripts/seed_history.py may call this, and try mode for its own made-up log.
         return self._insert(True, at, bucket, room_id, sender, kind, text, sender_name, job_id, item_id, ref)
 
     def seeded(self, bucket: str) -> list[Entry]:
