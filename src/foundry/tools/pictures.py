@@ -2,6 +2,8 @@
 
 This never raises and never hangs. It says in one plain sentence when no pictures could be made, and the work carries on without them.
 The pictures go in a folder beside the deck and are never part of the work.
+
+It never closes or disturbs anything a person has open. A renderer only ever sees a temporary copy of the deck, PowerPoint is used only when none is running already, nothing is ever forced closed, and one that hangs is left as it is.
 """
 
 import base64
@@ -34,9 +36,12 @@ GRAPHIC_KINDS = (".png", ".jpg", ".jpeg")
 NO_RENDERER = "No program on this machine can turn slides into pictures, so carry on without them."
 COULD_NOT = "The slides could not be turned into pictures this time, so carry on without them."
 NOT_THERE = "That file is not there, so there is nothing to look at."
+POWERPOINT_OPEN = "PowerPoint is open on this machine, so no pictures are available and it was left alone; carry on without them."
+LEFT_STUCK = "PowerPoint stopped answering, so it was left as it is and no more pictures will be made until these tools restart; carry on without them."
+NOT_MADE = "No pictures of this file were made, so judge what you can from its words and say that you had no pictures."
 OFFICE_FOLDERS = ("Microsoft Office/root/Office16", "Microsoft Office/Office16")
-# How long PowerPoint gets to close by itself after a call, before it is closed for it.
-CLOSING_SECONDS = 5
+# What the script exits with when it finds a PowerPoint it did not start.
+OPEN_ALREADY = 3
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 LOCK = "foundry-powerpoint.lock"
 
@@ -48,51 +53,89 @@ class Pictures:
     why_none: str = ""
 
 
-# Paths reach the script through its environment, so a file name is never read as a command. It closes PowerPoint only when no one else's deck is open in it.
+class Unavailable(RuntimeError):
+    """A renderer that can't be used now, and the one plain sentence that says why. Stuck means something may still hold the temporary copy."""
+
+    def __init__(self, why: str, stuck: bool = False) -> None:
+        super().__init__(why)
+        self.why, self.stuck = why, stuck
+
+
+# Paths reach the script through its environment, so a file name is never read as a command.
+# It leaves at once if any PowerPoint is running, because that may be a person's. So the one it starts is its own, until a person opens a deck in it: PowerPoint is one process for the whole machine.
+# It closes only the temporary copy it opened, gives PowerPoint its prompts back, and quits only if nothing at all is left that a person could be using. If it can't tell, it leaves it running.
+# The pause is for whatever a person asked of PowerPoint while it was busy, which only happens once it is free: seen with real PowerPoint, a window asked for during the slides opened after them.
+# After quitting it waits for PowerPoint to go, which took up to nine seconds on a busy machine, so the next call holding the lock doesn't take it for a person's.
 POWERPOINT_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
+if (Get-Process -Name POWERPNT -ErrorAction SilentlyContinue) { exit 3 }
 $app = New-Object -ComObject PowerPoint.Application
 try {
     $app.DisplayAlerts = 1
-    $deck = $app.Presentations.Open($env:FOUNDRY_DECK, -1, 0, 0)
+    $deck = $null
     try {
+        $deck = $app.Presentations.Open($env:FOUNDRY_DECK, -1, 0, 0)
         foreach ($slide in $deck.Slides) {
             $name = 'slide-{0:d2}.png' -f $slide.SlideIndex
             $slide.Export((Join-Path $env:FOUNDRY_PICTURES_FOLDER $name), 'PNG', [int]$env:FOUNDRY_PICTURE_WIDTH, [int]$env:FOUNDRY_PICTURE_HEIGHT)
         }
     } finally {
-        $deck.Close()
+        if ($deck) { $deck.Close() }
     }
 } finally {
-    if ($app.Presentations.Count -eq 0) { $app.Quit() }
+    $quit = $false
+    try {
+        $app.DisplayAlerts = 2
+        Start-Sleep -Seconds 2
+        $quit = (@(Get-Process -Name POWERPNT).Count -eq 1) -and ($app.Visible -eq 0) -and ($app.Presentations.Count -eq 0) -and ($app.Windows.Count -eq 0) -and ($app.ProtectedViewWindows.Count -eq 0)
+    } catch { $quit = $false }
+    if ($quit) { $app.Quit() }
+    $slide = $null
+    $deck = $null
     [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($app)
+    $app = $null
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
+    [GC]::Collect()
+    if ($quit) { try { Get-Process -Name POWERPNT -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue } catch { } }
 }
+exit 0
 """
 
+# True once PowerPoint has hung in this process, so no later call waits on it again.
+_gave_up = False
+# What was left running after a hang. Held so it is never tidied away while it may still finish by itself.
+_left_running: list[subprocess.Popen] = []
 
-def _kill_tree(process: subprocess.Popen) -> None:
-    try:
-        if sys.platform == "win32":
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, timeout=10, creationflags=NO_WINDOW, check=False)
-        else:
-            os.killpg(process.pid, signal.SIGKILL)
-    except (OSError, subprocess.SubprocessError):
-        process.kill()
+
+def _start(command: list[str], env: dict[str, str] | None) -> subprocess.Popen:
+    return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, creationflags=NO_WINDOW, start_new_session=sys.platform != "win32")
 
 
 def _run(command: list[str], seconds: float, env: dict[str, str] | None = None) -> None:
-    # Stops the program and whatever it started at the timeout. subprocess.run stops only the program itself, and then waits on what it started.
-    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, creationflags=NO_WINDOW, start_new_session=sys.platform != "win32")
+    # Stops the program this call started at the timeout. Where a process group exists, it goes with what it started. Elsewhere that goes on alone, in a profile and a folder of its own.
+    process = _start(command, env)
     try:
         code = process.wait(timeout=seconds)
     except subprocess.TimeoutExpired:
-        _kill_tree(process)
+        if sys.platform == "win32":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
         process.wait(timeout=10)
         raise
     if code:
         raise subprocess.CalledProcessError(code, command[0])
+
+
+def _wait_alone(command: list[str], seconds: float, env: dict[str, str] | None = None) -> int:
+    # Waits for the program and gives its exit code. Past the timeout it is left running, because stopping it could take a person's PowerPoint with it.
+    process = _start(command, env)
+    try:
+        return process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        _left_running.append(process)
+        raise
 
 
 def _powerpoint_installed() -> bool:
@@ -102,33 +145,9 @@ def _powerpoint_installed() -> bool:
     return any((Path(root) / folder / "POWERPNT.EXE").exists() for root in roots if root for folder in OFFICE_FOLDERS)
 
 
-def _powerpoint_ids() -> set[int]:
-    try:
-        listed = subprocess.run(["tasklist", "/FI", "IMAGENAME eq POWERPNT.EXE", "/FO", "CSV", "/NH"], capture_output=True, text=True, timeout=15, creationflags=NO_WINDOW, check=False).stdout
-    except (OSError, subprocess.SubprocessError):
-        return set()
-    return {int(line.split('","')[1]) for line in listed.splitlines() if line.startswith('"') and line.count('","') >= 1}
-
-
-def _kill(process_id: int) -> None:
-    try:
-        subprocess.run(["taskkill", "/F", "/PID", str(process_id)], capture_output=True, timeout=10, creationflags=NO_WINDOW, check=False)
-    except (OSError, subprocess.SubprocessError):
-        logger.warning("Could not close PowerPoint process %s", process_id)
-
-
-def _close_what_this_call_started(before: set[int], wait: float) -> None:
-    # Only what was not running before this call, so nobody's own PowerPoint is ever touched.
-    deadline = time.monotonic() + wait
-    while (left := _powerpoint_ids() - before) and time.monotonic() < deadline:
-        time.sleep(0.25)
-    for process_id in sorted(left):
-        _kill(process_id)
-
-
 @contextmanager
 def _one_at_a_time(seconds: float) -> Iterator[None]:
-    # One PowerPoint serves the whole machine, and a call that closes it would pull it from under another. The operating system drops the lock if the holder dies.
+    # One PowerPoint serves the whole machine, so a second call would find the first's running and take it for a person's. The operating system drops the lock if the holder dies.
     if sys.platform != "win32":
         yield
         return
@@ -153,21 +172,27 @@ def _one_at_a_time(seconds: float) -> Iterator[None]:
 
 
 def powerpoint(deck: Path, folder: Path, seconds: float) -> bool:
-    """Through PowerPoint itself, where it is installed. In a program of its own, so that a dialog or a hang inside PowerPoint can only ever cost the timeout."""
+    """Through PowerPoint itself, where it is installed and not already open. In a program of its own, so that a dialog or a hang inside PowerPoint can only ever cost the timeout, and only once."""
+    global _gave_up
     if not _powerpoint_installed():
         return False
+    if _gave_up:
+        raise Unavailable(LEFT_STUCK)
     started = time.monotonic()
     with _one_at_a_time(seconds):
         left = max(1.0, seconds - (time.monotonic() - started))
-        before = _powerpoint_ids()
         script = base64.b64encode(POWERPOINT_SCRIPT.encode("utf-16-le")).decode("ascii")
         env = {**os.environ, "FOUNDRY_DECK": str(deck), "FOUNDRY_PICTURES_FOLDER": str(folder), "FOUNDRY_PICTURE_WIDTH": str(SLIDE_WIDTH), "FOUNDRY_PICTURE_HEIGHT": str(SLIDE_HEIGHT)}
         try:
-            _run(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", script], left, env=env)
-        except BaseException:
-            _close_what_this_call_started(before, 0)
-            raise
-        _close_what_this_call_started(before, CLOSING_SECONDS)
+            code = _wait_alone(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", script], left, env=env)
+        except subprocess.TimeoutExpired:
+            _gave_up = True
+            logger.warning("PowerPoint did not finish %s in %.0f seconds. It was left running, and this process will not use it again.", deck.name, left)
+            raise Unavailable(LEFT_STUCK, stuck=True) from None
+    if code == OPEN_ALREADY:
+        raise Unavailable(POWERPOINT_OPEN)
+    if code:
+        raise subprocess.CalledProcessError(code, "powershell.exe")
     return True
 
 
@@ -177,7 +202,7 @@ def soffice(deck: Path, folder: Path, seconds: float) -> bool:
     if not office or not pages:
         return False
     deadline = time.monotonic() + seconds
-    with tempfile.TemporaryDirectory(prefix="foundry-soffice-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="foundry-soffice-", ignore_cleanup_errors=True) as temporary:
         temp = Path(temporary)
         # A profile of its own, so a LibreOffice someone has open neither blocks this nor gets the job.
         _run([office, "--headless", "--norestore", "--nolockcheck", f"-env:UserInstallation={(temp / 'profile').as_uri()}", "--convert-to", "pdf", "--outdir", str(temp), str(deck)], seconds)
@@ -210,28 +235,71 @@ def _clear(folder: Path) -> None:
         old.unlink(missing_ok=True)
 
 
+def _publish(made: Path, folder: Path, count: int, stamp: str) -> Pictures:
+    # Only a finished set replaces what is there, so a render that fails never empties the folder under another. The stamp goes last, because it says the set is whole.
+    folder.mkdir(parents=True, exist_ok=True)
+    _clear(folder)
+    for number in range(1, count + 1):
+        name = PICTURE.format(number=number)
+        shutil.move(str(made / name), str(folder / name))
+    (folder / STAMP).write_text(stamp, encoding="ascii")
+    return Pictures(_made(folder, count))
+
+
 def _render(deck: Path, folder: Path, count: int, stamp: str, seconds: float) -> Pictures:
     if not RENDERERS:
         return Pictures([], NO_RENDERER)
-    tried = False
-    deadline = time.monotonic() + seconds
-    for renderer in RENDERERS:
-        left = deadline - time.monotonic()
-        if left <= 0:
-            break
-        try:
-            ran = renderer(deck, folder, left)
-        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
-            logger.warning("%s could not make pictures of %s: %s", getattr(renderer, "__name__", "A renderer"), deck.name, error)
-            tried = True
-            _clear(folder)
-            continue
-        tried = tried or ran
-        if ran and (paths := _made(folder, count)):
-            (folder / STAMP).write_text(stamp, encoding="ascii")
+    # A temporary copy, always. A deck someone has open in PowerPoint comes back as their own window if it is opened by its path, and closing it would close theirs.
+    work = Path(tempfile.mkdtemp(prefix="foundry-render-"))
+    held, tried, why = False, False, ""
+    try:
+        copy = work / "deck.pptx"
+        shutil.copyfile(deck, copy)
+        deadline = time.monotonic() + seconds
+        for renderer in RENDERERS:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            made = Path(tempfile.mkdtemp(dir=work))
+            try:
+                ran = renderer(copy, made, left)
+            except Unavailable as error:
+                why, held = why or error.why, held or error.stuck
+                continue
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+                logger.warning("%s could not make pictures of %s: %s", getattr(renderer, "__name__", "A renderer"), deck.name, error)
+                tried = True
+                continue
+            tried = tried or ran
+            if ran and _made(made, count):
+                return _publish(made, folder, count, stamp)
+        return Pictures([], why or (COULD_NOT if tried else NO_RENDERER))
+    finally:
+        # After a hang something may still hold the copy, and may yet finish with it.
+        if not held:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+def _stored(folder: Path, count: int, stamp: str) -> list[str]:
+    stamped = folder / STAMP
+    return _made(folder, count) if stamped.is_file() and stamped.read_text(encoding="ascii") == stamp else []
+
+
+def fresh_pictures(path: Path | str) -> Pictures:
+    """The pictures already made for this version of a file, and never any new ones. The desk uses this, because it does everything on one loop and a render would stop every card and message."""
+    file = Path(path)
+    kind = file.suffix.lower()
+    try:
+        if not file.is_file() or kind not in (*GRAPHIC_KINDS, ".pptx"):
+            return Pictures()
+        if kind in GRAPHIC_KINDS:
+            return Pictures([str(file)])
+        count = _slide_count(file)
+        if count and (paths := _stored(file.parent / LOOKS / file.stem, count, hashlib.sha256(file.read_bytes()).hexdigest())):
             return Pictures(paths)
-        _clear(folder)
-    return Pictures([], COULD_NOT if tried else NO_RENDERER)
+    except Exception as error:
+        logger.warning("Could not read the pictures of %s: %s", file.name, error)
+    return Pictures([], NOT_MADE)
 
 
 def pictures_of(path: Path | str, seconds: float = RENDER_SECONDS) -> Pictures:
@@ -252,11 +320,8 @@ def pictures_of(path: Path | str, seconds: float = RENDER_SECONDS) -> Pictures:
             return Pictures([], COULD_NOT)
         folder = file.parent / LOOKS / file.stem
         stamp = hashlib.sha256(file.read_bytes()).hexdigest()
-        stamped = folder / STAMP
-        if stamped.is_file() and stamped.read_text(encoding="ascii") == stamp and (paths := _made(folder, count)):
+        if paths := _stored(folder, count, stamp):
             return Pictures(paths)
-        folder.mkdir(parents=True, exist_ok=True)
-        _clear(folder)
         return _render(file, folder, count, stamp, seconds)
     except Exception as error:
         # Pictures help a person judge the work. Nothing about making them may ever stop it.
