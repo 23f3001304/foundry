@@ -70,6 +70,7 @@ WRONG = "Wrong"
 VOICE_CARD_TITLE = "Check what I heard"
 ROUTINE_TITLE = "Routine items"
 NEEDS_YOU = " (needs you)"
+MORE_ELSEWHERE = "- {count} more in {where}"
 ROUTINE_CLOSED = "I closed your routine card because something needs a decision first. Its items come back at the next set time."
 ALONE_CLOSED = "I closed this card because something needs a decision first. It comes back once that is answered."
 CARD_LIMIT = 700
@@ -445,7 +446,12 @@ class CardQueue:
         room = self._room_for(items)
         for item in items:
             self._stop_being_clean_if_shown_elsewhere(item, room)
-        lines = [f"- {item.title}{'' if _is_clean(item) else NEEDS_YOU}" for item in items]
+        # Titles are listed only for this card's room. The card can't tell who else is in the room, and a title holds what a person wrote in another one, so those items are counted. Show what needs me opens each in its own room.
+        lines = [f"- {item.title}{'' if _is_clean(item) else NEEDS_YOU}" for item in items if item.room_id == room]
+        elsewhere = [item for item in items if item.room_id != room]
+        if elsewhere:
+            where = "another room" if len({item.room_id for item in elsewhere}) == 1 else "other rooms"
+            lines.append(MORE_ELSEWHERE.format(count=len(elsewhere), where=where) + ("" if all(_is_clean(item) for item in elsewhere) else NEEDS_YOU))
         # A merged card takes its first item's trigger, so it still comes from the list and still reads as routine.
         card = Card(_new_id(), items[0].trigger, person, bucket, room, ROUTINE_TITLE, "\n".join(lines), [APPROVE_CLEAN, SHOW_NEEDS], None, None, QUEUED, self.clock(), None, {ITEMS: [item.request_id for item in items]})
         # Saved before the first try, so a retry keeps this id and Switch can say it already has the card.
