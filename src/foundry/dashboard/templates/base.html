@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ title }} - Foundry</title>
+<title>{% if try_mode %}Made-up data: {% endif %}{{ title }} - Foundry</title>
 <link rel="stylesheet" href="/static/style.css">
+{% if try_mode %}<link rel="stylesheet" href="/static/try.css">{% endif %}
 </head>
 {% from "_ui.html" import switcher, avatar %}
 {% macro nav_item(key, href, name, family, count=0, says="waiting") %}
@@ -32,6 +33,7 @@
 {% endmacro %}
 <body class="{{ 'viewer-body' if focus else 'shell' if user else 'bare' }}{% if page %} page-{{ page }}{% endif %}">
 <a class="skip" href="#main">Skip to the page</a>
+{% if try_mode %}<p class="try-banner" role="status"><strong>Made-up data</strong> <span>This is try mode. No agents are running, and pressing a button sends nothing anywhere.</span>{% if not user %} <span>Sign in with <code>{{ try_mode.login }}</code> and <code>{{ try_mode.password }}</code></span>{% endif %}</p>{% endif %}
 {{ shapes.defs() }}
 {% if focus %}
 {% elif user %}

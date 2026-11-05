@@ -1,0 +1,52 @@
+/* The banner of try mode, ./setup.sh --try, and nothing else. Loaded only in that mode. */
+html {
+  --try-height: 44px;
+}
+
+.try-banner {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 16px;
+  min-height: var(--try-height);
+  margin: 0;
+  padding: 8px 16px;
+  background: #ffe24a;
+  color: #111;
+  font-size: 15px;
+  line-height: 1.35;
+  text-align: center;
+  border-bottom: 3px solid #111;
+}
+
+.try-banner strong {
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.try-banner code {
+  padding: 1px 6px;
+  background: #fff;
+  border: 1px solid #111;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+/* The side bar is pinned to the top of the window, so it starts below the banner. */
+.side {
+  top: var(--try-height);
+  height: calc(var(--screen) - var(--try-height));
+}
+
+/* The sign-in page centres its children, and this stays across the top of it. */
+body.bare .try-banner {
+  position: fixed;
+  left: 0;
+  right: 0;
+}
