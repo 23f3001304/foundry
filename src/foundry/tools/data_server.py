@@ -615,7 +615,8 @@ def _bars(axes, brand: Brand, labels: list[str], values: list[float | None], sho
         axes.margins(x=0.08, y=0.2)
     for place in (place for place in places if values[place] is None):
         # The words stand where its mark would be, on the zero line, with no mark at all. Upright when many places leave no room across.
-        axes.annotate(NOT_RECEIVED, (place, 0), textcoords="offset points", xytext=(0, 6), ha="center", va="bottom", color=ink, fontproperties=body, size=12, rotation=90 if len(values) > 8 else 0)
+        # A line's axis need not reach zero, and words placed outside the axis are not drawn, so on a line they stand at the foot of the chart.
+        axes.annotate(NOT_RECEIVED, (place, 0), xycoords=axes.get_xaxis_transform() if kind == "line" else "data", textcoords="offset points", xytext=(0, 6), ha="center", va="bottom", color=ink, fontproperties=body, size=12, rotation=90 if len(values) > 8 else 0)
     turned = len(labels) > 6 or max(map(len, labels)) > 10
     axes.set_xticks(places, labels=labels, rotation=30 if turned else 0, ha="right" if turned else "center")
     for tick in axes.get_xticklabels():
