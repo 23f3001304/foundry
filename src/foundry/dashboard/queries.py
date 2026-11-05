@@ -1,5 +1,6 @@
 """Everything the pages show, read from the files the desk writes. Each file is opened read-only for the one question asked, so a page can't change a job, a card or the log."""
 
+import os
 import sqlite3
 from collections.abc import Collection
 from contextlib import closing
@@ -23,6 +24,7 @@ from foundry.jobs import Job, State, _job
 from foundry.jobs import COLUMNS as JOB_COLUMNS
 from foundry.log import Entry, Log
 from foundry.text import headline, shown_name
+from foundry.tools.pictures import LOOKS, fresh_pictures
 
 # The kinds of file the desk delivers. Nothing else is served, whatever the log says a maker made.
 MEDIA = {
@@ -37,8 +39,6 @@ PICTURES = (".png", ".jpg", ".jpeg")
 SAME_START = 24
 # A picture of a deck's slide sits beside the deck as <deck>-slide-<number>.png, counting from 1.
 DECK = ".pptx"
-SLIDE_PICTURE = "{stem}-slide-{number}.png"
-MOST_SLIDES = 200
 
 STAGES = {
     State.RECEIVED: ("Drafting the brief", "apprentice"),
@@ -641,8 +641,22 @@ def flag_words(text: str) -> str:
     return f"Flagged {where}" if separator and Path(where).suffix and where.casefold().startswith(what.removeprefix("Flagged ").casefold()) else text
 
 
-def _slide(path: Path, number: int) -> Path:
-    return path.with_name(SLIDE_PICTURE.format(stem=path.stem, number=number))
+def _really_in(picture: Path, home: Path) -> bool:
+    # Where it really is on the disk. A link leads out of the folder, and a second name for a file could be a name for any file on the disk.
+    try:
+        real = os.path.realpath(picture)
+        return os.path.normcase(real) == os.path.normcase(home / picture.name) and os.stat(real).st_nlink == 1
+    except OSError:
+        return False
+
+
+def _slides_of(path: Path) -> list[Path]:
+    # The pictures the maker's tools already made of exactly this version of the deck. Nothing here makes one. Any picture that isn't really in the deck's own folder stops the whole set, so a set is never shown with a slide missing.
+    if path.suffix.lower() != DECK:
+        return []
+    slides = [Path(found) for found in fresh_pictures(path).paths]
+    home = Path(os.path.realpath(path.parent)) / LOOKS / path.stem
+    return slides if all(_really_in(slide, home) for slide in slides) else []
 
 
 def is_made_file(entry: Entry) -> bool:
@@ -1110,20 +1124,13 @@ class Reader:
         path = Path(entry.ref)
         job = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", entry.job_id or "")
         here = path.is_file()
-        return Viewed(entry.id, path.name, entry.job_id or "", title_of(_job(job[0])) if job else NO_BRIEF, path.suffix.lower() in PICTURES, here, self._slides(path) if here else 0)
+        return Viewed(entry.id, path.name, entry.job_id or "", title_of(_job(job[0])) if job else NO_BRIEF, path.suffix.lower() in PICTURES, here, len(_slides_of(path)) if here else 0)
 
     def slide_for(self, user: User, entry_id: int, number: int) -> Path | None:
-        # The address names only the file's entry and a whole number, so it can't reach anything but this deck's own pictures.
+        # The address names only the file's entry and a whole number, so it can't reach anything but this deck's own pictures, and only where the deck itself would be served.
         found = self.file_for(user, entry_id)
-        if found is None or not 1 <= number <= self._slides(found[0]):
-            return None
-        return _slide(found[0], number)
-
-    def _slides(self, path: Path) -> int:
-        # They count up from 1 and stop at the first one missing, so a gap can't show a stray picture as the wrong slide.
-        if path.suffix.lower() != DECK:
-            return 0
-        return next((number for number in range(MOST_SLIDES) if not _slide(path, number + 1).is_file()), MOST_SLIDES)
+        slides = _slides_of(found[0]) if found else []
+        return slides[number - 1] if 1 <= number <= len(slides) else None
 
     # Action log
 

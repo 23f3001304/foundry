@@ -119,7 +119,7 @@ Each has one definition, with its states: rest, hover, focus (one shared ring), 
 | Status mark | `.stage` with `.done .working .waiting .idle .stuck .trouble` | A soft fill and matching words, and a dot, diamond, ring, dash, square or triangle. Drawn with borders alone. `.trouble` is a connection that isn't working, which is not a stuck job |
 | Alert | `.alert` `.alert-done` | Marked with `!` and a border |
 | Avatar | `avatar()`, `.avatar` | Initials in a quiet circle. No colour, because no person is ever ranked or marked |
-| Viewer | `viewer.html`, `.viewer-head`, `.viewer-stage` | A page of its own for a work file, with no side bar. The name, its job and Download, with Close at the top right going back where the person came from. A picture is fitted whole on a calm ground and never blown up. A deck shows its slide pictures if they sit beside it as `<deck>-slide-<number>.png`, and anything else says it opens after downloading |
+| Viewer | `viewer.html`, `.viewer-head`, `.viewer-stage` | A page of its own for a work file, with no side bar. The name, its job and Download, with Close at the top right going back where the person came from. A picture is fitted whole on a calm ground and never blown up. A deck shows the pictures of its slides that the maker's tools already made, from `foundry-looks/<deck>/` beside it, when their stamp says they are of exactly this version and each one is really in that folder. The dashboard never makes any. Anything else says it opens after downloading |
 | Empty state | `empty_state()` | A grid tile, a character at rest, what is true and the next step |
 | Sprite | `sprite()` | See below |
 
