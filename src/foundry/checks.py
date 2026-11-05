@@ -27,11 +27,13 @@ NOT_SURE = "The model said it was not sure this report is right."
 # Only what people said. A reviewer's note, an agent's marker or a card must not make a number look sourced.
 PEOPLE_WORDS = ("message", "voice_heard", "voice_corrected", "item_answer", "item_passed_on", "revision_notes")
 
-MONTH = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\b\.?"
+MONTH_NAMES = r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?"
+# A month is written with a capital or all in capitals, as a kit that asks for headlines in capitals has it. In lowercase it is not one, because "may" and "march" are words.
+MONTH = rf"(?:{MONTH_NAMES}|{MONTH_NAMES.upper()})\b\.?"
 YEAR = r"(?:19|20)\d{2}"
-DAY = r"\d{1,2}(?:st|nd|rd|th)?"
-# 8 Nov 2026, 8th of November, Nov 8, 2026 and 2026-11-08.
-WRITTEN_DATE = re.compile(rf"\b{DAY}\s+(?:of\s+)?{MONTH}(?:,?\s+{YEAR})?|\b{MONTH}\s+{DAY}\b(?:,?\s+{YEAR})?|\b{YEAR}-\d{{2}}-\d{{2}}\b")
+DAY = r"\d{1,2}(?:st|nd|rd|th|ST|ND|RD|TH)?"
+# 8 Nov 2026, 8th of November, Nov 8, 2026 and 2026-11-08, and the same in capitals.
+WRITTEN_DATE = re.compile(rf"\b{DAY}\s+(?:(?:of|OF)\s+)?{MONTH}(?:,?\s+{YEAR})?|\b{MONTH}\s+{DAY}\b(?:,?\s+{YEAR})?|\b{YEAR}-\d{{2}}-\d{{2}}\b")
 # A year is four plain digits. With a comma, as in 2,026, or after a currency mark or before a %, as in ₹1999 and 2000%, it is a quantity.
 YEAR_ONLY = re.compile(YEAR)
 CURRENCY_BEFORE = re.compile(r"(?:₹|(?<![A-Za-z])Rs\.?|[$€£])\s*$")
