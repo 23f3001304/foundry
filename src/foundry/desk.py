@@ -641,7 +641,7 @@ class Desk:
         paths = file_paths(text)
         refused = [path for path in paths if not deliverable(path)]
         # A client with agents of its own takes a file only from those agents' folders, so another client's file, which a maker could name, is never taken, checked or delivered.
-        # A room with the shared agents takes a file from anywhere, as it always did. A refused file's path is not repeated, because it may name another client.
+        # A room with the shared agents takes a file from anywhere, as it always did. A stranger's path is not repeated, because it may name another client. A path that is no file at all is, because it is the maker's own words.
         agents = self.settings.team_for(job.room_id).makers if self.settings.workrooms_for(job.room_id).agents else None
         strangers = [path for path in paths if path not in refused and agents is not None and not in_own_folders(path, agents)]
         if strangers and not refused:
