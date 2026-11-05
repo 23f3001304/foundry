@@ -58,7 +58,6 @@ SLIDE_MARKUP = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 RELATIONSHIPS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 # The small line under a slide's content that says where its numbers came from. It stops short of the corner logo.
 SOURCE_RIGHT, SOURCE_TOP, SOURCE_HEIGHT = 836, 500, 28
-NARROW_SOURCE_BOX = (56, 500, 580, 28)
 SOURCE_SIZES = (11, 7)
 SOURCE_SHAPE = 'Each source is {"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 IST"}.'
 SOLID, BAND, TOUCHSTONE = "solid", "band", "touchstone"
@@ -349,17 +348,15 @@ def _title_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, hi
         return
     if brand.style == SOLID:
         slide = _new_slide(deck, brand, look)
-        _block(slide, brand.colors["paper"], 680, 0, 280, HEIGHT)
         if not highlight:
             _accent_rule(slide, brand, 56, 130)
-        slide.shapes.add_picture(str(brand.logo_path), Pt(730), Pt(180), width=Pt(180)).name = "Logo"
-        title_box, subtitle_box = (56, 150, 580, 230), (56, 400, 580, 60)
+        title_box, subtitle_box = (56, 150, 680, 230), (56, 400, 680, 60)
     else:
         slide = _new_slide(deck, brand, look, cover=True)
         if not highlight:
             _accent_rule(slide, brand, 96, 130)
-        _logo_picture(slide, brand, look.ground, 150, SIDE_RIGHT, 186)
         title_box, subtitle_box = (96, 150, 640, 230), (96, 400, 640, 60)
+    _logo_picture(slide, brand, look.ground, 150, SIDE_RIGHT, 186)
     _title(slide, brand, look, title_box, title, 72, 22, highlight=highlight)
     if subtitle:
         _text_box(slide, brand, look, "body", look.words, subtitle_box, [_periods_together(subtitle)], 24, 14)
@@ -1045,7 +1042,7 @@ def _chart_slide_words(spec: dict) -> list[str]:
 def _print_sources(slide, brand: Brand, links: list[Link], layout: str) -> None:
     # In the same place on every slide, under whatever the slide holds. The line stays one string, because the number check knows it by those exact words.
     look = _look(brand, loud=layout in LOUD_LAYOUTS)
-    box = NARROW_SOURCE_BOX if brand.style == SOLID and layout == "title" else (look.left, SOURCE_TOP, SOURCE_RIGHT - look.left, SOURCE_HEIGHT)
+    box = (look.left, SOURCE_TOP, SOURCE_RIGHT - look.left, SOURCE_HEIGHT)
     _text_box(slide, brand, look, "body", look.source, box, [source_line(links)], *SOURCE_SIZES)
 
 
