@@ -88,6 +88,7 @@ FAIL_BRIDGE = "Switch came up but its Mattermost connection did not appear in ti
 FAIL_BUILD = "The agent controller did not build. Check your internet connection and disk space."
 FAIL_ENROLL = "The agent controller could not enrol with Switch."
 FAIL_CONTROLLER = "The agent controller did not come online."
+FAIL_FILE_IN_USE = "{path} could not be changed, most likely because something still has it open. Close whatever is using it and run this again."
 FAIL_CLAUDE_NOT_READY = "The agent controller is running but says Claude Code is not ready. Sign in with claude auth login in this same terminal."
 FAIL_SYNC = "uv could not install Foundry's Python packages. Check your internet connection."
 FAIL_DESK_REGISTER = "Switch would not register the desk."
@@ -807,8 +808,8 @@ class Setup:
         return next((row for row in rows if isinstance(row, dict) and row.get("state") == "online"), None)
 
     def _claude_ready(self, row: Mapping) -> bool:
-        machine = (row.get("status") or {}).get("machine") or {}
-        providers = row.get("providers") or machine.get("providers") or []
+        # "unknown" passes, as it does for Switch's own check: a machine's own login isn't always one the controller can read.
+        providers = (row.get("status") or {}).get("providers") or []
         return any(entry.get("provider") == "claude" and entry.get("installed") and entry.get("auth") not in ("missing", "expired") for entry in providers if isinstance(entry, dict))
 
     def controller_is_running(self) -> bool:
@@ -1016,7 +1017,7 @@ class Setup:
         self.ui.say("  Logins are in the .env file in this folder, and in .foundry/switch/.env.")
         return 0
 
-    def stop(self) -> int:
+    def stop(self, closing: str = "Stopped what setup started. Run this again to start it all back up.") -> int:
         if not self.state:
             self.ui.say("Nothing to stop. Setup has not started anything here.")
             return 0
@@ -1027,7 +1028,8 @@ class Setup:
         if self.state.get("stack_started") and self.images_file.exists():
             self.machine.run(self.compose("stop"), log=self._log("switch"), timeout=300)
             self.ui.say("  Switch's containers: stopped")
-        self.ui.say("Stopped what setup started. Run this again to start it all back up.")
+        if closing:
+            self.ui.say(closing)
         return 0
 
     def _removals(self) -> list[str]:
@@ -1058,7 +1060,7 @@ class Setup:
         if answer.strip().lower() != "yes":
             self.ui.say("Nothing was removed.")
             return 0
-        self.stop()
+        self.stop(closing="")
         created = self.state.get("created", {})
         if self.state.get("stack_started") and self.images_file.exists():
             self.machine.run(self.compose("down", "-v", "--remove-orphans"), log=None, timeout=300)
@@ -1141,6 +1143,9 @@ def main(arguments: list[str] | None = None) -> int:
         ui.say()
         ui.say("Stopped. Run this again to carry on from here.")
         return 130
+    except OSError as error:
+        ui.say(FAIL_FILE_IN_USE.format(path=error.filename or "A file here"))
+        return 1
 
 
 if __name__ == "__main__":

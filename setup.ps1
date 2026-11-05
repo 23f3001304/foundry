@@ -17,5 +17,5 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     $env:Path = "$HOME\.local\bin;$env:Path"
 }
 
-& uv run --no-project --quiet --python ">=3.12" "$PSScriptRoot\tools\foundry_setup.py" @args
+& uv run --no-project --isolated --quiet --python ">=3.12" "$PSScriptRoot\tools\foundry_setup.py" @args
 exit $LASTEXITCODE

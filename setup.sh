@@ -19,4 +19,4 @@ if ! command -v uv >/dev/null 2>&1; then
   export PATH
 fi
 
-exec uv run --no-project --quiet --python ">=3.12" tools/foundry_setup.py "$@"
+exec uv run --no-project --isolated --quiet --python ">=3.12" tools/foundry_setup.py "$@"
