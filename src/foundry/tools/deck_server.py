@@ -94,6 +94,7 @@ TOO_MANY_STROKES = "A {layout} slide can show at most {most} figures, and this h
 NO_LABEL = "Every label on a chart needs its words."
 FIGURE_TOO_WIDE = "This figure is too wide to fit on the slide: {figure}... Shorten it or its unit, say the rest in the caption, or use a table."
 LABEL_TOO_LONG = "This label is too long to fit: {label}..."
+WORDS_TOO_LONG = "These words are too long to fit: {words}... Shorten them."
 HIGHLIGHT_A_LABEL = "On a {layout} slide the highlight must be one of the labels, which is the one that gets lit: {labels}. {highlight!r} is not."
 NO_SOURCE_FOR_NOTHING = "A figure nobody sent has no source. Leave it out of sources."
 NO_FIGURE_IN_SOURCE = "A source is for a figure, and {value!r} has none in it. Give the figure as it is on the slide, such as 1,980, and leave words out of sources."
@@ -725,7 +726,7 @@ def _points(spec: dict) -> list[Point]:
         if not isinstance(label, str) or not label.strip():
             raise MakerError(NO_LABEL)
         known = _chart_value(value, label)
-        points.append(Point(label.strip(), known, NOT_RECEIVED if known is None else figure_text(known), "" if known is None else spec.get("unit", "")))
+        points.append(Point(label.strip(), known, NOT_RECEIVED if known is None else figure_text(known), "" if known is None else _words_of_field(spec, "unit")))
     return points
 
 
@@ -744,10 +745,15 @@ def _in_place(points: list[Point], spec: dict) -> list[Point]:
     return points if spec.get("keep_order") else sorted(points, key=lambda point: (point.value is None, -(point.value or 0)))
 
 
+def _shape_name(text: str) -> str:
+    # A shape's name cannot hold a control character, though its text can.
+    return "".join(character for character in text if character.isprintable())
+
+
 def _line(slide, brand: Brand, look: Look, role: str, colour: str, box: tuple[float, float, float, float], text: str, size: float, unit: str = "", align: PP_ALIGN = PP_ALIGN.LEFT, anchor: MSO_ANCHOR = MSO_ANCHOR.MIDDLE, name: str = "", wraps: bool = False) -> None:
     # Real text at the size asked for, with a unit after a figure set smaller. It does not wrap unless asked, so a figure is never broken across two lines.
     shape = slide.shapes.add_textbox(*(Pt(value) for value in box))
-    shape.name = name or shape.name
+    shape.name = _shape_name(name) or shape.name
     frame = shape.text_frame
     frame.word_wrap = wraps
     frame.auto_size = MSO_AUTO_SIZE.NONE
@@ -779,7 +785,7 @@ def _stroke(slide, brand: Brand, look: Look, label: str, box: tuple[float, float
         shape.fill.fore_color.rgb = _rgb(look.lit if lit else look.back)
         shape.line.fill.background()
         shape.shadow.inherit = False
-    shape.name = f"{label} stroke"
+    shape.name = _shape_name(f"{label} stroke")
 
 
 def _shown_width(brand: Brand, point: Point, size: float) -> float:
@@ -812,6 +818,8 @@ def _title_and_words(slide, brand: Brand, look: Look, box: tuple[float, float, f
     heights = [len(wrap(text, _measured(brand.font_file("body"), SMALL_WORDS), width * 0.96)) * SMALL_WORDS * LINE_SPACING + 2 for text, _ in words]
     together = _periods_together(title)
     room = bottom - top - sum(heights) - 8 * len(heights)
+    if room < 16 * LINE_SPACING:
+        raise MakerError(WORDS_TOO_LONG.format(words=max((text for text, _ in words), key=len)[:40]))
     size = fit_size(together, brand.font_file("heading"), width, room, largest, 16)
     high = len(wrap(together, _measured(brand.font_file("heading"), size), width)) * size * LINE_SPACING + 2
     _title(slide, brand, look, (left, top, width, high), title, size, size, highlight=highlight)
@@ -824,13 +832,14 @@ def _title_and_words(slide, brand: Brand, look: Look, box: tuple[float, float, f
 def _chart_words(look: Look, spec: dict, points: list[Point]) -> list[tuple[str, str]]:
     # What the chart is, and any figure far from the others, said in words on the slide.
     flag = _far_off([point.label for point in points], [point.written for point in points])
-    return [*([(spec["caption"], look.soft)] if spec.get("caption") else []), *([(flag, look.words)] if flag else [])]
+    caption = _words_of_field(spec, "caption")
+    return [*([(caption, look.soft)] if caption else []), *([(flag, look.words)] if flag else [])]
 
 
 def _make_big_number(deck: Presentation, brand: Brand, spec: dict) -> None:
     title = _required(spec, "title", "big_number")
     if "labels" not in spec and "values" not in spec:
-        if "number" not in spec:
+        if "number" not in spec or (isinstance(spec["number"], str) and not spec["number"].strip()):
             raise MakerError(NOTHING_TO_SHOW)
         _number_alone(deck, brand, spec, title)
     else:
@@ -854,8 +863,9 @@ def _number_alone(deck: Presentation, brand: Brand, spec: dict, title: str) -> N
     point = Point("", None if missing else 1, written, "" if missing else _words_of_field(spec, "unit"))
     size = _size_to_fit(brand, point, look.right - look.left, ALONE_LARGEST, HERO_LEAST)
     _lit_figure(slide, brand, look, point, look.left, 360, size)
-    if spec.get("caption"):
-        _text_box(slide, brand, look, "body", look.soft, (look.left, 390, look.right - look.left, 80), [_periods_together(spec["caption"])], 22, SMALL_WORDS)
+    caption = _words_of_field(spec, "caption")
+    if caption:
+        _text_box(slide, brand, look, "body", look.soft, (look.left, 390, look.right - look.left, 80), [_periods_together(caption)], 22, SMALL_WORDS)
     _corner_logo(slide, brand, look)
 
 
@@ -943,7 +953,7 @@ def _make_chart(deck: Presentation, brand: Brand, spec: dict) -> None:
             _line(slide, brand, look, "heading", look.soft, (plot_left + at * pitch + 2, tops[point] - figure_high, pitch - 4, figure_high), point.written, figure_size, point.unit, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.BOTTOM, name=f"{point.label} figure")
         label_box = (plot_left + at * pitch + 1, base + 5, pitch - 2, BODY_BOTTOM - base - 5)
         shape = slide.shapes.add_textbox(*(Pt(value) for value in label_box))
-        shape.name = f"{point.label} label"
+        shape.name = _shape_name(f"{point.label} label")
         _write(shape, brand, look, "body", look.words if lit_one else look.soft, label_box, [point.label], LABEL_LARGEST, LABEL_LEAST, align=PP_ALIGN.CENTER)
     _corner_logo(slide, brand, look)
 
