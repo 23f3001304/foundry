@@ -3,8 +3,8 @@
 {% set download = "/work/files/" ~ file.entry_id ~ "?download=1" %}
 <header class="viewer-head">
   <div class="viewer-names">
-    <h1>{{ file.name|shortened }}</h1>
-    {% if file.job_id %}<p class="small"><a href="/jobs/{{ file.job_id }}">{{ file.job_title|shortened }}</a></p>{% endif %}
+    <h1>{{ file.name }}</h1>
+    {% if file.job_id %}<p class="small"><a href="/jobs/{{ file.job_id }}">{{ file.job_title }}</a></p>{% endif %}
   </div>
   <div class="viewer-actions">
     {% if file.here %}<a class="button viewer-download" href="{{ download }}">Download</a>{% endif %}

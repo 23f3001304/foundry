@@ -26,7 +26,7 @@
 {% for job in jobs %}
 <section>
   <div class="section-head">
-    <h2>{% if tabs %}Files{% else %}<a class="row-link" href="/jobs/{{ job.id }}">{{ job.title|shortened }}</a>{% endif %}</h2>
+    <h2>{% if tabs %}Files{% else %}<a class="row-link" href="/jobs/{{ job.id }}">{{ job.title }}</a>{% endif %}</h2>
     <p class="page-meta"><span class="stage {{ job.tone }} fam-{{ job.family }}">{{ job.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.client }}</span>{% endif %}</p>
   </div>
   <div class="scroll">
@@ -38,7 +38,7 @@
       <tr>
         {% if loop.first %}
         <td class="title-cell" rowspan="{{ file.versions|length }}">
-          {% if version.served %}<a class="file-name" href="{{ link('/work/view/' ~ version.entry_id, back=here) }}">{{ file.name|shortened }}</a>{% else %}<span class="file-name">{{ file.name|shortened }}</span>{% endif %}
+          {% if version.served %}<a class="file-name" href="{{ link('/work/view/' ~ version.entry_id, back=here) }}">{{ file.name }}</a>{% else %}<span class="file-name">{{ file.name }}</span>{% endif %}
           {% if file.picture and version.served %}<a class="preview-link" href="{{ link('/work/view/' ~ version.entry_id, back=here) }}" tabindex="-1" aria-hidden="true"><img src="/work/files/{{ version.entry_id }}" class="preview" alt="Preview of {{ file.name }}"></a>{% endif %}
         </td>
         {% endif %}

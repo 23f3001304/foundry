@@ -169,8 +169,8 @@
     <li>
       <a class="need" href="{{ need.href }}">
         <span class="need-state"><span class="stage {{ need.tone }} fam-{{ 'ember' if need.tone in ('stuck', 'waiting') else 'azure' }}">{{ {"stuck": "Stuck", "waiting": "Needs you"}.get(need.tone, "A note") }}</span></span>
-        <span class="need-title">{{ need.title|shortened }}</span>
-        <span class="need-why">{{ need.why|shortened }}</span>
+        <span class="need-title">{{ need.title }}</span>
+        <span class="need-why">{{ need.why }}</span>
         <span class="go" aria-hidden="true"></span>
       </a>
     </li>

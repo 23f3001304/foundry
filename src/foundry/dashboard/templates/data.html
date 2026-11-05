@@ -22,7 +22,7 @@
     <tbody>
     {% for f in c.files %}
     <tr class="link-row file-row">
-      <td class="title-cell"><a class="row-link" href="/data/{{ c.link }}/{{ f.file|urlencode }}">{{ f.file|shortened }}</a></td>
+      <td class="title-cell"><a class="row-link" href="/data/{{ c.link }}/{{ f.file|urlencode }}">{{ f.file }}</a></td>
       <td data-label="Kind">{{ f.kind }}</td>
       <td data-label="Changed">{{ f.changed|when }}</td>
       <td class="go-cell"><span class="go" aria-hidden="true"></span></td>

@@ -30,7 +30,7 @@
   --current: #e0e0d7;
   --rule: #e3e3db;
   --rule-strong: #cbcbc0;
-  --field: #8b8c80;
+  --field: #898a7e;
   --ink: #1c1e13;
   --ink-soft: #45473b;
   --ink-faint: #5c5d51;
@@ -361,11 +361,6 @@ h1, h2, h3, p, li, dt, dd, pre, label, a, .small, .need-title, .need-why, .mono,
 .note { color: var(--ink-soft); }
 .block { display: block; }
 /* A long name stays on one line and is cut in the middle, so its end still shows. */
-.long { display: inline-flex; min-width: 0; max-width: 100%; white-space: nowrap; }
-.long-head { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.long-tail { flex: none; }
-a:not(.row-link) .long > span { text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: var(--field); text-underline-offset: var(--space-4); }
-.row-link:hover .long > span { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: var(--space-4); }
 .strong { font-weight: 600; }
 .status { color: var(--ink-soft); }
 .lead-in { margin-top: 0; font-weight: 600; }
@@ -496,9 +491,9 @@ body.bare { display: flex; flex-direction: column; align-items: center; justify-
 .page-head > .small { margin: var(--space-4) 0 0; }
 
 /* One line, whatever is in it. The way back keeps its size, and a long name where you are ends in an ellipsis, with the whole of it under the mouse. */
-.title { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 0 var(--space-8); min-width: 0; min-height: var(--control-32); padding-block: var(--space-4) 0; white-space: nowrap; }
+.title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-8); min-width: 0; min-height: var(--control-32); padding-block: var(--space-4) 0; }
 .title > a { flex: none; }
-.title > span:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.title > span:last-child { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 .title a { color: var(--ink-faint); text-decoration: none; transition: color var(--dur-fast) var(--ease-out); }
 .title a:hover { color: var(--ink); }
 .title-sep { color: var(--field); font-weight: 400; }
@@ -782,12 +777,12 @@ a:hover .go, .figure:hover .go, .job-row:hover .go { translate: var(--space-4) 0
 .job-row .row-link:focus-visible { outline: none; }
 .job-row .row-link:focus-visible::after { outline: 2px solid var(--focus); outline-offset: -2px; border-radius: var(--radius-4); }
 .job-row .row-link { margin-right: var(--space-8); }
-.job-row .small { margin-top: var(--space-4); overflow: hidden; color: var(--ink-faint); text-overflow: ellipsis; white-space: nowrap; }
+.job-row .small { margin-top: var(--space-4); color: var(--ink-faint); }
 .job-inputs { color: var(--ink-faint); font-size: var(--text-12); line-height: var(--line-12); }
 .job-count { margin: 0 0 var(--space-4); }
 .job-count b { color: var(--ink); font-family: var(--font-mono); font-weight: 600; }
 .owes { color: var(--ink-faint); font-size: var(--text-12); line-height: var(--line-12); }
-.owes > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owes > span { display: block; }
 table.list td.go-cell { padding-right: var(--space-20); color: var(--ink-faint); text-align: right; }
 table.list .job-row:hover .go-cell { color: var(--ink); }
 
@@ -1048,7 +1043,7 @@ ol.chain > li.unsure::after { width: var(--space-8); height: var(--space-8); bac
 .viewer-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); min-height: var(--viewer-head); padding: var(--space-8) var(--gutter); background: var(--paper); border-bottom: 1px solid var(--rule); }
 .viewer-names { flex: 1 1 auto; min-width: 0; }
 .viewer-names h1 { font-size: var(--text-16); line-height: var(--line-16); }
-.viewer-names .small { margin: 0; overflow: hidden; color: var(--ink-faint); text-overflow: ellipsis; white-space: nowrap; }
+.viewer-names .small { margin: 0; color: var(--ink-faint); }
 .viewer-names a { color: inherit; }
 .viewer-actions { display: flex; flex: none; align-items: center; gap: var(--space-8); }
 .viewer-stage { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; margin: 0; padding: var(--space-32) var(--gutter); background: var(--sunken); }
@@ -1313,7 +1308,6 @@ form.panel { gap: var(--space-16); margin: 0; }
   table.list.jobs-table td.approver { display: flex; align-items: center; gap: var(--space-8); }
   .approver .hidden { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; }
   .jobs-table td[data-label="Stages"] { display: none; }
-  .owes > span, .job-row .small { overflow: visible; white-space: normal; }
 
   table.list.log-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--space-12); }
   table.list.log-table td, table.list.log-table td:last-child { width: auto; padding: 0; }

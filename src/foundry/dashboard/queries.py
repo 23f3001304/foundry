@@ -454,10 +454,11 @@ class Flagged:
     at: str
     client: str
     job_id: str = ""
+    ref: str = ""
 
     @property
     def shown(self) -> str:
-        return flag_words(self.text)
+        return flag_words(self.text, self.ref)
 
 
 @dataclass
@@ -484,8 +485,8 @@ class ChainPage:
 
     @property
     def job_is_named(self) -> bool:
-        # A job named after its file needs no second mention of a name so like the heading's.
-        return self.job_title[:SAME_START].casefold() in self.flagged.shown.casefold()
+        # A job named after its file needs no second mention of a name so like the heading's. A short title could be in anything, so it always gets its mention.
+        return len(self.job_title) >= SAME_START and self.job_title[:SAME_START].casefold() in self.flagged.shown.casefold()
 
 
 @dataclass
@@ -635,10 +636,10 @@ def squeeze(text: str) -> str:
     return text if len(text) <= MOST_TEXT else f"{text[:MOST_TEXT].rstrip()}..."
 
 
-def flag_words(text: str) -> str:
-    # A flag says what was flagged and in which file. Words that are how the file's own name starts are the file, so its name says both, once.
+def flag_words(text: str, ref: str | None) -> str:
+    # A flag says what was flagged and in which file. On the file itself, words that are how the file's own name starts are the file, so its name says both, once. A flag on something in the file always names it, however the file's name starts.
     what, separator, where = text.rpartition(" in ")
-    return f"Flagged {where}" if separator and Path(where).suffix and where.casefold().startswith(what.removeprefix("Flagged ").casefold()) else text
+    return f"Flagged {where}" if (ref or "").startswith("file:") and separator and Path(where).suffix and where.casefold().startswith(what.removeprefix("Flagged ").casefold()) else text
 
 
 def _really_in(picture: Path, home: Path) -> bool:
@@ -764,7 +765,7 @@ class Reader:
         if job is None:
             return None
         entries = self.log.for_job(job.bucket, job.id)
-        flags = [(entry.id, flag_words(entry.text)) for entry in sorted(entries, key=lambda entry: entry.id, reverse=True) if entry.kind == "flag"]
+        flags = [(entry.id, flag_words(entry.text, entry.ref)) for entry in sorted(entries, key=lambda entry: entry.id, reverse=True) if entry.kind == "flag"]
         return JobNav(job.id, title_of(job), bucket_name(job.bucket), len(self._files(entries)), flags)
 
     def overview(self, user: User) -> list[Figures]:
@@ -1163,13 +1164,13 @@ class Reader:
             target = ("entry", entry.id)
         words = squeeze(shown_words(entry, self.settings.inputs_dir))
         # A flag's entry opens with the word this line already gives it.
-        words = flag_words(words).removeprefix("Flagged ") if entry.kind == "flag" else words
+        words = flag_words(words, entry.ref).removeprefix("Flagged ") if entry.kind == "flag" else words
         return Moment(self.when(entry.at), name_of(entry, known), EVENTS.get(entry.kind, entry.kind.replace("_", " ")), words, target)
 
     def flagged(self, user: User) -> list[Flagged]:
         known = self._names(user)
         flags = [entry for bucket in user.businesses for entry in self.log.of_kind(bucket, "flag")]
-        return [Flagged(entry.id, entry.text, name_of(entry, known[entry.bucket]), self.when(entry.at), bucket_name(entry.bucket), entry.job_id or "") for entry in sorted(flags, key=lambda entry: entry.id, reverse=True)]
+        return [Flagged(entry.id, entry.text, name_of(entry, known[entry.bucket]), self.when(entry.at), bucket_name(entry.bucket), entry.job_id or "", entry.ref or "") for entry in sorted(flags, key=lambda entry: entry.id, reverse=True)]
 
     def chain(self, user: User, flag_id: int) -> ChainPage | None:
         entry = self.log.find(flag_id)
@@ -1182,9 +1183,9 @@ class Reader:
         known = self._names(user)[entry.bucket]
         job = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", entry.job_id or "")
         via = any(other.ref == str(entry.id) for other in self.log.of_kind(entry.bucket, "dashboard_action"))
-        flagged = Flagged(entry.id, entry.text, name_of(entry, known), self.when(entry.at), bucket_name(entry.bucket), entry.job_id or "")
+        flagged = Flagged(entry.id, entry.text, name_of(entry, known), self.when(entry.at), bucket_name(entry.bucket), entry.job_id or "", entry.ref or "")
         target = (entry.ref or "").removeprefix("file:").removeprefix("text:")
-        files = [other.id for other in self.log.for_job(entry.bucket, entry.job_id) if is_made_file(other) and target.startswith(other.ref)] if entry.job_id else []
+        files = [other.id for other in self.log.for_job(entry.bucket, entry.job_id) if is_made_file(other) and (target == other.ref or target.startswith(f"{other.ref}:"))] if entry.job_id else []
         return ChainPage(flagged, steps, entry.job_id or "", title_of(_job(job[0])) if job else NO_BRIEF, via, max(files, default=0))
 
     # Connections

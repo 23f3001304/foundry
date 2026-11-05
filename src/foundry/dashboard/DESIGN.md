@@ -93,8 +93,8 @@ Each has one definition, with its states: rest, hover, focus (one shared ring), 
 
 | Component | Class | Notes |
 |---|---|---|
-| Page title | `page_title()`, `.title` | A breadcrumb in the h1 and always on one line: the way back is muted and keeps its size, and where you are is not muted and ends in an ellipsis if it is long, with the whole name in its `title` |
-| Long name | `\|shortened`, `.long` | A word of 28 letters or more with no spaces in it, such as a file's name. It stays on one line, cut in the middle only if there's no room so its end still shows, with the whole name in its `title`. The page holds every letter |
+| Page title | `page_title()`, `.title` | A breadcrumb in the h1: the way back is muted and keeps its size, and where you are is not muted. A long name wraps under the way back, and all of it shows |
+| Long words | `overflow-wrap: anywhere` | Nothing a person reads is cut, because it could hold a figure or an id they are deciding on. A word with no spaces in it, such as a file's name, wraps. The only things that end in an ellipsis are the side menu's own labels |
 | Job tabs | `job_tabs()`, `.tabs` | Underlined. Job, Timeline, Files, and Chain once something is flagged |
 | State pills | `.state-pills`, `.state-pill` | Under the title: a coloured dot, and the current one outlined |
 | Hero | `.hero` | The overview's one loud thing, with `.hero-bar` and `.figure` inside it |

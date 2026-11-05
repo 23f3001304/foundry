@@ -20,11 +20,11 @@
     <tbody>
     {% for row in rows %}
     <tr>
-      <td class="title-cell"><span class="strong">{{ row.name|shortened }}</span>{% if not row.removable %}<span class="small block why-not">{{ row.why_not }}</span>{% endif %}</td>
+      <td class="title-cell"><span class="strong">{{ row.name }}</span>{% if not row.removable %}<span class="small block why-not">{{ row.why_not }}</span>{% endif %}</td>
       <td data-label="Type">{{ row.kind }}</td>
       <td data-label="Rooms">{% if row.shared %}Shared{% else %}{{ row.room_total }} {{ 'room' if row.room_total == 1 else 'rooms' }}{% endif %}</td>
       {% if user.businesses|length > 1 %}<td data-label="Serves">{{ row.clients }}</td>{% endif %}
-      <td data-label="Status"><span class="stage {{ 'done' if row.healthy else 'trouble' }}">{{ row.state|shortened }}</span></td>
+      <td data-label="Status"><span class="stage {{ 'done' if row.healthy else 'trouble' }}">{{ row.state }}</span></td>
       <td class="row-action">{% if row.removable %}<a class="button small" href="/connections/{{ row.link }}/remove">Remove</a>{% endif %}</td>
     </tr>
     {% endfor %}

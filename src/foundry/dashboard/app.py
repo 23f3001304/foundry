@@ -20,6 +20,7 @@ from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.requests import Request
+from starlette.convertors import IntegerConvertor, register_url_convertor
 from starlette.responses import FileResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
@@ -31,7 +32,6 @@ from foundry.dashboard import charts, gateway, shapes
 from foundry.dashboard import data as brand_data
 from foundry.dashboard.auth import COOKIE, LIFETIME, REFUSED, User, csrf_ok, current_user, end_session, find_session, start_session, switch_login
 from foundry.dashboard.queries import MEDIA, PICTURES, STEP_FAMILIES, ConnectionRow, NavCounts, Reader, bucket_name, is_made_file
-from foundry.dashboard.shortened import shortened
 from foundry.desk import Settings
 
 logger = logging.getLogger(__name__)
@@ -90,6 +90,14 @@ Handler = Callable[..., Response | Awaitable[Response]]
 def whole_number(value: object) -> int | None:
     text = str(value or "")
     return int(text) if text.isascii() and text.isdigit() and len(text) <= MOST_DIGITS else None
+
+
+class Number(IntegerConvertor):
+    # Any number the log could hold. A longer one is an address that isn't here, and never reaches the database, which can't take it.
+    regex = "[0-9]{1,18}"
+
+
+register_url_convertor("number", Number())
 
 
 def link(path: str, **query: str) -> str:
@@ -649,14 +657,14 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
         Route("/jobs/{job_id}/act", job_act, methods=["POST"]),
         Route("/jobs/{job_id}/answer", job_answer, methods=["POST"]),
         Route("/work", work),
-        Route("/work/files/{entry_id:int}", work_file),
-        Route("/work/view/{entry_id:int}", work_view),
-        Route("/work/view/{entry_id:int}/slides/{number:int}", work_slide),
+        Route("/work/files/{entry_id:number}", work_file),
+        Route("/work/view/{entry_id:number}", work_view),
+        Route("/work/view/{entry_id:number}/slides/{number:number}", work_slide),
         Route("/responses", responses),
         Route("/responses/answer", responses_answer, methods=["POST"]),
         Route("/log", action_log),
         Route("/log/flag", log_flag, methods=["POST"]),
-        Route("/log/flagged/{flag_id:int}", chain),
+        Route("/log/flagged/{flag_id:number}", chain),
         Mount("/static/team", StaticFiles(directory=TEAM, check_dir=False)),
         Mount("/static", StaticFiles(directory=HERE / "static")),
     ]
@@ -669,7 +677,6 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
     environment = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     environment.filters["when"] = reader.when
     environment.filters["client"] = bucket_name
-    environment.filters["shortened"] = shortened
     environment.globals["charts"] = charts
     environment.globals["shapes"] = shapes
     environment.globals["families"] = STEP_FAMILIES

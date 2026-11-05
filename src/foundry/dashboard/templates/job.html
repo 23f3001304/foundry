@@ -29,8 +29,8 @@
 {% if job.banner %}
 <div class="banner fam-{{ job.banner.family }}">
   <div class="banner-words">
-    <p class="banner-title">{{ job.banner.title|shortened }}</p>
-    {% if job.banner.detail %}<p class="banner-detail">{{ job.banner.detail|shortened }}</p>{% endif %}
+    <p class="banner-title">{{ job.banner.title }}</p>
+    {% if job.banner.detail %}<p class="banner-detail">{{ job.banner.detail }}</p>{% endif %}
   </div>
   <a class="banner-go" href="{{ job.banner.href }}">{{ job.banner.go }}</a>
 </div>
@@ -107,13 +107,13 @@
 {% set attention_lines = job.attention|reject("equalto", said)|list %}
 {% if waiting_lines %}
 {% call fold("waiting", "needs", job.row.family, "What it is waiting for") %}
-  <ul class="plain">{% for line in waiting_lines %}<li>{{ line|shortened }}</li>{% endfor %}</ul>
+  <ul class="plain">{% for line in waiting_lines %}<li>{{ line }}</li>{% endfor %}</ul>
 {% endcall %}
 {% endif %}
 
 {% if attention_lines %}
 {% call fold("attention", "stuck", "ember", "Needs attention") %}
-  <ul class="plain">{% for line in attention_lines %}<li>{{ line|shortened }}</li>{% endfor %}</ul>
+  <ul class="plain">{% for line in attention_lines %}<li>{{ line }}</li>{% endfor %}</ul>
 {% endcall %}
 {% endif %}
 
@@ -124,11 +124,11 @@
     <tbody>
     {% for item in job.items %}
     <tr>
-      <td data-label="Who">{{ item.owner|shortened }}</td>
-      <td data-label="Input">{{ item.input|shortened }}</td>
+      <td data-label="Who">{{ item.owner }}</td>
+      <td data-label="Input">{{ item.input }}</td>
       <td data-label="Exact measure">{{ item.measure }}</td>
       <td data-label="Due">{{ item.due }}</td>
-      <td data-label="Where it stands">{{ item.status|shortened }}</td>
+      <td data-label="Where it stands">{{ item.status }}</td>
     </tr>
     {% endfor %}
     </tbody>
@@ -138,12 +138,12 @@
 
 {% if job.brief %}
 {% call fold("", "brief", "lime", "What was asked for") %}
-  <pre class="text">{{ job.brief|shortened }}</pre>
+  <pre class="text">{{ job.brief }}</pre>
 {% endcall %}
 {% endif %}
 {% if job.report %}
 {% call fold("report", "brief", "orchid", "Report") %}
-  <pre class="text">{{ job.report|shortened }}</pre>
+  <pre class="text">{{ job.report }}</pre>
 {% endcall %}
 {% endif %}
 
@@ -152,7 +152,7 @@
   <ul class="rows file-rows">
     {% for file in job.files %}
     <li>
-      <a class="file-name" href="{{ link('/work/view/' ~ file.entry_id, back=here) }}">{{ file.name|shortened }}</a>
+      <a class="file-name" href="{{ link('/work/view/' ~ file.entry_id, back=here) }}">{{ file.name }}</a>
       {% if job.can_flag %}
       <details class="flag-fold">
         <summary>Flag something in this file</summary>
@@ -161,7 +161,7 @@
           <input type="hidden" name="job_id" value="{{ job.row.id }}">
           <input type="hidden" name="what" value="text">
           <input type="hidden" name="file" value="{{ file.entry_id }}">
-          <label for="statement-{{ file.entry_id }}">Flag a number or statement in {{ file.name|shortened }}</label>
+          <label for="statement-{{ file.entry_id }}">Flag a number or statement in {{ file.name }}</label>
           <div class="inline-field">
             <input id="statement-{{ file.entry_id }}" name="statement" type="text" maxlength="200" required>
             <button type="submit">Flag it</button>
@@ -181,11 +181,11 @@
 
 <aside class="rail" aria-label="About this job">
   <dl class="facts">
-    <div><dt>Key</dt><dd class="mono">{{ job.row.id|shortened }}</dd></div>
-    <div><dt>Approver</dt><dd class="fact-person">{{ avatar(job.row.approver) }}{{ job.row.approver|shortened }}</dd></div>
+    <div><dt>Key</dt><dd class="mono">{{ job.row.id }}</dd></div>
+    <div><dt>Approver</dt><dd class="fact-person">{{ avatar(job.row.approver) }}{{ job.row.approver }}</dd></div>
     <div><dt>Due</dt><dd>{{ job.due_at or "Nothing open is due" }}</dd></div>
     <div><dt>Business</dt><dd>{{ job.row.client }}</dd></div>
-    <div><dt>Rooms</dt><dd>{{ job.rooms|shortened }}</dd></div>
+    <div><dt>Rooms</dt><dd>{{ job.rooms }}</dd></div>
   </dl>
   <h2 class="rail-head">Stages</h2>
   <ol class="stepper stepper-named {{ job.row.tone }} fam-{{ job.row.family }}" aria-label="Stages, with this job at {{ job.row.stage }}">
