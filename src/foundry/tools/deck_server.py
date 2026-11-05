@@ -1,5 +1,6 @@
 """MCP tool for maker agents: builds a slide deck whose colours, fonts, logo and layout come from the brand kit."""
 
+import math
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -19,7 +20,7 @@ from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
 from foundry.checks import PERIOD, figure, outliers
 from foundry.tools import confine
-from foundry.tools.layout import LINE_SPACING, NOT_RECEIVED, MakerError, contrast, fit_size, load_font, mix, words_of, wrap
+from foundry.tools.layout import LINE_SPACING, NOT_RECEIVED, MakerError, contrast, figure_text, fit_size, load_font, mix, words_of, wrap
 
 mcp = MCPServer("foundry-deck")
 
@@ -68,6 +69,33 @@ TITLE_TOP, TITLE_HEIGHT = 44, 90
 # What a slide holds under its title ends here, above the source line and left of the corner logo.
 BODY_TOP, BODY_BOTTOM, BODY_RIGHT = 150, 490, 850
 NO_BREAK = "\u00a0"
+# Slides with one figure lit. A plot ends at the foot of the body, so the source line under it is in the same place on every slide. Beyond ten strokes a row is too thin to read.
+MOST_STROKES = 10
+CHART_NEEDS = "A {layout} slide needs its labels and values, the same number of each, and it has {labels} labels and {values} values."
+NOT_A_FIGURE = "{label}'s value must be a number, or null when nobody sent that figure. {value!r} is not."
+NOT_A_NUMBER = "A big_number slide's number must be a figure, or null when nobody sent it. {value!r} is not."
+NOTHING_TO_SHOW = "A big_number slide needs its number, or its labels and values."
+NEGATIVE_STROKE = "A stroke cannot show {label}'s negative figure. Use draw_chart's bar kind and build_deck's picture layout for figures below zero."
+TOO_MANY_STROKES = "A {layout} slide can show at most {most} figures, and this has {count}. Use a table for more."
+NO_LABEL = "Every label on a chart needs its words."
+LABEL_TOO_LONG = "This label is too long to fit: {label}..."
+HIGHLIGHT_A_LABEL = "On a {layout} slide the highlight must be one of the labels, which is the one that gets lit: {labels}. {highlight!r} is not."
+NO_SOURCE_FOR_NOTHING = "A figure nobody sent has no source. Leave it out of sources."
+# Where the foot of a figure sits in its text box, and how much of its size the digits stand above that, as a share of the size. The same for the kits' fonts within a point or two.
+BASELINE_SHARE, DIGIT_SHARE = 0.9, 0.72
+# A unit after a figure is this share of the figure's size.
+UNIT_SHARE = 0.42
+SIDE_RIGHT = 912
+SMALL_WORDS = 14
+LEAST_FIGURE = 11
+# On a big-number slide the figure stands over the strokes, with the title and what it is to its right.
+HERO_LARGEST, HERO_LEAST, ALONE_LARGEST = 172, 48, 200
+BIG_COLUMN = 508
+ROWS_HEIGHT, THICKEST_ROW, ROW_GAP_SHARE, ROW_FIGURE_LARGEST, LABEL_LARGEST, LABEL_LEAST, WIDEST_LABEL = 232, 44, 0.2, 29, 14, 9, 180
+# On a chart slide the title is on the left and the strokes stand on the right, each this share of the room it has, with the figure over the lit one.
+TALL_LEFT_WIDTH, TALL_GAP, TALL_FOOT, TALL_SHARE, THICKEST_TALL = 290, 40, 22, 0.54, 64
+TALL_HERO_LARGEST, TALL_HERO_LEAST, TALL_FIGURE_LARGEST = 118, 40, 38
+TOP_OF_FIGURES = 40
 
 
 @dataclass(frozen=True)
@@ -87,6 +115,8 @@ class Look:
     # The thin line under a table's row.
     line: str
     left: int
+    # Where a plot ends on the right: clear of the corner logo.
+    right: int
     # The width of the band of the primary colour down the left of a slide, if it has one.
     band: int
 
@@ -135,6 +165,7 @@ def _look(brand: Brand, loud: bool) -> Look:
         back=mix(colours["primary"], colours["paper"], BACK_ON_DARK if dark else BACK_ON_PAPER),
         line=colours["ink"],
         left=SIDE_MARGINS[SOLID if brand.style == SOLID else BAND],
+        right=BODY_RIGHT,
         band=BAND_WIDTH if brand.style != SOLID else 0,
     )
 
@@ -164,7 +195,7 @@ def _periods_together(text: str) -> str:
     return PERIOD.sub(lambda found: found.group().replace(" ", NO_BREAK), text)
 
 
-def _write(shape, brand: Brand, look: Look, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, middle: bool = False, highlight: str = "") -> None:
+def _write(shape, brand: Brand, look: Look, role: str, colour: str, box: tuple[float, float, float, float], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, middle: bool = False, highlight: str = "", align: PP_ALIGN = PP_ALIGN.LEFT) -> None:
     left, top, width, height = box
     shape.left, shape.top, shape.width, shape.height = Pt(left), Pt(top), Pt(width), Pt(height)
     frame = shape.text_frame
@@ -176,7 +207,7 @@ def _write(shape, brand: Brand, look: Look, role: str, colour: str, box: tuple[i
     lit = _periods_together(highlight)
     for index, text in enumerate(paragraphs):
         paragraph = frame.paragraphs[0] if index == 0 else frame.add_paragraph()
-        paragraph.alignment = PP_ALIGN.LEFT
+        paragraph.alignment = align
         paragraph.space_after = Pt(gap)
         for piece in re.split(f"({re.escape(lit)})", text, maxsplit=1) if lit else [text]:
             if not piece:
@@ -389,16 +420,9 @@ def _with_room(heights: list[float], height: float, has_figures: bool) -> list[f
     return heights[:1] + [max(high, min(tallest, high + spare / rows)) for high in heights[1:]]
 
 
-def _far_off(labels: list[str], values: list[object]) -> str:
-    # What a slide says about a figure far from the others, or nothing when none is. A figure nobody sent is not one of them.
-    known = ["" if value is None or value == NOT_RECEIVED else value for value in values]
-    names = [labels[place] for place in outliers(known)]
-    return FAR_OFF.format(names=" and ".join(dict.fromkeys(names))) if names else ""
-
-
-def _table_flag(cells: list[list[str]], figures: list[bool]) -> str:
-    labels = [row[0] for row in cells[1:]]
-    names = [labels[place] for at in range(1, len(figures)) if figures[at] for place in outliers([row[at] for row in cells[1:]])]
+def _far_off(labels: list[str], *columns: list[str]) -> str:
+    # What a slide says about a figure far from the others, or nothing when none is. Words such as not received are not figures, so they are not judged.
+    names = [labels[place] for column in columns for place in outliers(column)]
     return FAR_OFF.format(names=" and ".join(dict.fromkeys(names))) if names else ""
 
 
@@ -457,7 +481,8 @@ def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
     measure = next((at for at in reversed(range(1, len(figures))) if figures[at]), None)
     lit = _lit_row(cells, measure, highlight)
     lit_title = "" if lit is not None else highlight
-    flag = _table_flag(cells, figures) if spec.get("sources") else ""
+    # Only where the figures have sources, because a menu's dearest dish is not an odd figure anyone has to answer for.
+    flag = _far_off([row[0] for row in cells[1:]], *([row[at] for row in cells[1:]] for at in range(1, len(figures)) if figures[at])) if spec.get("sources") else ""
     look = _look(brand, loud=False)
     side_left = look.left + SIDE_TITLE_WIDTH + SIDE_GAP
     beside, _ = _fit_table(brand, cells, figures, lit, measure, BODY_RIGHT - side_left, BODY_BOTTOM - TITLE_TOP)
@@ -530,8 +555,246 @@ def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
     _corner_logo(slide, brand, look)
 
 
-LOUD_LAYOUTS = ("title", "statement")
-LAYOUTS = {"title": _make_title, "content": _make_content, "statement": _make_statement, "table": _make_table, "picture": _make_picture}
+@dataclass(frozen=True)
+class Point:
+    label: str
+    value: float | None
+    # The figure as it is written, or the words saying it did not come.
+    written: str
+    unit: str
+
+    @property
+    def shown(self) -> str:
+        return self.written + self.unit
+
+
+def _chart_value(value: object, label: str) -> float | None:
+    if value is None or (isinstance(value, str) and value.strip().casefold() == NOT_RECEIVED):
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise MakerError(NOT_A_FIGURE.format(label=label, value=value))
+    if value < 0:
+        raise MakerError(NEGATIVE_STROKE.format(label=label))
+    return value
+
+
+def _points(spec: dict) -> list[Point]:
+    # What a chart slide shows, in the order the maker gave it.
+    layout, labels, values = spec["layout"], spec.get("labels"), spec.get("values")
+    if not isinstance(labels, list) or not isinstance(values, list) or not labels or len(labels) != len(values):
+        raise MakerError(CHART_NEEDS.format(layout=layout, labels=len(labels) if isinstance(labels, list) else 0, values=len(values) if isinstance(values, list) else 0))
+    if len(labels) > MOST_STROKES:
+        raise MakerError(TOO_MANY_STROKES.format(layout=layout, most=MOST_STROKES, count=len(labels)))
+    points = []
+    for label, value in zip(labels, values):
+        if not isinstance(label, str) or not label.strip():
+            raise MakerError(NO_LABEL)
+        known = _chart_value(value, label)
+        points.append(Point(label.strip(), known, NOT_RECEIVED if known is None else figure_text(known), "" if known is None else spec.get("unit", "")))
+    return points
+
+
+def _lit_point(points: list[Point], spec: dict) -> Point:
+    highlight = spec.get("highlight", "")
+    if highlight:
+        lit = next((point for point in points if point.label == highlight), None)
+        if lit is None:
+            raise MakerError(HIGHLIGHT_A_LABEL.format(layout=spec["layout"], labels=", ".join(point.label for point in points), highlight=highlight))
+        return lit
+    return max(points, key=lambda point: -1 if point.value is None else point.value)
+
+
+def _in_place(points: list[Point], spec: dict) -> list[Point]:
+    # Largest first, so the eye runs down the order, and a figure that did not come after all that did. A series over time keeps its order.
+    return points if spec.get("keep_order") else sorted(points, key=lambda point: (point.value is None, -(point.value or 0)))
+
+
+def _line(slide, brand: Brand, look: Look, role: str, colour: str, box: tuple[float, float, float, float], text: str, size: float, unit: str = "", align: PP_ALIGN = PP_ALIGN.LEFT, anchor: MSO_ANCHOR = MSO_ANCHOR.MIDDLE, name: str = "", wraps: bool = False) -> None:
+    # Real text at the size asked for, with a unit after a figure set smaller. It does not wrap unless asked, so a figure is never broken across two lines.
+    shape = slide.shapes.add_textbox(*(Pt(value) for value in box))
+    shape.name = name or shape.name
+    frame = shape.text_frame
+    frame.word_wrap = wraps
+    frame.auto_size = MSO_AUTO_SIZE.NONE
+    frame.margin_left = frame.margin_right = frame.margin_top = frame.margin_bottom = 0
+    frame.vertical_anchor = anchor
+    paragraph = frame.paragraphs[0]
+    paragraph.alignment = align
+    for piece, piece_size in ((text, size), (unit, size * UNIT_SHARE)):
+        if piece:
+            run = paragraph.add_run()
+            run.text = piece
+            run.font.size = Pt(round(max(piece_size, 8)))
+            run.font.name = brand.fonts[role]
+            run.font.color.rgb = _rgb(colour)
+
+
+def _stroke(slide, look: Look, label: str, box: tuple[float, float, float, float], lit: bool) -> None:
+    # One figure's mark, exactly as long as the figure on the slide's one scale. A figure of nothing has no mark.
+    left, top, width, height = box
+    if width <= 0 or height <= 0:
+        return
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Pt(left), Pt(top), Pt(width), Pt(height))
+    shape.name = f"{label} stroke"
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = _rgb(look.lit if lit else look.back)
+    shape.line.fill.background()
+    shape.shadow.inherit = False
+
+
+def _shown_width(brand: Brand, point: Point, size: float) -> float:
+    return _width_of(brand, ("heading", round(size)), point.written) + (_width_of(brand, ("heading", round(max(size * UNIT_SHARE, 8))), point.unit) if point.unit else 0)
+
+
+def _size_to_fit(brand: Brand, point: Point, width: float, largest: int, least: int) -> int:
+    return next((size for size in range(largest, least - 1, -1) if _shown_width(brand, point, size) <= width), least)
+
+
+def _lit_figure(slide, brand: Brand, look: Look, point: Point, left: float, baseline: float, size: int) -> None:
+    # The figure the slide is for, placed by the foot of its digits. Words saying it did not come are not lit, because there is nothing to light.
+    colour = look.soft if point.value is None else look.lit
+    top = baseline - BASELINE_SHARE * size
+    _line(slide, brand, look, "heading", colour, (left, top, _shown_width(brand, point, size) + size * 0.1, size * 0.92), point.written, size, point.unit, anchor=MSO_ANCHOR.TOP, name="Lit figure")
+
+
+def _title_and_words(slide, brand: Brand, look: Look, box: tuple[float, float, float, float], title: str, words: list[tuple[str, str]], largest: int) -> None:
+    # A title with its smaller lines under it, the title taking whatever room they leave. Each is only as tall as it is measured to be, so nothing runs into what comes next.
+    left, top, width, bottom = box
+    # PowerPoint sets a line slightly wider than the measure here does.
+    measure = width * 0.96
+    heights = [len(wrap(text, _measured(brand.font_file("body"), SMALL_WORDS), measure)) * SMALL_WORDS * LINE_SPACING + 2 for text, _ in words]
+    together = _periods_together(title)
+    room = bottom - top - sum(heights) - 8 * len(heights)
+    size = fit_size(together, brand.font_file("heading"), measure, room, largest, 16)
+    high = len(wrap(together, _measured(brand.font_file("heading"), size), measure)) * size * LINE_SPACING + 2
+    _title(slide, brand, look, (left, top, width, high), title, size, size)
+    y = top + high + 8
+    for (text, colour), height in zip(words, heights):
+        _text_box(slide, brand, look, "body", colour, (left, y, width, height), [_periods_together(text)], SMALL_WORDS, SMALL_WORDS)
+        y += height + 8
+
+
+def _chart_words(look: Look, spec: dict, points: list[Point]) -> list[tuple[str, str]]:
+    # What the chart is, and any figure far from the others, said in words on the slide.
+    flag = _far_off([point.label for point in points], [point.written for point in points])
+    return [*([(spec["caption"], look.soft)] if spec.get("caption") else []), *([(flag, look.words)] if flag else [])]
+
+
+def _make_big_number(deck: Presentation, brand: Brand, spec: dict) -> None:
+    title = _required(spec, "title", "big_number")
+    if "labels" not in spec and "values" not in spec:
+        if "number" not in spec:
+            raise MakerError(NOTHING_TO_SHOW)
+        _number_alone(deck, brand, spec, title)
+    else:
+        _number_over_strokes(deck, brand, spec, title)
+
+
+def _number_alone(deck: Presentation, brand: Brand, spec: dict, title: str) -> None:
+    number = spec["number"]
+    if isinstance(number, bool) or not (number is None or isinstance(number, str) or (isinstance(number, int | float) and math.isfinite(number))):
+        raise MakerError(NOT_A_NUMBER.format(value=number))
+    missing = number is None or (isinstance(number, str) and number.strip().casefold() == NOT_RECEIVED)
+    written = NOT_RECEIVED if missing else number.strip() if isinstance(number, str) else figure_text(number)
+    look = _look(brand, loud=True)
+    slide = _new_slide(deck, look)
+    _title(slide, brand, look, (look.left, TITLE_TOP, SIDE_RIGHT - look.left, TITLE_HEIGHT), title, 36, 16)
+    point = Point("", None if missing else 1, written, "")
+    size = _size_to_fit(brand, point, look.right - look.left, ALONE_LARGEST, HERO_LEAST)
+    _lit_figure(slide, brand, look, point, look.left, 360, size)
+    if spec.get("caption"):
+        _text_box(slide, brand, look, "body", look.soft, (look.left, 390, look.right - look.left, 80), [_periods_together(spec["caption"])], 22, SMALL_WORDS)
+    _corner_logo(slide, brand, look)
+
+
+def _number_over_strokes(deck: Presentation, brand: Brand, spec: dict, title: str) -> None:
+    given = _points(spec)
+    lit = _lit_point(given, spec)
+    points = _in_place(given, spec)
+    look = _look(brand, loud=True)
+    # Measured before anything is placed, so a label that cannot fit is refused with the reason.
+    label_size = next((size for size in range(LABEL_LARGEST, LABEL_LEAST - 1, -1) if max(_width_of(brand, ("body", size), point.label) for point in points) <= WIDEST_LABEL), None)
+    if label_size is None:
+        raise MakerError(LABEL_TOO_LONG.format(label=max((point.label for point in points), key=len)[:40]))
+    slide = _new_slide(deck, look)
+    rows = len(points)
+    thick = min(THICKEST_ROW, ROWS_HEIGHT / (rows + (rows - 1) * ROW_GAP_SHARE))
+    gap = thick * ROW_GAP_SHARE
+    plot_top = BODY_BOTTOM - rows * thick - (rows - 1) * gap
+    column = look.left + BIG_COLUMN
+    _title_and_words(slide, brand, look, (column, TOP_OF_FIGURES - 4, SIDE_RIGHT - column, plot_top - 10), title, _chart_words(look, spec, given), 29)
+    if any(point.value is not None for point in points):
+        _line(slide, brand, look, "body", look.words, (look.left, TOP_OF_FIGURES - 4, column - look.left - 20, 22), lit.label, 15, name="Lit label")
+    size = _size_to_fit(brand, lit, column - look.left - 24, 64 if lit.value is None else HERO_LARGEST, HERO_LEAST)
+    _lit_figure(slide, brand, look, lit, look.left, plot_top - 36, size)
+    plot_left = look.left + max(_width_of(brand, ("body", label_size), point.label) for point in points) + 14
+    row_figure = max(LEAST_FIGURE, min(ROW_FIGURE_LARGEST, round(thick * 0.66)))
+    # One scale for every stroke, as long as it can be with each figure still on the slide after its stroke.
+    most = max((point.value for point in points if point.value), default=1)
+    room = look.right - plot_left
+    scale = min([room / most, *((room - 10 - _shown_width(brand, point, row_figure)) / point.value for point in points if point.value and point is not lit)])
+    for at, point in enumerate(points):
+        top = plot_top + at * (thick + gap)
+        lit_row = point is lit and point.value is not None
+        _line(slide, brand, look, "body", look.words if lit_row else look.soft, (look.left, top, plot_left - look.left - 6, thick), point.label, label_size, name=f"{point.label} label")
+        length = (point.value or 0) * scale
+        if point.value is not None:
+            _stroke(slide, look, point.label, (plot_left, top, length, thick), lit_row)
+        if not lit_row:
+            wide = _width_of(brand, ("heading", row_figure), NOT_RECEIVED) if point.value is None else _shown_width(brand, point, row_figure)
+            _line(slide, brand, look, "heading", look.soft, (plot_left + length + (10 if point.value is not None else 0), top, wide + 6, thick), point.written, row_figure, point.unit, name=f"{point.label} figure")
+    _corner_logo(slide, brand, look)
+
+
+def _make_chart(deck: Presentation, brand: Brand, spec: dict) -> None:
+    title = _required(spec, "title", "chart")
+    given = _points(spec)
+    lit = _lit_point(given, spec)
+    points = _in_place(given, spec)
+    look = _look(brand, loud=True)
+    slide = _new_slide(deck, look)
+    _title_and_words(slide, brand, look, (look.left, TITLE_TOP, TALL_LEFT_WIDTH, BODY_BOTTOM), title, _chart_words(look, spec, given), 34)
+    plot_left = look.left + TALL_LEFT_WIDTH + TALL_GAP
+    pitch = (look.right - plot_left) / len(points)
+    thick = min(THICKEST_TALL, pitch * TALL_SHARE)
+    base = BODY_BOTTOM - TALL_FOOT
+    others = [point for point in points if point is not lit and point.value is not None]
+    figure_size = min([TALL_FIGURE_LARGEST, *(_size_to_fit(brand, point, pitch - 4, TALL_FIGURE_LARGEST, LEAST_FIGURE) for point in others)])
+    figure_high = figure_size * 1.15
+    size = _size_to_fit(brand, lit, look.right - plot_left, 64 if lit.value is None else TALL_HERO_LARGEST, TALL_HERO_LEAST)
+    lit_at = points.index(lit)
+    place = [plot_left + at * pitch + (pitch - thick) / 2 for at in range(len(points))]
+    wide = _shown_width(brand, lit, size)
+    hero_left = max(plot_left, min(place[lit_at], look.right - wide))
+    # The strokes under the lit figure's width have to leave room for it, and their own figures, under the top of the slide.
+    under = [point for at, point in enumerate(points) if point in others and place[at] < hero_left + wide and place[at] + thick > hero_left]
+    most = max((point.value for point in points if point.value), default=1)
+    head_room = base - TOP_OF_FIGURES - DIGIT_SHARE * size
+    limits = [base - TOP_OF_FIGURES, *((base - TOP_OF_FIGURES - figure_high) * most / point.value for point in others if point.value), *((head_room - figure_high - 4) * most / point.value for point in under if point.value)]
+    if lit.value:
+        limits.append((head_room - 8) * most / lit.value)
+    tallest = min(limits)
+    scale = tallest / most
+    tops = {point.label: base - (point.value or 0) * scale for point in points}
+    baseline = min([tops[lit.label] - 8, *(tops[point.label] - figure_high - 4 for point in under)])
+    _lit_figure(slide, brand, look, lit, hero_left, baseline, size)
+    for at, point in enumerate(points):
+        lit_one = point is lit and point.value is not None
+        if point.value is not None:
+            _stroke(slide, look, point.label, (place[at], tops[point.label], thick, (point.value or 0) * scale), lit_one)
+        if point.value is None and point is not lit:
+            _line(slide, brand, look, "heading", look.soft, (plot_left + at * pitch + 2, base - 44, pitch - 4, 44), point.written, 13, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.BOTTOM, name=f"{point.label} figure", wraps=True)
+        elif point is not lit:
+            _line(slide, brand, look, "heading", look.soft, (plot_left + at * pitch + 2, tops[point.label] - figure_high, pitch - 4, figure_high), point.written, figure_size, point.unit, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.BOTTOM, name=f"{point.label} figure")
+        label_box = (plot_left + at * pitch + 1, base + 5, pitch - 2, BODY_BOTTOM - base - 5)
+        shape = slide.shapes.add_textbox(*(Pt(value) for value in label_box))
+        shape.name = f"{point.label} label"
+        _write(shape, brand, look, "body", look.words if lit_one else look.soft, label_box, [point.label], LABEL_LARGEST, LABEL_LEAST, align=PP_ALIGN.CENTER)
+    _corner_logo(slide, brand, look)
+
+
+LOUD_LAYOUTS = ("title", "statement", "big_number", "chart")
+LAYOUTS = {"title": _make_title, "content": _make_content, "statement": _make_statement, "table": _make_table, "picture": _make_picture, "big_number": _make_big_number, "chart": _make_chart}
 
 
 def _source(item: object, slide: int, words: list[str]) -> Link:
@@ -544,6 +807,8 @@ def _source(item: object, slide: int, words: list[str]) -> Link:
         raise MakerError(f'A source needs its "entry", the whole number job_facts gave for it. {SOURCE_SHAPE}')
     if not isinstance(label, str) or not label.strip():
         raise MakerError(f'A source needs its "label", who gave it and when. {SOURCE_SHAPE}')
+    if value.strip().casefold() == NOT_RECEIVED:
+        raise MakerError(NO_SOURCE_FOR_NOTHING)
     if not any(value in text for text in words):
         raise MakerError(f"A source's value must be words on its slide. {value!r} is not on it.")
     return Link(slide, value, entry, label)
@@ -563,7 +828,23 @@ def _data_words(spec: dict) -> list[str]:
         return [_cell_text(cell) for row in spec["rows"] if isinstance(row, list) for cell in row]
     if spec.get("layout") == "picture" and isinstance(spec.get("path"), str):
         return _chart_record(Path(spec["path"])).splitlines()
+    if spec.get("layout") in ("big_number", "chart"):
+        return _chart_slide_words(spec)
     return []
+
+
+def _is_figure(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _chart_slide_words(spec: dict) -> list[str]:
+    # The figures a chart slide writes, with and without its unit, and its words.
+    values = spec["values"] if isinstance(spec.get("values"), list) else []
+    written = [figure_text(value) for value in [*values, spec.get("number")] if _is_figure(value)]
+    unit = spec.get("unit", "") if isinstance(spec.get("unit", ""), str) else ""
+    labels = spec["labels"] if isinstance(spec.get("labels"), list) else []
+    words = [*written, *(text + unit for text in written), *labels, spec.get("caption"), spec.get("number")]
+    return [word for word in words if isinstance(word, str)]
 
 
 def _print_sources(slide, brand: Brand, links: list[Link], layout: str) -> None:
