@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 PROMPT = """You sort messages from a business's work chat.
 
 Reply with one word:
-{report_line}REQUEST if the message asks someone to make, write, design or change something.
+{report_line}REQUEST if the message asks someone to make, write, design or change something, or says who owes an answer, date or figure that is wanted back.
 CONTEXT if the message only shares information or is ordinary conversation.
 UNSURE if you cannot tell which it is.
 
