@@ -1,6 +1,7 @@
 """foundry-desk: reads every room message, acts on approvals at once and turns quiet bursts into jobs."""
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -766,7 +767,7 @@ class Desk:
         # The newest line from each maker. An earlier round's choice is no longer what the work is judged against.
         stated = [entry.text for entry in self.log.for_job(job.bucket, job.id) if entry.kind == DESIGN_STYLE]
         newest = list(dict.fromkeys(reversed(stated)))[: len(self.settings.team_for(job.room_id).makers)]
-        return "\n\n" + "\n".join([STYLE_HEADING, *(f"- {quiet(_flat(line))}" for line in reversed(newest))]) if newest else ""
+        return "\n\n" + "\n".join([STYLE_HEADING, *(f"- {json.dumps(quiet(_flat(line)), ensure_ascii=False)}" for line in reversed(newest))]) if newest else ""
 
     def _ask_for_signoff(self, job: Job, reviewer_said: str) -> None:
         room = self._approval_room(job)
@@ -824,7 +825,8 @@ class Desk:
         if not links:
             # Most files have none, and nothing else is looked up for them.
             return []
-        visible = {entry.id: entry for entry in visible_entries(self.log, job, self.clock())}
+        # A maker writes its own style line, so a figure in it is the maker's own word and never a source.
+        visible = {entry.id: entry for entry in visible_entries(self.log, job, self.clock()) if entry.kind != DESIGN_STYLE}
         known = names(self.log, job.bucket)
         checked = []
         for link in links:

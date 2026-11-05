@@ -77,7 +77,9 @@ def _text(text: str) -> str:
 
 def _entry_line(entry: Entry, known: dict[str, str], inputs_dir: str | None = None) -> str:
     # A file somebody sent is shown by its name, and a model is never told the folder it is kept in.
-    return f"[{entry.id}] {_when(entry.at)} | {_one_line(name_of(entry, known))} | {entry.kind} | {_text(shown_words(entry, inputs_dir))}"
+    # A style line is for the other maker to read. It has no number, because a maker's own words are no source.
+    number = "no number" if entry.kind == DESIGN_STYLE else entry.id
+    return f"[{number}] {_when(entry.at)} | {_one_line(name_of(entry, known))} | {entry.kind} | {_text(shown_words(entry, inputs_dir))}"
 
 
 def _item_line(item: Item) -> str:
