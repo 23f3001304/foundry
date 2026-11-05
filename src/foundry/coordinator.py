@@ -1085,9 +1085,6 @@ class Coordinator:
         # A file with no words is an answer. With words, the table is an answer only when they read as one, because they may ask for something new and the table be what it is made from.
         read = self._caption_reading(caption, own, sender, bucket) if caption and any(Path(a.get("filename") or "").suffix.lower() in TABLE_KINDS for a in files) else None
         reading = read if read is not None and read.kind == "answer" and not _names_another(read, own) else None
-        # Words that say nothing the reader can use, such as "here it is", leave the table as a file with no words.
-        if read is not None and read.kind == "none":
-            caption = ""
         taken = False
         for attachment in files:
             name = attachment.get("filename") or "file"
