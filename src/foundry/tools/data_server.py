@@ -15,7 +15,7 @@ from matplotlib.font_manager import FontProperties
 from mcp.server.mcpserver import MCPServer
 
 from foundry.brand import Brand, load_brand_dir
-from foundry.chain import CALCULATION, ENTRIES, ROWS, SENT_IN, name_of, names
+from foundry.chain import CALCULATION, CODE_NAME, ENTRIES, ROWS, SENT_IN, name_of, names
 from foundry.checks import RESULT, cell_number, shown_words
 from foundry.items import IN, ItemState, ItemStore, desk_wrote, owed_items, own_words
 from foundry.jobs import Job
@@ -30,7 +30,7 @@ mcp = MCPServer("foundry-data")
 
 # The folders of each client's own documents, one folder for each brand, and the part of it a maker may have read.
 BRANDS = Path(__file__).resolve().parents[3] / "brands"
-DATA_NAME = "foundry-data"
+DATA_NAME = CODE_NAME
 ANSWERS = "answers:"
 ANSWER_COLUMNS = ("owner", "measure", "value", "entry")
 OPERATIONS = ("total", "average", "growth", "rank")

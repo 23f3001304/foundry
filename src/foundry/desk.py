@@ -19,7 +19,7 @@ import httpx
 
 from foundry.buffer import Burst, MessageBuffer
 from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, IN_ROUTINE, ITEMS, ONE_BY_ONE, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
-from foundry.chain import Link, carries, flag, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines, worked_out_from_file
+from foundry.chain import CALCULATION, CODE_NAME, Link, flag, link_ref, name_of, names, plain, read_links, states_value, visible_entries, what_was_worked_out, without_times_in_source_lines, worked_out_from_file
 from foundry.checks import calculations, entry_words, file_text, needs_attention, people_words, shown_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date
 from foundry.brand import HEX_COLOUR
@@ -853,17 +853,24 @@ class Desk:
         checked = []
         for link in links:
             entry = visible.get(link.entry)
-            who = name_of(entry, known) if entry is not None else ""
-            # The entry's words are the file's cells for a file sent as an answer, and the figures for a calculation.
-            given = entry if entry is not None and carries(entry_words(entry, self.settings.inputs_dir) or "", link.value) else self._worked_out_from(link, visible)
-            counts = given is not None and bool(plain(who)) and plain(who) in plain(link.label)
-            checked.append(CheckedLink(link, given if counts else None, who if counts else ""))
+            given = entry if entry is not None and self._gives(entry, link.value) else self._worked_out_from(link, visible)
+            # The label names who said it. For a figure code worked out from a file someone sent, that is the code or the person who sent the file.
+            sent = visible.get(worked_out_from_file(entry)) if entry is not None else None
+            who = next((name for name in (name_of(said, known) for said in (entry, sent) if said is not None) if plain(name) and plain(name) in plain(link.label)), "")
+            counts = given is not None and bool(who)
+            checked.append(CheckedLink(link, given if counts else None, who))
         return checked
+
+    def _gives(self, entry: Entry, value: str) -> bool:
+        # The entry's words are the file's cells for a file sent as an answer, and the figures for a calculation, whose column says what those figures are. The value has to be what the entry says, and not only hold its digits.
+        if entry.kind != CALCULATION:
+            return states_value(entry_words(entry, self.settings.inputs_dir) or "", value)
+        return entry.sender == CODE_NAME and states_value(entry_words(entry) or "", value, what_was_worked_out(entry))
 
     def _worked_out_from(self, link: Link, visible: dict[int, Entry]) -> Entry | None:
         # A total is in no cell of the file it came from, and the log records which file code worked it out from. The newest such figure of this job that equals the value, and nothing else: a number made up and linked to a real file has none.
         worked = (entry for entry in reversed(visible.values()) if worked_out_from_file(entry) == link.entry)
-        return next((entry for entry in worked if carries(entry_words(entry) or "", link.value)), None)
+        return next((entry for entry in worked if self._gives(entry, link.value)), None)
 
     def _log_links(self, job: Job, payload: dict, paths: list[str]) -> None:
         room, at = self.settings.workrooms_for(job.room_id).studio, self._sent_at(payload)

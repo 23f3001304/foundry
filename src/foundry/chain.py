@@ -6,9 +6,12 @@ import re
 from collections.abc import Collection, Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
+from typing import NamedTuple
 
-from foundry.checks import carries, entry_words, shown_words
+from foundry.checks import PERIOD, RESULT, WRITTEN_DATE, carries, entry_words, figure, numbers_in, shown_words
+from foundry.cleanup import DATE_TOKEN, NUMBER
 from foundry.commands import VIA_DASHBOARD
 from foundry.items import REMINDER_CHOICES, is_a_button
 from foundry.jobs import Job
@@ -27,6 +30,17 @@ FOREVER = datetime.max.replace(tzinfo=UTC)
 # A maker's source links sit beside the deck as <deck>.sources.json. A link the desk accepted is logged as a file_made entry whose ref is <path>|<entry id>.
 SOURCES_SUFFIX = ".sources.json"
 LINK_MARK = "|"
+# The name the data tool writes a calculation under. Only it works figures out in code.
+CODE_NAME = "foundry-data"
+# How a figure is marked where it is written. A sign right beside the number is one, and a dash after a word, as in Q-230, or with a space after it, as in North - 230, is not.
+MINUS = "-"
+MINUSES = ("-", "−", "–")
+MARKS_BEFORE = re.compile(r"(?<!\w)(?P<first>[-+−–]?)(?:(?P<money>[₹$€£])\s*)?(?P<second>[-+−–]?)$")
+PERCENT_AFTER = re.compile(r"\s*(?:%|(?:per\s?cent|pct)\b)", re.IGNORECASE)
+# A column of percents, or a growth, which is a percent change whatever its column is called.
+PERCENT_NAMES = {"percent", "pct", "growth"}
+# A value can name several figures, each with its own group, as in "North 230, South 350".
+PARTS_OF_A_VALUE = re.compile(r"[,;]\s+|\s+and\s+", re.IGNORECASE)
 # What an agent may draw on besides its job's own entries: the asker's recent messages and the bucket's approved reports.
 MEMORY = timedelta(days=30)
 MOST_MESSAGES = 100
@@ -150,6 +164,84 @@ def _same_value(first: str, second: str) -> bool:
 
 
 # Source links
+
+
+class _Figure(NamedTuple):
+    # One number where it is written, with what is written around it. before reaches back to the number before it, so a word in front of another number is not this number's.
+    number: Decimal | None
+    sign: str
+    money: str
+    percent: bool
+    before: str
+    after: str
+
+
+def _blank(found: re.Match) -> str:
+    return " " * len(found.group())
+
+
+def _figures(line: str) -> list[_Figure]:
+    # A date or a period's name is no figure, and neither is a year, as in the number check. They stay among the words around one.
+    blanked = PERIOD.sub(_blank, WRITTEN_DATE.sub(_blank, DATE_TOKEN.sub(_blank, line)))
+    figures, start = [], 0
+    for found in NUMBER.finditer(blanked):
+        if not numbers_in(found.group()):
+            continue
+        before, after = line[start : found.start()], line[found.end() :]
+        marks = MARKS_BEFORE.search(before)
+        percent = PERCENT_AFTER.match(after)
+        sign = (marks["first"] or marks["second"]) if marks else ""
+        figures.append(_Figure(figure(found.group()), MINUS if sign in MINUSES else sign, (marks["money"] or "") if marks else "", percent is not None, before[: marks.start()] if marks else before, after[percent.end() :] if percent else after))
+        start = found.end()
+    return figures
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[^\W\d_]+|\d+", text.casefold())
+
+
+def _says(found: _Figure, wanted: _Figure, named: str) -> bool:
+    # A mark the value leaves out claims nothing, so a bare 25 stands against -25. A mark it has must be there, or be in what the figure is named as.
+    named_words = _words(named)
+    if found.number != wanted.number or (wanted.sign == MINUS and found.sign != MINUS) or (wanted.sign == "+" and found.sign == MINUS):
+        return False
+    if wanted.money and wanted.money != found.money and wanted.money not in named:
+        return False
+    if wanted.percent and not found.percent and not (PERCENT_NAMES & set(named_words) or "%" in named):
+        return False
+    after = _words(wanted.after)
+    return set(_words(wanted.before)) <= {*_words(found.before), *named_words} and (_words(found.after)[: len(after)] == after or set(after) <= set(named_words))
+
+
+def _is_plain_figure(part: _Figure) -> bool:
+    # Anything beside the number that is neither a mark nor a word, such as ~ or >, says something this check can't read.
+    return part.number is not None and all(re.search(r"\w", token) for token in f"{part.before} {part.after}".split())
+
+
+def states_value(text: str, value: str, named: str = "") -> bool:
+    """Whether an entry says what a link's value says, and not only that its digits are somewhere in it. When this can't tell, the answer is no.
+
+    The sign, a percent, a currency, a unit and a group named with the figure all have to be there, on the same line and next to that figure.
+    named is what the figure is said to be when the text doesn't say, which is the column a calculation added up. A number written with or without a thousands comma is one number.
+    """
+    if not numbers_in(value):
+        return carries(text, value)
+    lines = [_figures(line) for line in text.splitlines()]
+    for part in PARTS_OF_A_VALUE.split(value):
+        wanted = _figures(part)
+        if not wanted and numbers_in(part):
+            return False
+        if not wanted:
+            if not carries(text, part):
+                return False
+        elif len(wanted) > 1 or not _is_plain_figure(wanted[0]) or not any(_says(found, wanted[0], named) for line in lines for found in line):
+            return False
+    return True
+
+
+def what_was_worked_out(entry: Entry) -> str:
+    # A calculation's operation and column, from "total of revenue by region from office-a.csv = ...", with no group or file name, because a word there isn't what its figures are.
+    return entry.text.partition(RESULT)[0].rpartition(" from ")[0].partition(" by ")[0]
 
 
 def source_line(links: Iterable[Link]) -> str:
