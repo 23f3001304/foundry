@@ -24,6 +24,8 @@ history:
 earlier_work:
   as: Analyst Lead
   room: analysts
+  # The log finds a person's name from what they wrote, so this is how a seeded answer says who gave it.
+  say: "Office A has its monthly summary."
   jobs:
     - Monthly close summary for Office A
     - Flows note for Office B

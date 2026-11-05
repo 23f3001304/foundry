@@ -42,7 +42,9 @@ def seed(scene: dict, log: Log, rooms: dict[str, str], bridge: str, now: datetim
         at = now - timedelta(days=entry["days_ago"])
         made.append(log.add_seeded(at, bucket, rooms[entry["room"]], sender_id(entry["as"], bridge), "message", entry["say"], sender_name=username(entry["as"])))
     if earlier:
-        made += _earlier_work(earlier, bucket, log, rooms[earlier["room"]], sender_id(earlier["as"], bridge), now, cards)
+        person = sender_id(earlier["as"], bridge)
+        made.append(log.add_seeded(now - timedelta(days=5), bucket, rooms[earlier["room"]], person, "message", earlier["say"], sender_name=username(earlier["as"])))
+        made += _earlier_work(earlier, bucket, log, rooms[earlier["room"]], person, now, cards)
     return made
 
 

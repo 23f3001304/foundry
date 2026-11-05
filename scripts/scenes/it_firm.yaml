@@ -19,6 +19,8 @@ history:
 earlier_work:
   as: Delivery Manager
   room: delivery
+  # The log finds a person's name from what they wrote, so this is how a seeded answer says who gave it.
+  say: "Team A has its weekly deck."
   jobs:
     - Weekly status deck for Team A
     - QA summary for the customer portal
