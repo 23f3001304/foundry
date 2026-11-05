@@ -42,8 +42,16 @@ NOT_MADE = "No pictures of this file were made, so judge what you can from its w
 OFFICE_FOLDERS = ("Microsoft Office/root/Office16", "Microsoft Office/Office16")
 # What the script exits with when it finds a PowerPoint it did not start.
 OPEN_ALREADY = 3
+# What it exits with when the PowerPoint it quit last time still hasn't gone.
+STILL_GOING = 4
+STILL_LEAVING = "PowerPoint was still closing after the last pictures, so none are available this time and it was left alone; carry on without them."
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 LOCK = "foundry-powerpoint.lock"
+# Which PowerPoint this render quit, as its process number and start time, and the same for one not yet seen to go. Makers are separate processes, so the second lives beside the lock.
+QUIT_NOTE = "quit-note.txt"
+LEAVING = Path(tempfile.gettempdir()) / "foundry-powerpoint-leaving.txt"
+# The scripts wait 20 seconds for PowerPoint to go. This is the longer limit on the step that only watches.
+WATCH_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -63,14 +71,27 @@ class Unavailable(RuntimeError):
 
 # Paths reach the script through its environment, so a file name is never read as a command.
 # It leaves at once if any PowerPoint is running, because that may be a person's. So the one it starts is its own, until a person opens a deck in it: PowerPoint is one process for the whole machine.
+# The one exception is the PowerPoint a render quit and did not see go, named by its process number and start time, alone and with no window. It only ever waits for that one, and starts its own only once nothing is running. So a wrong call costs a wait and touches nothing.
 # It closes only the temporary copy it opened, gives PowerPoint its prompts back, and quits only if nothing at all is left that a person could be using. If it can't tell, it leaves it running.
 # The pause is for whatever a person asked of PowerPoint while it was busy, which only happens once it is free: seen with real PowerPoint, a window asked for during the slides opened after them.
-# After quitting it waits for PowerPoint to go, which took up to nine seconds on a busy machine, so the next call holding the lock doesn't take it for a person's.
+# It notes which PowerPoint it is quitting, and doesn't wait: with real PowerPoint a wait in here ran its whole length with PowerPoint still there. Watching it go is the separate step below.
 POWERPOINT_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
-if (Get-Process -Name POWERPNT -ErrorAction SilentlyContinue) { exit 3 }
+$running = @(Get-Process -Name POWERPNT -ErrorAction SilentlyContinue)
+if ($running.Count -gt 0) {
+    $leaving = $false
+    try {
+        $leaving = $env:FOUNDRY_LEAVING_ID -and ($running.Count -eq 1) -and ("$($running[0].Id)" -eq $env:FOUNDRY_LEAVING_ID) -and ("$($running[0].StartTime.Ticks)" -eq $env:FOUNDRY_LEAVING_START) -and ($running[0].MainWindowHandle -eq 0)
+    } catch { $leaving = $false }
+    if (-not $leaving) { exit 3 }
+    try { $running[0] | Wait-Process -Timeout 20 -ErrorAction Stop } catch { exit 4 }
+    if (Get-Process -Name POWERPNT -ErrorAction SilentlyContinue) { exit 3 }
+}
 $app = New-Object -ComObject PowerPoint.Application
+$ours = $null
 try {
+    $found = @(Get-Process -Name POWERPNT -ErrorAction SilentlyContinue)
+    if ($found.Count -eq 1) { $ours = $found[0] }
     $app.DisplayAlerts = 1
     $deck = $null
     try {
@@ -87,8 +108,10 @@ try {
     try {
         $app.DisplayAlerts = 2
         Start-Sleep -Seconds 2
-        $quit = (@(Get-Process -Name POWERPNT).Count -eq 1) -and ($app.Visible -eq 0) -and ($app.Presentations.Count -eq 0) -and ($app.Windows.Count -eq 0) -and ($app.ProtectedViewWindows.Count -eq 0)
+        $now = @(Get-Process -Name POWERPNT)
+        $quit = $ours -and ($now.Count -eq 1) -and ($now[0].Id -eq $ours.Id) -and ($app.Visible -eq 0) -and ($app.Presentations.Count -eq 0) -and ($app.Windows.Count -eq 0) -and ($app.ProtectedViewWindows.Count -eq 0)
     } catch { $quit = $false }
+    if ($quit) { try { [IO.File]::WriteAllText($env:FOUNDRY_RENDER_NOTE, "$($ours.Id) $($ours.StartTime.Ticks)") } catch { } }
     if ($quit) { $app.Quit() }
     $slide = $null
     $deck = $null
@@ -97,8 +120,17 @@ try {
     [GC]::Collect()
     [GC]::WaitForPendingFinalizers()
     [GC]::Collect()
-    if ($quit) { try { Get-Process -Name POWERPNT -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction SilentlyContinue } catch { } }
 }
+exit 0
+"""
+
+# Watches the PowerPoint a render just quit, and can do nothing else to it. It has gone if nothing has that number and start time.
+LEAVING_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+$found = Get-Process -Id ([int]$env:FOUNDRY_LEAVING_ID) -ErrorAction SilentlyContinue
+if (-not $found) { exit 0 }
+if ("$($found.StartTime.Ticks)" -ne $env:FOUNDRY_LEAVING_START) { exit 0 }
+try { $found | Wait-Process -Timeout 20 -ErrorAction Stop } catch { exit 4 }
 exit 0
 """
 
@@ -171,6 +203,47 @@ def _one_at_a_time(seconds: float) -> Iterator[None]:
             msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
+def _powershell(script: str) -> list[str]:
+    return ["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.b64encode(script.encode("utf-16-le")).decode("ascii")]
+
+
+def _read_note(path: Path) -> tuple[str, str] | None:
+    # A note that can't be read or makes no sense is no evidence of anything.
+    try:
+        parts = path.read_text(encoding="ascii").split()
+    except (OSError, ValueError):
+        return None
+    return (parts[0], parts[1]) if len(parts) == 2 and all(part.isdigit() for part in parts) else None
+
+
+def _named(note: tuple[str, str] | None) -> dict[str, str]:
+    process, started = note or ("", "")
+    return {"FOUNDRY_LEAVING_ID": process, "FOUNDRY_LEAVING_START": started}
+
+
+def _forget_leaving() -> None:
+    try:
+        LEAVING.unlink(missing_ok=True)
+    except OSError as error:
+        logger.warning("Could not clear the note of a PowerPoint leaving: %s", error)
+
+
+def _watch_it_go(quit_note: Path) -> None:
+    # Only for a PowerPoint this render quit, and still inside the lock, so the next call doesn't take it for a person's. The pictures are made by now, so nothing here can cost them.
+    ours = _read_note(quit_note)
+    if not ours:
+        return
+    try:
+        # Written first, so the evidence is there even if this process dies while watching.
+        LEAVING.write_text(" ".join(ours), encoding="ascii")
+        code = _wait_alone(_powershell(LEAVING_SCRIPT), WATCH_SECONDS, env={**os.environ, **_named(ours)})
+    except (OSError, subprocess.SubprocessError) as error:
+        logger.warning("Could not see PowerPoint go after making pictures: %s", error)
+        return
+    if code == 0:
+        _forget_leaving()
+
+
 def powerpoint(deck: Path, folder: Path, seconds: float) -> bool:
     """Through PowerPoint itself, where it is installed and not already open. In a program of its own, so that a dialog or a hang inside PowerPoint can only ever cost the timeout, and only once."""
     global _gave_up
@@ -181,16 +254,22 @@ def powerpoint(deck: Path, folder: Path, seconds: float) -> bool:
     started = time.monotonic()
     with _one_at_a_time(seconds):
         left = max(1.0, seconds - (time.monotonic() - started))
-        script = base64.b64encode(POWERPOINT_SCRIPT.encode("utf-16-le")).decode("ascii")
-        env = {**os.environ, "FOUNDRY_DECK": str(deck), "FOUNDRY_PICTURES_FOLDER": str(folder), "FOUNDRY_PICTURE_WIDTH": str(SLIDE_WIDTH), "FOUNDRY_PICTURE_HEIGHT": str(SLIDE_HEIGHT)}
+        quit_note = folder / QUIT_NOTE
+        env = {**os.environ, "FOUNDRY_DECK": str(deck), "FOUNDRY_PICTURES_FOLDER": str(folder), "FOUNDRY_PICTURE_WIDTH": str(SLIDE_WIDTH), "FOUNDRY_PICTURE_HEIGHT": str(SLIDE_HEIGHT), "FOUNDRY_RENDER_NOTE": str(quit_note), **_named(_read_note(LEAVING))}
         try:
-            code = _wait_alone(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", script], left, env=env)
+            code = _wait_alone(_powershell(POWERPOINT_SCRIPT), left, env=env)
         except subprocess.TimeoutExpired:
             _gave_up = True
             logger.warning("PowerPoint did not finish %s in %.0f seconds. It was left running, and this process will not use it again.", deck.name, left)
             raise Unavailable(LEFT_STUCK, stuck=True) from None
+        # Past the first look, whichever one the note named has gone.
+        if code not in (OPEN_ALREADY, STILL_GOING):
+            _forget_leaving()
+        _watch_it_go(quit_note)
     if code == OPEN_ALREADY:
         raise Unavailable(POWERPOINT_OPEN)
+    if code == STILL_GOING:
+        raise Unavailable(STILL_LEAVING)
     if code:
         raise subprocess.CalledProcessError(code, "powershell.exe")
     return True
