@@ -308,6 +308,11 @@ def logo_for(brand: Brand, ground: str) -> tuple[Path, bool]:
     return brand.logo_path, True
 
 
+def ink_box(art: Image.Image) -> tuple[int, int, int, int]:
+    """What a logo file actually draws, without the clear padding round it."""
+    return art.getchannel("A").point(lambda value: 255 if value > 16 else 0).getbbox()
+
+
 def _plate_mask(art: Image.Image, pad: int) -> Image.Image:
     # The logo's own outline, grown evenly by the pad.
     mask = Image.new("L", (art.width + 2 * pad, art.height + 2 * pad), 0)
@@ -320,7 +325,7 @@ def place_logo(canvas: Image.Image, brand: Brand, ground: str, side: int, right:
     path, plated = logo_for(brand, ground)
     with Image.open(path) as logo:
         art = logo.convert("RGBA")
-    art = art.crop(art.getchannel("A").point(lambda value: 255 if value > 16 else 0).getbbox())
+    art = art.crop(ink_box(art))
     pad = round(side * PLATE_PAD_SHARE) if plated else 0
     scale = (side - 2 * pad) / max(art.size)
     art = art.resize((round(art.width * scale), round(art.height * scale)), Image.LANCZOS)
@@ -331,6 +336,21 @@ def place_logo(canvas: Image.Image, brand: Brand, ground: str, side: int, right:
         plate = [left - pad, top - pad, right, bottom]
     canvas.paste(art, (left, top), art)
     return {"logo": [left, top, left + art.width, top + art.height], "plate": plate, "logo_file": path.name}
+
+
+def plated_logo(brand: Brand, side: int) -> Image.Image:
+    """The kit's own logo on its outline plate, on nothing, for a slide to place as a picture."""
+    with Image.open(brand.logo_path) as logo:
+        art = logo.convert("RGBA")
+    art = art.crop(ink_box(art))
+    pad = round(side * PLATE_PAD_SHARE)
+    scale = (side - 2 * pad) / max(art.size)
+    art = art.resize((round(art.width * scale), round(art.height * scale)), Image.LANCZOS)
+    mask = _plate_mask(art, pad)
+    plate = Image.new("RGBA", mask.size, (*rgb(brand.colors["paper"]), 0))
+    plate.putalpha(mask)
+    plate.alpha_composite(art, (pad, pad))
+    return plate
 
 
 def _place_logo(page: Page, ground: str, side: int, right: int, bottom: int) -> None:

@@ -20,7 +20,7 @@ from pptx.util import Pt
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
 from foundry.checks import FEWEST_PEERS, PERIOD, WRITTEN_DATE, carries, figure, numbers_in, outliers
-from foundry.tools import confine, touchstone
+from foundry.tools import compositions, confine, touchstone
 from foundry.tools.layout import LINE_SPACING, NOT_RECEIVED, MakerError, contrast, figure_text, fit_size, load_font, mix, with_commas, words_of, wrap
 
 mcp = MCPServer("foundry-deck")
@@ -74,7 +74,10 @@ BAND_WIDTH, COVER_BAND_WIDTH = 24, 48
 SIDE_MARGINS = {SOLID: 56, BAND: 72, TOUCHSTONE: 48}
 # On the stone: lit letters this large are filled with rubbed metal, because a picture does not read in small ones. Row lines are this share of the way from the ground to the words.
 METAL_FROM, HAIR_SHARE = 40, 0.18
-FOOT_LOGO_LEFT, FOOT_LOGO_TOP, FOOT_LOGO_WIDTH = 876, 494, 36
+# The logo in the foot of a slide: its longer side and where it ends. It ends on the right margin, in the room between the end of the source line and the end of what a slide holds. On the stone it is small.
+FOOT_LOGO_SIDE, FOOT_LOGO_BOTTOM = 60, 516
+STONE_FOOT_LOGO_SIDE, STONE_FOOT_LOGO_BOTTOM = 36, 526
+PLATE_PIXELS_PER_POINT = 4
 COVER_LOGO_SIZE = 46
 COVER_TITLE_LARGEST, COVER_LINE_SPACING, COVER_LINE_PITCH = 92, 0.9, 1.13
 # A rub on the first slide follows the last line of the title when it has this much room, and has its own row when it does not. It runs off the edge of the slide.
@@ -276,14 +279,33 @@ def _title(slide, brand: Brand, look: Look, box: tuple[int, int, int, int], text
     _write(slide.shapes.title, brand, look, "heading", look.title, box, [_periods_together(text)], largest, smallest, middle=middle, highlight=highlight)
 
 
+def _logo_picture(slide, brand: Brand, ground: str, side: int, right: int, bottom: int) -> None:
+    # What the logo draws ends on this right and bottom. It goes straight on the ground in whichever version reads there, and only with neither on a plate following its outline, so a client's logo is never recoloured.
+    path, plated = compositions.logo_for(brand, ground)
+    if plated:
+        art = compositions.plated_logo(brand, side * PLATE_PIXELS_PER_POINT)
+        art = art.crop(compositions.ink_box(art))
+        picture_file = io.BytesIO()
+        art.save(picture_file, "PNG")
+        picture = slide.shapes.add_picture(picture_file, 0, 0)
+        wide, high = art.size
+    else:
+        picture = slide.shapes.add_picture(str(path), 0, 0)
+        with Image.open(path) as logo:
+            art = logo.convert("RGBA")
+        left, top, ends, foot = compositions.ink_box(art)
+        picture.crop_left, picture.crop_top = left / art.width, top / art.height
+        picture.crop_right, picture.crop_bottom = 1 - ends / art.width, 1 - foot / art.height
+        wide, high = ends - left, foot - top
+    scale = side / max(wide, high)
+    picture.width, picture.height = Pt(wide * scale), Pt(high * scale)
+    picture.left, picture.top = Pt(right) - picture.width, Pt(bottom) - picture.height
+    picture.name = "Logo"
+
+
 def _corner_logo(slide, brand: Brand, look: Look) -> None:
-    if brand.style == TOUCHSTONE:
-        slide.shapes.add_picture(str(brand.logo_path), Pt(FOOT_LOGO_LEFT), Pt(FOOT_LOGO_TOP), width=Pt(FOOT_LOGO_WIDTH)).name = "Logo"
-        return
-    # The logo goes on the paper colour, so on any other ground it brings a piece of paper with it.
-    if look.ground != brand.colors["paper"]:
-        _block(slide, brand.colors["paper"], 860, 440, 100, 100)
-    slide.shapes.add_picture(str(brand.logo_path), Pt(872), Pt(452), width=Pt(76))
+    side, bottom = (STONE_FOOT_LOGO_SIDE, STONE_FOOT_LOGO_BOTTOM) if brand.style == TOUCHSTONE else (FOOT_LOGO_SIDE, FOOT_LOGO_BOTTOM)
+    _logo_picture(slide, brand, look.ground, side, SIDE_RIGHT, bottom)
 
 
 def _accent_rule(slide, brand: Brand, left: int, top: int) -> None:
@@ -330,13 +352,13 @@ def _title_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, hi
         _block(slide, brand.colors["paper"], 680, 0, 280, HEIGHT)
         if not highlight:
             _accent_rule(slide, brand, 56, 130)
-        slide.shapes.add_picture(str(brand.logo_path), Pt(730), Pt(180), width=Pt(180))
+        slide.shapes.add_picture(str(brand.logo_path), Pt(730), Pt(180), width=Pt(180)).name = "Logo"
         title_box, subtitle_box = (56, 150, 580, 230), (56, 400, 580, 60)
     else:
         slide = _new_slide(deck, brand, look, cover=True)
         if not highlight:
             _accent_rule(slide, brand, 96, 130)
-        slide.shapes.add_picture(str(brand.logo_path), Pt(770), Pt(36), width=Pt(150))
+        _logo_picture(slide, brand, look.ground, 150, SIDE_RIGHT, 186)
         title_box, subtitle_box = (96, 150, 640, 230), (96, 400, 640, 60)
     _title(slide, brand, look, title_box, title, 72, 22, highlight=highlight)
     if subtitle:
