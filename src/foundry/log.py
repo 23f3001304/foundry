@@ -10,8 +10,10 @@ from pathlib import Path
 KINDS = (
     "message", "voice_heard", "voice_confirmed", "voice_corrected", "job_opened", "card_opened", "card_answered", "agent_marker",
     "file_made", "review", "delivered", "note_cleaned", "report_approved", "item_asked", "item_reminded", "item_answer",
-    "item_reason", "item_passed_on", "availability", "flag", "dashboard_action", "revision_notes", "calculation", "reminder_skipped", "mark_kept", "person_moved",
+    "item_reason", "item_passed_on", "availability", "flag", "dashboard_action", "revision_notes", "calculation", "reminder_skipped", "mark_kept", "person_moved", "design_style",
 )
+# The one line a maker says about the style it chose. It is a kind of its own, because neither the number check nor anyone's words should read it.
+DESIGN_STYLE = "design_style"
 # What a person wrote or said in a room. Only these show that Foundry can reach them there.
 WRITTEN = ("message", "voice_heard")
 # The log only grows, so when a demo's rooms or bridge change, the seed tool says where a seeded person is now with one of these, at the time of their line. It isn't something they wrote. Its ref is the id they had before.

@@ -46,6 +46,7 @@ def main(mode: str, name: str, slug: str) -> None:
     ending = agents_ending(mode, name)
     kit = (brand_dir / "kit.md").read_text(encoding="utf-8")
     tokens = yaml.safe_load(kit.split("---")[1])
+    guide = (REPO / "templates" / "design-guide.md").read_text(encoding="utf-8")
     with httpx.Client(base_url=f"{url}/gateway", timeout=120, trust_env=False) as gateway:
         gateway.post("/auth/login", json={"email": os.environ["SWITCH_EMAIL"], "password": os.environ["SWITCH_PASSWORD"]}).raise_for_status()
         online = next((machine for machine in gateway.get("/management/controllers").json() if machine["state"] == "online"), None)
@@ -67,6 +68,7 @@ def main(mode: str, name: str, slug: str) -> None:
                 "audience": tokens["audience"],
                 "tone": tokens["voice"],
                 "brand_kit": kit,
+                "design_guide": guide,
                 "brand_dir": str(brand_dir),
                 "approver": template_approver(brand_dir),
                 "sticker_mode": mode_for(load_brand_dir(brand_dir), os.environ.get("FOUNDRY_STICKER_MODE", "subtle")),

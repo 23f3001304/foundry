@@ -1,4 +1,4 @@
-"""MCP tool for maker agents: the one limited way to read the log. It takes a job's token, never a bucket, and offers three lookups."""
+"""MCP tool for maker agents: the one limited way to read the log. It takes a job's token, never a bucket, and offers three lookups and one line a maker may add: the style it chose."""
 
 import json
 import os
@@ -12,7 +12,7 @@ from foundry.chain import Step, chain_for, name_of, names, visible_entries
 from foundry.checks import shown_words
 from foundry.items import Item, ItemStore, desk_wrote, own_words, status_line
 from foundry.jobs import Job, JobStore
-from foundry.log import Entry, Log
+from foundry.log import DESIGN_STYLE, Entry, Log
 from foundry.text import quiet
 
 mcp = MCPServer("foundry-log")
@@ -25,6 +25,10 @@ NOTHING_YET = "Nothing has been logged for this job yet."
 NO_ITEMS = "This job has no items."
 NO_STEPS = "Nothing is behind that item."
 NOT_SET = "{name} is not set, so the log tool cannot find its database."
+STYLE_SENDER = "foundry-maker"
+MOST_STYLE_CHARS = 200
+STYLE_TOO_LONG = "Say your style in one line of at most {most} characters: the piece, the style and why."
+STYLE_NOTED = "Noted for the reviewer. Now make the work, and keep your reply as it is."
 ZONE_NAMES = {330: "IST", 0: "UTC"}
 
 
@@ -129,6 +133,19 @@ def flagged_chain(token: str, flag_id: int) -> str:
     # With no inputs folder named, no path is a file, which is the careful way for it to fail.
     steps = chain_for(log, job.bucket, flag_id, os.environ.get("FOUNDRY_INPUTS_DIR") or None)
     return "\n".join([AS_DATA, *map(_step_line, steps)] if steps else [AS_DATA, NO_STEPS])
+
+
+@mcp.tool()
+def state_style(token: str, line: str) -> str:
+    """Say which style from the design guide you chose for your piece and why, in one line, before you make anything. Such as: Deck: Swiss with data-led figures, because the sponsor reads it for one number.
+
+    It is kept on the job for the reviewer to judge the work against, and for the other maker, so a job looks like one thing. It never goes in your reply to foundry-desk.
+    """
+    job, said = _job(token), _one_line(line)
+    if not said or len(said) > MOST_STYLE_CHARS:
+        raise ToolError(STYLE_TOO_LONG.format(most=MOST_STYLE_CHARS))
+    Log(_path("FOUNDRY_LOG_DB")).add(clock(), job.bucket, job.room_id, STYLE_SENDER, DESIGN_STYLE, said, sender_name=STYLE_SENDER, job_id=job.id)
+    return STYLE_NOTED
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ business_type: Marketing agency
 audience: Its clients' marketing teams, and its own studio
 stickers: playful
 voice: Direct and generous. Credits the idea and not the person. Says what is made, for whom, and what it still needs.
+design_style: Bold poster, plain and direct
 ---
 Bhorvela Studio is a fictional marketing agency, made up for this demo along with everything in this folder. It is not a real company. Bhorvela is a made-up word for the first light of morning. Phatakha Pop and Ambaryug Teas, the two clients its scene names, are made up too.
 

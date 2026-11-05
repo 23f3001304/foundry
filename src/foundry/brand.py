@@ -64,6 +64,8 @@ class Brand:
     guidance: str = ""
     style: str = "band"
     business_type: str = ""
+    # One line saying which style from the design guide fits this business. The kit's word outranks the guide's.
+    design_style: str = ""
     stickers: str = ""
 
     def font_file(self, role: str) -> Path | None:
@@ -110,6 +112,7 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
     # Left out, or left blank, these are nothing and the ordinary look. Anything else has to be words.
     style = "band" if data.get("style") is None else _words(data["style"], "style")
     business_type = "" if data.get("business_type") is None else _words(data["business_type"], "business_type")
+    design_style = "" if data.get("design_style") is None else _words(data["design_style"], "design_style")
     # YAML reads a bare off as false.
     stickers = "off" if data.get("stickers") is False else "" if data.get("stickers") is None else _words(data["stickers"], "stickers")
     if stickers and stickers not in STICKER_MODES:
@@ -117,7 +120,7 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
     logo_path = Path(assets_dir) / LOGO
     if not logo_path.exists():
         raise BrandError(f"The brand kit has no {LOGO} in its folder.")
-    return Brand(name, colours, fonts, voice, logo_path, guidance.strip(), style, business_type, stickers)
+    return Brand(name, colours, fonts, voice, logo_path, guidance.strip(), style, business_type, design_style, stickers)
 
 
 BRAND_PIN = "FOUNDRY_BRAND_DIR"
