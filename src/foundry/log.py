@@ -10,10 +10,12 @@ from pathlib import Path
 KINDS = (
     "message", "voice_heard", "voice_confirmed", "voice_corrected", "job_opened", "card_opened", "card_answered", "agent_marker",
     "file_made", "review", "delivered", "note_cleaned", "report_approved", "item_asked", "item_reminded", "item_answer",
-    "item_reason", "item_passed_on", "availability", "flag", "dashboard_action", "revision_notes", "calculation", "reminder_skipped", "mark_kept",
+    "item_reason", "item_passed_on", "availability", "flag", "dashboard_action", "revision_notes", "calculation", "reminder_skipped", "mark_kept", "person_moved",
 )
 # What a person wrote or said in a room. Only these show that Foundry can reach them there.
 WRITTEN = ("message", "voice_heard")
+# The log only grows, so when a demo's rooms or bridge change, the seed tool says where a seeded person is now with one of these, at the time of their line. It isn't something they wrote. Its ref is the id they had before.
+MOVED = "person_moved"
 COLUMNS = ("id", "at", "bucket", "room_id", "sender", "sender_name", "kind", "text", "job_id", "item_id", "ref", "seeded")
 
 
@@ -93,16 +95,18 @@ class Log:
     def writers(self, bucket: str, excluding: Collection[str] = ()) -> list[Writer]:
         # Rooms left out are ones Foundry can't ask in, so a person's room is their newest message outside them.
         # One pass over the bucket's written entries in time order, so it grows with the log and not with the log times the people in it.
-        marks = ", ".join("?" * len(WRITTEN))
+        marks = ", ".join("?" * (len(WRITTEN) + 1))
         skip = f" AND room_id NOT IN ({', '.join('?' * len(excluding))})" if excluding else ""
         with closing(self._connect()) as db:
             rows = db.execute(
-                f"SELECT sender, sender_name, room_id, at FROM entries WHERE bucket = ? AND kind IN ({marks}){skip} ORDER BY at, id",
-                (bucket, *WRITTEN, *excluding),
+                f"SELECT sender, sender_name, room_id, at, kind, ref FROM entries WHERE bucket = ? AND kind IN ({marks}){skip} ORDER BY at, id",
+                (bucket, *WRITTEN, MOVED, *excluding),
             ).fetchall()
         newest: dict[str, tuple[str, float]] = {}
         names: dict[str, str] = {}
-        for sender, name, room_id, at in rows:
+        for sender, name, room_id, at, kind, ref in rows:
+            if kind == MOVED:
+                newest.pop(ref, None)
             # A sender moves to the end each time they write, so the dict ends up oldest writer first.
             newest.pop(sender, None)
             newest[sender] = (room_id, at)

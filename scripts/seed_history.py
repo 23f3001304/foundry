@@ -6,13 +6,13 @@ uv run --env-file .env python scripts/seed_history.py it_firm
 import os
 import sys
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
 from foundry.cards import ANSWERED, Card, CardQueue, Trigger
-from foundry.log import Entry, Log
+from foundry.log import MOVED, Entry, Log
 from foundry.switch_client import DESK_NAME
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,9 +31,10 @@ INPUTS_ASKED = (2, 0, 1, 3)
 class Written:
     entries: list[Entry]
     cards: list[Card]
+    moved: list[Entry] = field(default_factory=list)
 
     def __bool__(self) -> bool:
-        return bool(self.entries or self.cards)
+        return bool(self.entries or self.cards or self.moved)
 
 
 @dataclass(frozen=True)
@@ -50,12 +51,12 @@ class Planned:
 
     @property
     def key(self) -> tuple:
-        return _key(self.kind, self.sender, self.text, self.job_id, self.ref)
+        return _key(self.kind, self.sender_name, self.text, self.job_id, self.ref)
 
 
-def _key(kind: str, sender: str, text: str, job_id: str | None, ref: str | None) -> tuple:
-    # How this tool knows its own writing again, at any age. Seeded work goes by the ids this tool gave it. A seeded message has no id, because older seedings gave it none, so it goes by who said what.
-    return (kind, job_id, ref) if job_id else (kind, sender, text)
+def _key(kind: str, name: str, text: str, job_id: str | None, ref: str | None) -> tuple:
+    # How this tool knows its own writing again, at any age, in any room and on any bridge. Seeded work goes by the ids this tool gave it. A seeded message has no id, because older seedings gave it none, so it goes by the name that said it and the words. A sender id won't do, because it holds the bridge's.
+    return (kind, job_id, ref) if job_id else (kind, name, text)
 
 
 def seed(scene: dict, log: Log, rooms: dict[str, str], bridge: str, now: datetime, cards: CardQueue | None = None) -> Written:
@@ -73,7 +74,7 @@ def seed(scene: dict, log: Log, rooms: dict[str, str], bridge: str, now: datetim
         raise ValueError("This scene seeds cards, so it needs the work file, and nothing has been written.")
     found: dict[tuple, list[Entry]] = {}
     for entry in log.seeded(bucket):
-        found.setdefault(_key(entry.kind, entry.sender, entry.text, entry.job_id, entry.ref), []).append(entry)
+        found.setdefault(_key(entry.kind, entry.sender_name, entry.text, entry.job_id, entry.ref), []).append(entry)
     lines = [
         Planned(timedelta(days=entry["days_ago"]), rooms[entry["room"]], sender_id(entry["as"], bridge), "message", entry["say"], username(entry["as"]))
         for entry in sorted(history, key=lambda entry: entry["days_ago"], reverse=True)
@@ -85,7 +86,7 @@ def seed(scene: dict, log: Log, rooms: dict[str, str], bridge: str, now: datetim
     # Each part keeps the times it started with, so a part finished later still adds up. A part that hasn't started is told from now.
     entries = _write_missing(lines, bucket, log, found, _told_from(lines, found, now))
     entries += _write_missing(work, bucket, log, found, written_from)
-    return Written(entries, written_cards)
+    return Written(entries, written_cards, _move_people([*lines, *work[:1]], bucket, log))
 
 
 def _earlier_work(earlier: dict, room: str, person: str, name: str) -> list[Planned]:
@@ -158,13 +159,29 @@ def _write_missing(plan: list[Planned], bucket: str, log: Log, found: dict[tuple
     return made
 
 
+def _move_people(lines: list[Planned], bucket: str, log: Log) -> list[Entry]:
+    # A person's newest seeded line says where Foundry asks them. The log only grows, so a line that's already there can't take on a scene's fresh rooms or a new bridge's id, and writing it again would double it. What goes in is a note of where they are now, at the time of that line, so they last wrote when they last wrote.
+    planned = {(line.sender_name, line.text): line for line in lines}
+    newest: dict[str, Entry] = {}
+    for entry in log.seeded(bucket):
+        if entry.kind in ("message", MOVED) and (entry.sender_name not in newest or entry.at >= newest[entry.sender_name].at):
+            newest[entry.sender_name] = entry
+    moved = []
+    for name, entry in newest.items():
+        line = planned.get((name, entry.text))
+        if line is not None and (line.room, line.sender) != (entry.room_id, entry.sender):
+            moved.append(log.add_seeded(entry.at, bucket, line.room, line.sender, MOVED, entry.text, sender_name=name, ref=entry.sender))
+    return moved
+
+
 def outcome(scene: dict, written: Written, path: object) -> str:
     if not scene.get("history"):
         return "This scene has no earlier history, so there is nothing to write."
     if not written:
         return f"This scene's earlier history is already all in {path}, so nothing was written."
-    entries, cards = len(written.entries), len(written.cards)
-    return f"Wrote {entries} seeded {'entry' if entries == 1 else 'entries'} and {cards} seeded {'card' if cards == 1 else 'cards'} to {path}."
+    entries, cards, moved = len(written.entries), len(written.cards), len(written.moved)
+    wrote = f"Wrote {entries} seeded {'entry' if entries == 1 else 'entries'} and {cards} seeded {'card' if cards == 1 else 'cards'} to {path}." if entries or cards else f"This scene's earlier history is already all in {path}, so none of it was written again."
+    return f"{wrote} {moved} {'person' if moved == 1 else 'people'} moved to this scene's rooms and ids, so that is where they are asked." if moved else wrote
 
 
 def _rooms() -> dict[str, str]:
