@@ -83,6 +83,12 @@ def main(mode: str, name: str, slug: str) -> None:
     # A client's own makers are pinned to its brand folder and told their own folder. Shared makers serve many businesses, so they are not.
     setup_makers(online["status"]["machine"]["workspaces_dir"], ending, str(brand_dir) if ending else "")
     rooms = {room["room_name"]: room["room_id"] for room in answer.json()["room"]["rooms"]}
+    save_rooms(mode, name, slug, rooms)
+    print(f"Created {', '.join(rooms)} and saved their ids in {ENV_FILE}")
+
+
+def save_rooms(mode: str, name: str, slug: str, rooms: dict[str, str]) -> None:
+    ending = agents_ending(mode, name)
     inside = (rooms[f"{name}-studio"], rooms[f"{name}-review"]) if mode == "agency" else (rooms[f"{name}-projects"],) * 2
     # The desk is told the ending, so it asks this client's agents by name.
     entry = f"{rooms[name]}:{inside[0]}:{inside[1]}" + (f":{ending}" if ending else "")
@@ -90,7 +96,17 @@ def main(mode: str, name: str, slug: str) -> None:
     packs = os.environ.get("FOUNDRY_PACKS", "")
     pack = f"{rooms[name]}:{slug}"
     save({"FOUNDRY_ROOMS": f"{current},{entry}" if current else entry, "FOUNDRY_PACKS": f"{packs},{pack}" if packs else pack})
-    print(f"Created {', '.join(rooms)} and saved their ids in {ENV_FILE}")
+
+
+def remember_rooms(seed: tuple[tuple[str, str, str], ...], rooms: dict[str, str]) -> None:
+    # Puts in .env any room Switch has that .env doesn't name, as a run stopped just after Switch made it leaves. A room whose set is only partly there is left for Switch to say so.
+    named = os.environ.get("FOUNDRY_ROOMS", "")
+    for mode, name, slug in seed:
+        if name in rooms and rooms[name] not in named:
+            inside = (f"{name}-studio", f"{name}-review") if mode == "agency" else (f"{name}-projects",)
+            if all(room in rooms for room in inside):
+                save_rooms(mode, name, slug, rooms)
+                named = os.environ.get("FOUNDRY_ROOMS", "")
 
 
 if __name__ == "__main__":
