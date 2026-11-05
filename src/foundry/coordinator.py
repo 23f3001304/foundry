@@ -289,7 +289,8 @@ def _writer_named(writers: list[Writer], ref: str | None) -> Writer | None:
 
 def _owned_by(item: Item, ref: str | None) -> bool:
     wanted = _key(ref or "")
-    return bool(wanted) and wanted in (_key(item.owner), _key(item.owner_name))
+    # As for a writer, someone types a name the way a card shows it, so that finds the owner as well as what they are matched on.
+    return bool(wanted) and wanted in (_key(item.owner), _key(item.owner_name), _key(item.shown_owner))
 
 
 def _ids(entry_ids: Iterable[int]) -> str | None:
@@ -1179,8 +1180,8 @@ class Coordinator:
         speaker = self._name_of(burst.sender, heard.bucket)
         reason, job_id = away, None
         # Whoever says it, it is taken only when the person it is about owes an open item. With nothing owed there is nothing to follow, and what was written may be a note with a leave in it.
-        # The sender may speak of themselves in the third person, which is still themselves.
-        if not reading.person or _key(reading.person) in (_key(burst.sender), _key(speaker)):
+        # The sender may speak of themselves in the third person, which is still themselves, and by the name a card shows as well as by their login.
+        if not reading.person or _key(reading.person) in (_key(burst.sender), _key(speaker), _key(shown_name(speaker, burst.sender))):
             who, name, items = burst.sender, speaker, [item for item in heard.own if item.state is ItemState.OPEN]
             if not items:
                 return False
