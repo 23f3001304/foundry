@@ -50,6 +50,10 @@ CONTROLLER_CLI = "packages/agent-controller/dist/cli.mjs"
 SWITCH_SECRETS = ("DB_PASSWORD", "DB_OWNER_PASSWORD", "AGENT_REGISTRATION_TOKEN", "GATEWAY_ADMIN_PASSWORD", "MATTERMOST_ADMIN_PASSWORD", "MATTERMOST_USER_PASSWORD", "SECRET_KEYS", "CONTROLLER_TOKEN_SECRET")
 # What is never to reach the screen from Foundry's own .env.
 FOUNDRY_SECRETS = ("SWITCH_PASSWORD", "MATTERMOST_ADMIN_PASSWORD", "FOUNDRY_DESK_KEY", "FOUNDRY_DEMO_PASSWORD", "FOUNDRY_DASHBOARD_SECRET")
+# Where Foundry keeps its data, by the setting that says so. A real setup's are under .foundry/data.
+FOUNDRY_DATA = {"FOUNDRY_BUFFER_DB": "foundry-buffer.db", "FOUNDRY_LOG_DB": "foundry-log.db", "FOUNDRY_WORK_DB": "foundry-work.db", "FOUNDRY_JOBS_DB": "foundry-jobs.db", "FOUNDRY_INPUTS_DIR": "foundry-inputs"}
+# What setup itself puts in .foundry. state.json goes last, so a reset that stops halfway can be run again.
+OWN_IN_HOME = ("switch", "controller-data", "data", "logs", "corepack", "pnpm-store", "try", "try.json", "images.yml", "images.yml.tmp", "state.json.tmp")
 PORT_NAMES = {"api": "Switch API", "mattermost": "Mattermost", "gateway": "Switch gateway", "postgres": "Postgres", "dashboard": "Foundry dashboard"}
 WINDOWS_TIME = re.compile(r"\d{4}-\d\d-\d\dT[\d:.]+Z")
 DEFAULT_PORTS = {"api": 8000, "mattermost": 8065, "gateway": 3000, "postgres": 5432, "dashboard": 8100}
@@ -97,6 +101,13 @@ FAIL_DESK_REGISTER = "Switch would not register the desk."
 FAIL_ROOMS = "The demo's rooms and agents could not all be made."
 FAIL_DESK = "The desk stopped as soon as it started."
 FAIL_DASHBOARD = "The dashboard did not start."
+FAIL_SWITCH_UNREADABLE = "Git could not read Switch's copy in .foundry/switch, so it was left as it is, with its settings. To see why, run git -C .foundry/switch status."
+FAIL_OLD_VOLUME_RECORDED = "Docker still has this Foundry's database in volume {volume}, but the settings with its passwords are gone, and new passwords can't open it. To start over, run this with --reset."
+FAIL_OLD_VOLUME = "Docker still has a database in volume {volume} from an earlier Foundry in this same folder, and new passwords can't open it. Setup has no record of making it, so it left it. If you don't need it, run docker compose -p {project} down -v and docker volume rm {volume}."
+FAIL_STATE = ".foundry/state.json can't be read, so setup can't tell what it made, and nothing was changed. To start over, end what is running from here yourself and delete the .foundry folder."
+FAIL_ENV_TEXT = "{name} isn't plain UTF-8 text, so setup can't read it. PowerShell's > can write a file that way. Save it as UTF-8."
+FAIL_RESET_NO_DOCKER = "Docker isn't answering, so setup can't remove its containers and nothing was changed: start Docker and run this again."
+FAIL_RESET_DOWN = "Docker could not remove the containers and data of project {project}, so nothing else was removed. The details are in {log}. Run this again when Docker is working."
 FAIL_PORT_CHOSEN = "Port {port}, which this Foundry's {service} uses, is taken by something else now. Close whatever is using it. To start over on other ports, run this with --reset."
 FAIL_PORT_REFUSED = "Port {port} for the {service} is in use, and setup can't go on without a port for it. Close whatever is using it."
 FAIL_PORT_NOBODY = "Port {port} for the {service} is in use. Nobody is here to ask, so nothing was changed. To use {alternative} instead, run this with --yes."
@@ -154,6 +165,8 @@ class Step:
 class Machine:
     """Everything setup asks of the computer it runs on."""
 
+    _me: str | None = None
+
     def which(self, name: str) -> str | None:
         return shutil.which(name)
 
@@ -178,6 +191,23 @@ class Machine:
 
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
+
+    def keep_private(self, path: Path) -> None:
+        if os.name == "nt":
+            self._private_windows(path)
+        else:
+            self._private_posix(path)
+
+    def _private_posix(self, path: Path) -> None:
+        os.chmod(path, 0o600)
+
+    def _private_windows(self, path: Path) -> None:
+        # Mode bits mean nothing here. What protects a file is its access list, which otherwise inherits whatever the folder allows.
+        if self._me is None:
+            found = re.search(r"S-1-[\d-]+", self.run(["whoami", "/user", "/fo", "csv", "/nh"], timeout=30).output)
+            self._me = found.group() if found else ""
+        if self._me:
+            self.run(["icacls", path, "/inheritance:r", "/grant:r", f"*{self._me}:F"], timeout=30)
 
     def run(self, command: list, cwd: Path | None = None, env: Mapping[str, str] | None = None, log: Path | None = None, timeout: float | None = None) -> Result:
         # With a log, what the command says goes there and only there. The caller reads the output only of commands that are asking a question.
@@ -591,40 +621,59 @@ class Setup:
         self.images_file = self.home / "images.yml"
         self.switch_env_file = self.switch / ".env"
         self.env_file = repo / ".env"
+        self.state_broken = False
         self.state = self._read_state()
-        self._hide_secrets()
 
     # What it remembers
 
     def _read_state(self) -> dict:
         try:
-            return json.loads(self.state_file.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+            found = json.loads(self.state_file.read_text(encoding="utf-8"))
+            if isinstance(found, dict):
+                return found
+        except FileNotFoundError:
             return {}
+        except (OSError, ValueError):
+            pass
+        self.state_broken = True
+        return {}
 
     def _save_state(self) -> None:
+        if "before" not in self.state:
+            # Whatever is in its folder before its first word there isn't its own to remove.
+            self.state["before"] = sorted(entry.name for entry in self.home.iterdir()) if self.home.is_dir() else []
         self.home.mkdir(parents=True, exist_ok=True)
         self._write(self.state_file, json.dumps(self.state, indent=2) + "\n")
 
     def _write(self, path: Path, text: str) -> None:
-        # Whole or not at all, so a stop halfway never leaves half a settings file. On macOS and Linux, only this user can read it.
+        # Whole or not at all, so a stop halfway never leaves half a settings file. Private before a word of it is written.
         temporary = path.with_name(path.name + ".tmp")
-        temporary.write_text(text, encoding="utf-8", newline="\n")
-        if os.name != "nt":
-            temporary.chmod(0o600)
+        temporary.unlink(missing_ok=True)
+        os.close(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+        self.machine.keep_private(temporary)
+        with temporary.open("w", encoding="utf-8", newline="\n") as file:
+            file.write(text)
         temporary.replace(path)
 
-    def _hide_secrets(self) -> None:
-        for name, value in {**self._env_values(self.switch_env_file), **self._env_values(self.env_file)}.items():
-            if value and (name in SWITCH_SECRETS or name in FOUNDRY_SECRETS):
-                self.ui.secret(value)
+    def _hide_secrets(self, say: bool = False) -> None:
+        for path in (self.switch_env_file, self.env_file):
+            try:
+                values = self._env_values(path)
+            except Failure as unreadable:
+                if say:
+                    self.ui.say(str(unreadable))
+                continue
+            for name, value in values.items():
+                if value and (name in SWITCH_SECRETS or name in FOUNDRY_SECRETS):
+                    self.ui.secret(value)
 
-    @staticmethod
-    def _env_values(path: Path) -> dict[str, str]:
+    def _env_values(self, path: Path) -> dict[str, str]:
         try:
             return parse_env(path.read_text(encoding="utf-8"))
         except OSError:
             return {}
+        except UnicodeError:
+            raise Failure(FAIL_ENV_TEXT.format(name=self._shown(path))) from None
 
     def _log(self, name: str) -> Path:
         return self.logs / f"{name}.log"
@@ -703,11 +752,13 @@ class Setup:
         return chosen
 
     def _ports_held(self) -> set[int]:
+        # Whatever a container of this project publishes, whatever the others are doing, so a stop halfway blocks nothing.
         held: set[int] = set()
         if "ports" not in self.state:
             return held
-        if self._services_up():
-            held |= {self.ports[name] for name in PORT_SETTINGS}
+        for row in self._service_rows():
+            if row.get("State") not in ("exited", "dead", "created"):
+                held |= {entry["PublishedPort"] for entry in row.get("Publishers") or [] if isinstance(entry, dict) and entry.get("PublishedPort")}
         if self._alive("dashboard"):
             held.add(self.ports["dashboard"])
         return held
@@ -779,19 +830,27 @@ class Setup:
     def switch_is_here(self) -> bool:
         if not (self.switch / "console").is_dir():
             return False
-        return self.machine.run([self.machine.which("git") or "git", "-C", self.switch, "rev-parse", "HEAD"], timeout=30).output.strip() == PINNED_COMMIT
+        asked = self.machine.run([self.machine.which("git") or "git", "-C", self.switch, "rev-parse", "HEAD"], timeout=30)
+        # Git failing says nothing about the commit, and nothing here is deleted on the strength of it.
+        if asked.code != 0:
+            raise Failure(FAIL_SWITCH_UNREADABLE)
+        return asked.output.strip() == PINNED_COMMIT
 
     def get_switch(self) -> None:
-        # Only this one commit, which is far smaller than the whole history. With its line endings kept, because the containers read these files.
-        if self.switch.exists():
-            self.machine.remove_tree(self.switch)
-        self.switch.mkdir(parents=True)
+        # Only this one commit, which is far smaller than the whole history. With its line endings kept, because the containers read these files. Always in place, because the folder holds the .env with this stack's passwords, which git leaves alone and nothing can recover.
+        self.switch.mkdir(parents=True, exist_ok=True)
         git = [self.machine.which("git") or "git", "-C", self.switch]
-        for arguments in (("init", "-q"), ("config", "core.autocrlf", "false"), ("config", "core.longpaths", "true"), ("remote", "add", "origin", SWITCH_GIT), ("fetch", "--depth", "1", "origin", PINNED_COMMIT), ("checkout", "-q", "FETCH_HEAD")):
+        for arguments in (("init", "-q"), ("config", "core.autocrlf", "false"), ("config", "core.longpaths", "true"), ("fetch", "--depth", "1", SWITCH_GIT, PINNED_COMMIT), ("checkout", "-q", "-f", "FETCH_HEAD")):
             if self.machine.run([*git, *arguments], log=self._log("switch-clone"), timeout=600).code != 0:
                 raise self._failed(FAIL_CLONE, "switch-clone")
+        # A build from an earlier commit isn't this commit's.
+        (self.console / CONTROLLER_CLI).unlink(missing_ok=True)
 
     def write_switch_env(self) -> None:
+        # Only ever when there is no such file, so a stack's secrets never change under it. A database left with no file has passwords nobody can now give it.
+        volume = f"{self.project()}_pgdata"
+        if self.machine.run([self.machine.which("docker") or "docker", "volume", "inspect", volume], timeout=60).code == 0:
+            raise Failure((FAIL_OLD_VOLUME_RECORDED if self.state.get("stack_started") else FAIL_OLD_VOLUME).format(volume=volume, project=self.project()))
         self._write(self.switch_env_file, switch_env((self.switch / ".env.example").read_text(encoding="utf-8"), self.ports))
         self._hide_secrets()
 
@@ -939,6 +998,8 @@ class Setup:
             "FOUNDRY_REVIEWER_PROVIDER": "claude",
             "FOUNDRY_REVIEWER_MODEL": "",
             "FOUNDRY_DASHBOARD_PORT": str(self.ports["dashboard"]),
+            # In its own folder, so a hand-run Foundry's files in this folder are neither written to nor taken by --reset.
+            **{setting: f".foundry/data/{name}" for setting, name in FOUNDRY_DATA.items()},
             # The scripted scenes need it this short, and a person typing in a demo room doesn't want to wait a minute.
             "FOUNDRY_QUIET_SECONDS": "8",
         }
@@ -952,6 +1013,7 @@ class Setup:
             raise Failure(FAIL_ENV_NOT_OURS)
         self.state.setdefault("created", {})["env"] = True
         self._save_state()
+        (self.home / "data").mkdir(parents=True, exist_ok=True)
         text = self.env_file.read_text(encoding="utf-8") if self.env_file.exists() else (self.repo / ".env.example").read_text(encoding="utf-8")
         self._write(self.env_file, fill_env(text, self._foundry_values()))
         self._hide_secrets()
@@ -1084,6 +1146,10 @@ class Setup:
     # The commands
 
     def install(self) -> int:
+        if self.state_broken:
+            self.ui.say(FAIL_STATE)
+            return 1
+        self._hide_secrets()
         self.ui.say("Setting up Foundry. A first run takes about 20 minutes, most of it downloads. It is safe to stop and run again.")
         self.ui.say()
         code = run_steps(self.steps(), self.ui, self._log("setup"))
@@ -1107,6 +1173,10 @@ class Setup:
         self.ui.say("To see how it's doing, run this with --status. To stop it, --stop. To remove all of it, --reset.")
 
     def status(self) -> int:
+        self._hide_secrets(say=True)
+        if self.state_broken:
+            self.ui.say(FAIL_STATE)
+            return 1
         if not self.state.get("ports"):
             self.ui.say("Foundry has not been set up here yet. Run this with no options to set it up, or with --try to look around with made-up data.")
             return 0
@@ -1127,6 +1197,10 @@ class Setup:
         return 0
 
     def stop(self, closing: str = "Stopped what setup started. Run this again to start it all back up.") -> int:
+        self._hide_secrets(say=True)
+        if self.state_broken:
+            self.ui.say(FAIL_STATE)
+            return 1
         if not self.state.get("processes") and not self.state.get("stack_started"):
             self.ui.say("Nothing to stop. Setup has not started anything here.")
             return 0
@@ -1143,25 +1217,59 @@ class Setup:
 
     def _removals(self) -> list[str]:
         created = self.state.get("created", {})
-        lines = [f"the Docker containers and data of project {self.project()}"]
+        lines = []
+        if self.state.get("stack_started"):
+            lines.append(f"the Docker containers, network and data of project {self.project()}")
         if self.state.get("pulled_images"):
             lines.append(f"{len(self.state['pulled_images'])} Docker images only this setup downloaded")
-        lines.append(".foundry, with Switch's copy, the controller and the logs")
+        lines.append(".foundry, with Switch's copy, the controller, Foundry's databases and uploads, and the logs")
         if created.get("env"):
-            lines.append(".env and Foundry's foundry-*.db files and foundry-inputs")
+            lines.append(".env, which setup wrote")
         if created.get("venv"):
-            lines.append(".venv")
+            lines.append(".venv, which setup made")
         if created.get("agents_folder") and "ports" in self.state:
             lines.append(str(self.agents_folder()))
         return lines
 
+    def _kept(self) -> list[str]:
+        # What is here and was not recorded as made by setup. Its own data is all in .foundry/data, so these foundry files are somebody else's.
+        created = self.state.get("created", {})
+        kept = [path.name for path in sorted(self.repo.glob("foundry-*.db*"))]
+        if (self.repo / "foundry-inputs").exists():
+            kept.append("foundry-inputs")
+        if self.env_file.exists() and not created.get("env"):
+            kept.append(".env")
+        if (self.repo / ".venv").exists() and not created.get("venv"):
+            kept.append(".venv")
+        if "ports" in self.state and not created.get("agents_folder") and self.agents_folder().exists():
+            kept.append(str(self.agents_folder()))
+        if self.home.is_dir():
+            kept += [f".foundry/{entry.name}" for entry in sorted(self.home.iterdir()) if entry.name != "state.json" and (entry.name not in OWN_IN_HOME or entry.name in self.state.get("before", []))]
+        return kept
+
+    def _down(self) -> list:
+        if self.images_file.exists() and (self.switch / COMPOSE_FILE).exists():
+            return self.compose("down", "-v", "--remove-orphans")
+        # Its files have gone, and the project name alone still reaches its containers and nothing else.
+        return [self.machine.which("docker") or "docker", "compose", "-p", self.project(), "down", "-v", "--remove-orphans"]
+
     def reset(self) -> int:
-        if not self.state and not self.home.exists():
-            self.ui.say("Nothing to remove. Setup has not made anything here.")
+        self._hide_secrets(say=True)
+        if self.state_broken:
+            self.ui.say(FAIL_STATE)
+            return 1
+        if not self.state:
+            self.ui.say("Nothing to remove. Setup has no record of making anything here.")
             return 0
-        self.ui.say("This removes everything setup made, and nothing else:")
+        if self.state.get("stack_started") and _quiet_run(self.machine, "docker", "info").code != 0:
+            self.ui.say(FAIL_RESET_NO_DOCKER)
+            return 1
+        kept = self._kept()
+        self.ui.say("This removes what setup recorded making, and nothing else:")
         for line in self._removals():
             self.ui.say(f"  - {line}")
+        if kept:
+            self.ui.say(f"These were not made by setup, so they stay: {', '.join(kept)}.")
         answer = "yes" if self.yes else self.ui.ask("Type yes to remove all of it:")
         if answer is None:
             self.ui.say("Nobody is here to answer, so nothing was removed. To say yes in advance, add --yes.")
@@ -1169,27 +1277,46 @@ class Setup:
         if answer.strip().lower() != "yes":
             self.ui.say("Nothing was removed.")
             return 0
-        self.stop(closing="")
+        if not self._stop_processes():
+            self.ui.say("Nothing else was removed.")
+            return 1
         created = self.state.get("created", {})
-        if self.state.get("stack_started") and self.images_file.exists():
-            self.machine.run(self.compose("down", "-v", "--remove-orphans"), log=None, timeout=300)
+        if self.state.get("stack_started") and self.machine.run(self._down(), log=self._log("switch"), timeout=300).code != 0:
+            self.ui.say(FAIL_RESET_DOWN.format(project=self.project(), log=self._shown(self._log("switch"))))
+            return 1
         docker = self.machine.which("docker") or "docker"
-        for image in self.state.get("pulled_images", []):
-            # Never with force, so an image another container has come to use stays.
-            self.machine.run([docker, "image", "rm", image], timeout=120)
+        # Never with force, so an image another container has come to use stays.
+        images_left = [image for image in self.state.get("pulled_images", []) if self.machine.run([docker, "image", "rm", image], timeout=120).code != 0]
         if created.get("agents_folder") and "ports" in self.state:
             self.machine.remove_tree(self.agents_folder())
         if created.get("env"):
             self.env_file.unlink(missing_ok=True)
-            for made in self.repo.glob("foundry-*.db*"):
-                made.unlink(missing_ok=True)
-            self.machine.remove_tree(self.repo / "foundry-inputs")
+            self.env_file.with_name(".env.tmp").unlink(missing_ok=True)
         if created.get("venv"):
             self.machine.remove_tree(self.repo / ".venv")
-        self.machine.remove_tree(self.home)
+        self._remove_own_folder()
         self.state = {}
         self.ui.say("Removed. Run this again to set it all up from the start.")
+        if images_left:
+            self.ui.say(f"Docker kept {len(images_left)} of the images setup downloaded, because something else uses them.")
+        if kept:
+            self.ui.say(f"Kept, because setup did not make them: {', '.join(kept)}.")
         return 0
+
+    def _remove_own_folder(self) -> None:
+        before = self.state.get("before", [])
+        for name in OWN_IN_HOME:
+            path = self.home / name
+            if name not in before and path.is_dir():
+                self.machine.remove_tree(path)
+            elif name not in before:
+                path.unlink(missing_ok=True)
+        self.state_file.unlink(missing_ok=True)
+        try:
+            self.home.rmdir()
+        except OSError:
+            # Something of someone else's is in it.
+            pass
 
     def try_mode(self) -> int:
         return try_mode(self.repo, self.machine, self.ui, self)
@@ -1210,8 +1337,9 @@ def try_mode(repo: Path, machine: Machine, ui: Ui, build: "Setup") -> int:
     if not uv:
         ui.say(NO_UV)
         return 1
-    build.state.setdefault("created", {}).setdefault("venv", not (repo / ".venv").exists())
-    build._save_state()
+    if not build.state_broken:
+        build.state.setdefault("created", {}).setdefault("venv", not (repo / ".venv").exists())
+        build._save_state()
     ui.say("Try mode: the dashboard with made-up data. No agents, no Docker, and it never reads your .env.")
     if not (repo / ".venv").exists():
         ui.say("The first time, uv downloads Python and Foundry's packages, about 2 minutes. After that nothing leaves this machine.")
