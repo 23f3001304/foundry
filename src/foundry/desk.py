@@ -1419,7 +1419,7 @@ class Desk:
         choice = outcome.chosen_from(card.choices)
         if choice is None:
             logger.warning("Routine card %s had an answer naming no known choice: %s", card.request_id, outcome.answers)
-        approved = self.cards.answer_routine(card.request_id, choice, lambda item: self._take_card_answer(item, replace(outcome, request_id=item.request_id, answer="approve")))
+        approved = self.cards.answer_routine(card.request_id, choice, lambda item: self._hand_off(item, outcome))
         left = len(card.data["items"]) - len(approved)
         if choice == APPROVE_CLEAN and left:
             self.client.post_message(card.room_id, ROUTINE_STILL_WAITING.format(count=left))
@@ -1429,6 +1429,11 @@ class Desk:
                 self.client.post_message(card.room_id, ROUTINE_NOTHING_NEEDS_YOU)
             elif shown is not None and shown.room_id != card.room_id:
                 self.client.post_message(card.room_id, ROUTINE_OPEN_ELSEWHERE)
+
+    def _hand_off(self, item: Card, outcome: Outcome) -> None:
+        # A room that is gone refuses every try the same, so a retry would never come out. The item ends there, and the other items and the card go on.
+        with _give_up_if_room_is_gone(f"card {item.request_id}"):
+            self._take_card_answer(item, replace(outcome, request_id=item.request_id, answer="approve"))
 
     def _shown_next(self, card: Card) -> bool:
         # Something was brought one by one, such as a report, and only hasn't opened yet. Saying that nothing needs the person would be untrue.
