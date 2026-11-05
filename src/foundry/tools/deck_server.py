@@ -19,7 +19,7 @@ from pptx.util import Pt
 
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
-from foundry.checks import PERIOD, WRITTEN_DATE, carries, figure, numbers_in, outliers
+from foundry.checks import FEWEST_PEERS, PERIOD, WRITTEN_DATE, carries, figure, numbers_in, outliers
 from foundry.tools import confine, touchstone
 from foundry.tools.layout import LINE_SPACING, NOT_RECEIVED, MakerError, contrast, figure_text, fit_size, load_font, mix, with_commas, words_of, wrap
 
@@ -552,6 +552,13 @@ def _far_off(labels: list[str], *columns: list[str]) -> str:
     return FAR_OFF.format(names=" and ".join(dict.fromkeys(names))) if names else ""
 
 
+def _table_flag(cells: list[list[str]]) -> str:
+    # Any column with enough figures to judge one by the others. Words in it and a unit after a figure change nothing. A column of years is not judged, and the first column, which names the rows, only when no other column has figures.
+    numbers = {at: [_cell_figure(row[at]) for row in cells[1:]] for at in range(len(cells[0])) if not YEARS_HEADING.fullmatch(cells[0][at])}
+    judged = [at for at, column in numbers.items() if sum(number is not None for number in column) >= FEWEST_PEERS]
+    return _far_off([row[0] for row in cells[1:]], *(["" if number is None else number for number in numbers[at]] for at in ([at for at in judged if at] or judged)))
+
+
 def _underline(cell, look: Look) -> None:
     # A thin line under a row in the text colour, because the accent is for the one thing that matters most on a slide. It goes first, ahead of the fill, which is where the file format wants it.
     line = etree.Element(f"{DRAWING}lnB", w=str(RULE_WIDTH))
@@ -608,7 +615,7 @@ def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
     lit = _lit_row(cells, measure, highlight)
     lit_title = "" if lit is not None else highlight
     # Only where the figures have sources, because a menu's dearest dish is not an odd figure anyone has to answer for.
-    flag = _far_off([row[0] for row in cells[1:]], *([row[at] for row in cells[1:]] for at in range(1, len(figures)) if figures[at])) if spec.get("sources") else ""
+    flag = _table_flag(cells) if spec.get("sources") else ""
     look = _look(brand, loud=False)
     side_left = look.left + SIDE_TITLE_WIDTH + SIDE_GAP
     # Beside its title a table can run to the slide's right margin, above the corner logo unless the logo is down in the foot.
@@ -1027,7 +1034,7 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     In labels and values, at most 10 of each, a value is a number from calculate or job_facts, never your own sum. The slide writes it with commas, so give 6420, and unit goes after it, such as "%".
     The largest is lit, and on a chart slide highlight must be one of the labels if you want another lit.
     A value is null when nobody sent that figure, and so is a cell of a table's rows. The slide then says "not received", with no number and no stroke. Give it no source, and never fill in a figure.
-    A figure far from the others is said on the slide in words by itself, such as "Office E: far from the others. Shown as given.", on these two layouts and on a table whose slide has sources. Do not leave the figure out or correct it.
+    A figure far from the others is said on the slide in words by itself, such as "Office E: far from the others. Shown as given.", on these two layouts and on a table whose slide has sources and whose column holds at least three figures. A table on a slide with no sources does not say it, so say it in that slide's title. Do not leave the figure out or correct it.
 
     Any other slide can also have "highlight": words on that slide to light in the brand's accent colour, for the one thing that matters most. A slide with no highlight and nothing lit shows the accent as a short mark.
     highlight does the same for the title slide. Text that cannot fit raises an error. Shorten it or split the slide.

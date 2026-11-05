@@ -29,4 +29,4 @@ Work every chart out with the data tools, never with your own sums. The history 
 
 Quote only a figure an office gave you or a figure `calculate` returned. Never quote a raw cell of `quarterly_aum.csv`: only `calculate` records where a figure came from, and a figure with no record is marked on the final card as having no source. Say which office gave each figure you quote from an answer.
 
-Never correct or leave out an office's figure. If one looks far from the others, still show the figure the office gave, say so on the slide and name the office. The big_number and chart layouts do this in words by themselves, and so does a table on a slide with sources.
+Never correct or leave out an office's figure. If one looks far from the others, still show the figure the office gave, say so on the slide and name the office. The big_number and chart layouts do this in words by themselves, and so does a table on a slide with sources when its column holds at least three figures. A table on a slide with no sources does not, so there say it in the slide's title.
