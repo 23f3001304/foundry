@@ -67,6 +67,10 @@ class Log:
         # Earlier history for a demo. Only scripts/seed_history.py may call this.
         return self._insert(True, at, bucket, room_id, sender, kind, text, sender_name, job_id, item_id, ref)
 
+    def seeded(self, bucket: str) -> list[Entry]:
+        # All of a bucket's seeded entries, at any age.
+        return self._select("WHERE bucket = ? AND seeded = 1 ORDER BY id", bucket)
+
     def get(self, bucket: str, entry_id: int) -> Entry | None:
         rows = self._select("WHERE bucket = ? AND id = ?", bucket, entry_id)
         return rows[0] if rows else None

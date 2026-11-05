@@ -82,6 +82,7 @@ SLOT_FORMAT = "%Y-%m-%d %H:%M"
 # Inside Card.data. A merged card lists its items. An item the person asked to see waits its turn alone, not for a set time.
 ITEMS = "items"
 ONE_BY_ONE = "one_by_one"
+SEEDED = "seeded"
 WAITING_SINCE = "waiting_since"
 DETAIL_POSTED = "detail_posted"
 # An item that must be seen to be answered, such as a report, is brought by "Show what needs me" even when it is clean.
@@ -117,6 +118,10 @@ class Card:
     @property
     def is_merged(self) -> bool:
         return ITEMS in self.data
+
+    @property
+    def is_seeded(self) -> bool:
+        return bool(self.data.get(SEEDED))
 
 
 def fit_detail(client: SwitchClient, room_id: str, detail: str) -> str:
@@ -210,7 +215,7 @@ class CardQueue:
         # Earlier history for a demo, and only scripts/seed_history.py may call this. It has already ended, so nothing opens, nothing is posted and it is in nobody's way.
         if card.state not in ENDS:
             raise ValueError(f"A seeded card has already ended, and {card.state} hasn't")
-        self._save(card)
+        self._save(replace(card, data={**card.data, SEEDED: True}))
 
     def pump(self) -> None:
         queued = self._select("WHERE state = ? ORDER BY rowid", QUEUED)

@@ -5,6 +5,8 @@ uv run --env-file .env python scripts/seed_history.py it_firm
 
 import os
 import sys
+from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -25,62 +27,144 @@ HOURS_TAKEN = (3, 0.5, 8, 2, 30, 6, 12, 1, 4, 80)
 INPUTS_ASKED = (2, 0, 1, 3)
 
 
-def seed(scene: dict, log: Log, rooms: dict[str, str], bridge: str, now: datetime, cards: CardQueue | None = None) -> list[Entry]:
+@dataclass
+class Written:
+    entries: list[Entry]
+    cards: list[Card]
+
+    def __bool__(self) -> bool:
+        return bool(self.entries or self.cards)
+
+
+@dataclass(frozen=True)
+class Planned:
+    # One entry of a scene's earlier history, and how long before the run it happened.
+    back: timedelta
+    room: str
+    sender: str
+    kind: str
+    text: str
+    sender_name: str = ""
+    job_id: str | None = None
+    ref: str | None = None
+
+    @property
+    def key(self) -> tuple:
+        return _key(self.kind, self.sender, self.text, self.job_id, self.ref)
+
+
+def _key(kind: str, sender: str, text: str, job_id: str | None, ref: str | None) -> tuple:
+    # How this tool knows its own writing again, at any age. Seeded work goes by the ids this tool gave it. A seeded message has no id, because older seedings gave it none, so it goes by who said what.
+    return (kind, job_id, ref) if job_id else (kind, sender, text)
+
+
+def seed(scene: dict, log: Log, rooms: dict[str, str], bridge: str, now: datetime, cards: CardQueue | None = None) -> Written:
+    # Writes only what the log and the work file don't already have from this tool, so it can run again at any age, after an older seeding that wrote only the history, or after a run that stopped partway.
     history = scene.get("history", [])
     if not history:
         # A scene with none, such as the agency's, has nothing to seed, and may be about more than one business.
-        return []
+        return Written([], [])
     bucket = scene["brand"]
     earlier = scene.get("earlier_work")
     missing = [entry["room"] for entry in [*history, *([earlier] if earlier else [])] if entry["room"] not in rooms]
     if missing:
         raise SystemExit(f"These rooms don't exist yet: {', '.join(missing)}. Run scripts/demo_seed.py first.")
-    if _already_seeded(log, bucket, history, now):
-        return []
-    made = []
-    for entry in sorted(history, key=lambda entry: entry["days_ago"], reverse=True):
-        at = now - timedelta(days=entry["days_ago"])
-        made.append(log.add_seeded(at, bucket, rooms[entry["room"]], sender_id(entry["as"], bridge), "message", entry["say"], sender_name=username(entry["as"])))
-    if earlier:
-        person = sender_id(earlier["as"], bridge)
-        made.append(log.add_seeded(now - timedelta(days=5), bucket, rooms[earlier["room"]], person, "message", earlier["say"], sender_name=username(earlier["as"])))
-        made += _earlier_work(earlier, bucket, log, rooms[earlier["room"]], person, now, cards)
-    return made
+    if earlier and earlier.get("stuck") and cards is None:
+        raise ValueError("This scene seeds cards, so it needs the work file, and nothing has been written.")
+    found: dict[tuple, list[Entry]] = {}
+    for entry in log.seeded(bucket):
+        found.setdefault(_key(entry.kind, entry.sender, entry.text, entry.job_id, entry.ref), []).append(entry)
+    lines = [
+        Planned(timedelta(days=entry["days_ago"]), rooms[entry["room"]], sender_id(entry["as"], bridge), "message", entry["say"], username(entry["as"]))
+        for entry in sorted(history, key=lambda entry: entry["days_ago"], reverse=True)
+    ]
+    work = _earlier_work(earlier, rooms[earlier["room"]], sender_id(earlier["as"], bridge), username(earlier["as"])) if earlier else []
+    # A card written by a run that stopped before any work reached the log says when that work was told from.
+    written_from = _told_from(work, found, _card_said_from(earlier, cards) or now) if earlier else now
+    written_cards = _stuck_cards(earlier, bucket, rooms[earlier["room"]], sender_id(earlier["as"], bridge), written_from, cards) if earlier else []
+    # Each part keeps the times it started with, so a part finished later still adds up. A part that hasn't started is told from now.
+    entries = _write_missing(lines, bucket, log, found, _told_from(lines, found, now))
+    entries += _write_missing(work, bucket, log, found, written_from)
+    return Written(entries, written_cards)
 
 
-def _earlier_work(earlier: dict, bucket: str, log: Log, room: str, person: str, now: datetime, cards: CardQueue | None) -> list[Entry]:
+def _earlier_work(earlier: dict, room: str, person: str, name: str) -> list[Planned]:
     # Each job shares its id across what happened to it, so the chart can say how long it took. No job row goes with one, so none of them appears as a job to act on.
-    made = []
+    plan = [Planned(timedelta(days=5), room, person, "message", earlier["say"], name)]
 
-    def entry(at: datetime, kind: str, text: str, job_id: str, sender: str = DESK_NAME, ref: str | None = None) -> None:
-        made.append(log.add_seeded(at, bucket, room, sender, kind, text, sender_name=DESK_NAME if sender == DESK_NAME else "", job_id=job_id, ref=ref))
+    def entry(back: timedelta, kind: str, text: str, job_id: str, sender: str = DESK_NAME, ref: str | None = None) -> None:
+        plan.append(Planned(back, room, sender, kind, text, DESK_NAME if sender == DESK_NAME else "", job_id, ref))
 
     job = 0
-    for back, count in enumerate(JOBS_PER_DAY, start=1):
+    for days, count in enumerate(JOBS_PER_DAY, start=1):
         for _ in range(count):
             title, took, inputs = earlier["jobs"][job % len(earlier["jobs"])], HOURS_TAKEN[job % len(HOURS_TAKEN)], INPUTS_ASKED[job % len(INPUTS_ASKED)]
-            job_id, sent = f"seeded-job-{job}", now - timedelta(days=back, hours=job % 5)
-            opened = sent - timedelta(hours=took)
+            job_id, sent = f"seeded-job-{job}", timedelta(days=days, hours=job % 5)
+            opened = sent + timedelta(hours=took)
             entry(opened, "job_opened", title, job_id)
             for asked in range(inputs):
-                entry(opened + timedelta(minutes=asked + 1), "item_asked", f"An input for {title}", job_id)
-            middle = opened + timedelta(hours=took / 2)
+                entry(opened - timedelta(minutes=asked + 1), "item_asked", f"An input for {title}", job_id)
+            middle = opened - timedelta(hours=took / 2)
             entry(middle, "card_opened", f"Final work: {title}", job_id, ref=f"seeded-card-{job}")
-            entry(middle + timedelta(minutes=5), "card_answered", f"Final work: {title}", job_id, person, f"seeded-card-{job}")
+            entry(middle - timedelta(minutes=5), "card_answered", f"Final work: {title}", job_id, person, f"seeded-card-{job}")
             entry(sent, "delivered", title, job_id)
             job += 1
     for number, stuck in enumerate(earlier.get("stuck", [])):
-        job_id, request_id, at = f"seeded-stuck-{number}", f"seeded-stuck-card-{number}", now - timedelta(days=stuck["days_ago"])
-        # A real card, because the chart counts cards. It was answered then, so it asks nothing of anybody now.
-        cards.add_seeded(Card(request_id, Trigger.STUCK, person, bucket, room, stuck["title"], stuck["detail"], [], job_id, None, ANSWERED, at, at, {}))
-        entry(at, "card_opened", stuck["title"], job_id, ref=request_id)
-        entry(at + timedelta(hours=1), "card_answered", stuck["title"], job_id, person, request_id)
+        job_id, request_id, back = f"seeded-stuck-{number}", f"seeded-stuck-card-{number}", timedelta(days=stuck["days_ago"])
+        entry(back, "card_opened", stuck["title"], job_id, ref=request_id)
+        entry(back - timedelta(hours=1), "card_answered", stuck["title"], job_id, person, request_id)
+    return plan
+
+
+def _card_said_from(earlier: dict, cards: CardQueue | None) -> datetime | None:
+    if cards is None:
+        return None
+    for number, stuck in enumerate(earlier.get("stuck", [])):
+        card = cards.get(f"seeded-stuck-card-{number}")
+        if card is not None:
+            return card.created_at + timedelta(days=stuck["days_ago"])
+    return None
+
+
+def _stuck_cards(earlier: dict, bucket: str, room: str, person: str, start: datetime, cards: CardQueue | None) -> list[Card]:
+    # Real cards, because the chart counts cards. They were answered then, so they ask nothing of anybody now. These go first, so a work file that's locked stops the run before it writes anything.
+    made = []
+    if cards is None:
+        return made
+    for number, stuck in enumerate(earlier.get("stuck", [])):
+        request_id = f"seeded-stuck-card-{number}"
+        if cards.get(request_id) is None:
+            at = start - timedelta(days=stuck["days_ago"])
+            card = Card(request_id, Trigger.STUCK, person, bucket, room, stuck["title"], stuck["detail"], [], f"seeded-stuck-{number}", None, ANSWERED, at, at, {})
+            cards.add_seeded(card)
+            made.append(card)
     return made
 
 
-def _already_seeded(log: Log, bucket: str, history: list[dict], now: datetime) -> bool:
-    earliest = now - timedelta(days=max(entry["days_ago"] for entry in history) + 1)
-    return any(entry.seeded for entry in log.between(bucket, earliest, now, kinds=["message"]))
+def _told_from(plan: list[Planned], found: dict[tuple, list[Entry]], now: datetime) -> datetime:
+    # The moment a part was first told from, read back from anything of it already written. An entry that's planned more than once can't say which one it was.
+    times = Counter(planned.key for planned in plan)
+    return next((found[planned.key][0].at + planned.back for planned in plan if times[planned.key] == 1 and planned.key in found), now)
+
+
+def _write_missing(plan: list[Planned], bucket: str, log: Log, found: dict[tuple, list[Entry]], start: datetime) -> list[Entry]:
+    have = Counter({key: len(entries) for key, entries in found.items()})
+    made = []
+    for planned in plan:
+        if have[planned.key]:
+            have[planned.key] -= 1
+            continue
+        made.append(log.add_seeded(start - planned.back, bucket, planned.room, planned.sender, planned.kind, planned.text, sender_name=planned.sender_name, job_id=planned.job_id, ref=planned.ref))
+    return made
+
+
+def outcome(scene: dict, written: Written, path: object) -> str:
+    if not scene.get("history"):
+        return "This scene has no earlier history, so there is nothing to write."
+    if not written:
+        return f"This scene's earlier history is already all in {path}, so nothing was written."
+    entries, cards = len(written.entries), len(written.cards)
+    return f"Wrote {entries} seeded {'entry' if entries == 1 else 'entries'} and {cards} seeded {'card' if cards == 1 else 'cards'} to {path}."
 
 
 def _rooms() -> dict[str, str]:
@@ -94,8 +178,8 @@ def main(name: str) -> None:
     log = Log(os.environ.get("FOUNDRY_LOG_DB", "foundry-log.db"))
     # Nothing is posted for a card that has already ended, so this queue needs no Switch.
     cards = CardQueue(os.environ.get("FOUNDRY_WORK_DB", "foundry-work.db"), None, log, lambda: datetime.now(UTC))
-    made = seed(load_scene(name), log, _rooms(), os.environ["FOUNDRY_MATTERMOST_BRIDGE"], datetime.now(UTC), cards)
-    print(f"Wrote {len(made)} seeded entries to {log.path}.")
+    scene = load_scene(name)
+    print(outcome(scene, seed(scene, log, _rooms(), os.environ["FOUNDRY_MATTERMOST_BRIDGE"], datetime.now(UTC), cards), log.path))
 
 
 if __name__ == "__main__":
