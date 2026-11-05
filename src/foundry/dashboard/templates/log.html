@@ -9,8 +9,8 @@
     {% for moment in job.moments %}
     <tr>
       <td data-label="When">{{ moment.at }}</td>
-      <td data-label="Who">{{ moment.who }}</td>
-      <td data-label="What"><span class="strong">{{ moment.what }}</span>{% if moment.text %} {{ moment.text }}{% endif %}</td>
+      <td data-label="Who">{{ moment.who|shortened }}</td>
+      <td data-label="What"><span class="strong">{{ moment.what }}</span>{% if moment.text %} {{ moment.text|shortened }}{% endif %}</td>
       <td data-label="Flag">
         {%- if moment.target -%}
         <form method="post" action="/log/flag">
@@ -52,8 +52,8 @@
     <tbody>
     {% for item in flagged %}
     <tr class="link-row flagged-row" id="flag-{{ item.id }}">
-      <td class="title-cell"><a class="row-link" href="/log/flagged/{{ item.id }}">{{ item.text }}</a></td>
-      <td data-label="Flagged by">{{ item.who }}</td>
+      <td class="title-cell"><a class="row-link" href="/log/flagged/{{ item.id }}">{{ item.shown|shortened }}</a></td>
+      <td data-label="Flagged by">{{ item.who|shortened }}</td>
       <td data-label="When">{{ item.at }}</td>
       {% if user.businesses|length > 1 %}<td data-label="Business">{{ item.client }}</td>{% endif %}
       <td class="go-cell"><span class="go" aria-hidden="true"></span></td>
@@ -85,7 +85,7 @@
   <details class="fold">
     <summary>
       <span class="icon icon-chevron" aria-hidden="true"></span>
-      <h3><a class="row-link" href="/log?job={{ job.id }}">{{ job.title }}</a></h3>
+      <h3><a class="row-link" href="/log?job={{ job.id }}">{{ job.title|shortened }}</a></h3>
       <span class="fold-meta">{{ job.moments|length }} {{ "thing" if job.moments|length == 1 else "things" }}{% if user.businesses|length > 1 %}. {{ job.client }}{% endif %}</span>
       <span class="stage {{ job.tone }} fam-{{ job.family }}">{{ job.stage }}</span>
     </summary>

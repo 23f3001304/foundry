@@ -33,6 +33,8 @@ MEDIA = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 PICTURES = (".png", ".jpg", ".jpeg")
+# Two names that start the same for this long are the same name to a reader.
+SAME_START = 24
 
 STAGES = {
     State.RECEIVED: ("Drafting the brief", "apprentice"),
@@ -449,6 +451,10 @@ class Flagged:
     client: str
     job_id: str = ""
 
+    @property
+    def shown(self) -> str:
+        return flag_words(self.text)
+
 
 @dataclass
 class ChainPage:
@@ -457,6 +463,11 @@ class ChainPage:
     job_id: str
     job_title: str
     via_dashboard: bool
+
+    @property
+    def job_is_named(self) -> bool:
+        # A job named after its file needs no second mention of a name so like the heading's.
+        return self.job_title[:SAME_START].casefold() in self.flagged.shown.casefold()
 
 
 @dataclass
@@ -606,6 +617,12 @@ def squeeze(text: str) -> str:
     return text if len(text) <= MOST_TEXT else f"{text[:MOST_TEXT].rstrip()}..."
 
 
+def flag_words(text: str) -> str:
+    # A flag says what was flagged and in which file. Words that are how the file's own name starts are the file, so its name says both, once.
+    what, separator, where = text.rpartition(" in ")
+    return f"Flagged {where}" if separator and Path(where).suffix and where.casefold().startswith(what.removeprefix("Flagged ").casefold()) else text
+
+
 def is_made_file(entry: Entry) -> bool:
     return entry.kind == "file_made" and bool(entry.ref) and LINK_MARK not in entry.ref
 
@@ -711,7 +728,7 @@ class Reader:
         if job is None:
             return None
         entries = self.log.for_job(job.bucket, job.id)
-        flags = [(entry.id, entry.text) for entry in sorted(entries, key=lambda entry: entry.id, reverse=True) if entry.kind == "flag"]
+        flags = [(entry.id, flag_words(entry.text)) for entry in sorted(entries, key=lambda entry: entry.id, reverse=True) if entry.kind == "flag"]
         return JobNav(job.id, title_of(job), bucket_name(job.bucket), len(self._files(entries)), flags)
 
     def overview(self, user: User) -> list[Figures]:
@@ -1092,7 +1109,7 @@ class Reader:
             target = ("entry", entry.id)
         words = squeeze(shown_words(entry, self.settings.inputs_dir))
         # A flag's entry opens with the word this line already gives it.
-        words = words.removeprefix("Flagged ") if entry.kind == "flag" else words
+        words = flag_words(words).removeprefix("Flagged ") if entry.kind == "flag" else words
         return Moment(self.when(entry.at), name_of(entry, known), EVENTS.get(entry.kind, entry.kind.replace("_", " ")), words, target)
 
     def flagged(self, user: User) -> list[Flagged]:

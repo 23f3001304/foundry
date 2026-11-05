@@ -9,7 +9,7 @@
 {%- endmacro %}
 
 {% macro page_title(trail, here) %}
-<h1 class="title">{% for name, href in trail %}<a href="{{ href }}">{{ name }}</a><span class="title-sep" aria-hidden="true">/</span> {% endfor %}<span>{{ here }}</span></h1>
+<h1 class="title">{% for crumb in trail %}<a href="{{ crumb[1] }}" title="{{ crumb[2] if crumb|length > 2 else crumb[0] }}">{{ crumb[0] }}</a><span class="title-sep" aria-hidden="true">/</span> {% endfor %}<span title="{{ here }}">{{ here }}</span></h1>
 {% endmacro %}
 
 {% macro job_tabs(tabs, here) %}

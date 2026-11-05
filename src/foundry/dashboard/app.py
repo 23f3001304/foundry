@@ -30,6 +30,7 @@ from foundry.dashboard import charts, gateway, shapes
 from foundry.dashboard import data as brand_data
 from foundry.dashboard.auth import COOKIE, LIFETIME, REFUSED, User, csrf_ok, current_user, end_session, find_session, start_session, switch_login
 from foundry.dashboard.queries import MEDIA, PICTURES, STEP_FAMILIES, ConnectionRow, NavCounts, Reader, bucket_name, is_made_file
+from foundry.dashboard.shortened import shortened
 from foundry.desk import Settings
 
 logger = logging.getLogger(__name__)
@@ -632,6 +633,7 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
     environment = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     environment.filters["when"] = reader.when
     environment.filters["client"] = bucket_name
+    environment.filters["shortened"] = shortened
     environment.globals["charts"] = charts
     environment.globals["shapes"] = shapes
     environment.globals["families"] = STEP_FAMILIES

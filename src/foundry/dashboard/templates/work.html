@@ -26,7 +26,7 @@
 {% for job in jobs %}
 <section>
   <div class="section-head">
-    <h2>{% if tabs %}Files{% else %}<a class="row-link" href="/jobs/{{ job.id }}">{{ job.title }}</a>{% endif %}</h2>
+    <h2>{% if tabs %}Files{% else %}<a class="row-link" href="/jobs/{{ job.id }}">{{ job.title|shortened }}</a>{% endif %}</h2>
     <p class="page-meta"><span class="stage {{ job.tone }} fam-{{ job.family }}">{{ job.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.client }}</span>{% endif %}</p>
   </div>
   <div class="scroll">
@@ -38,7 +38,7 @@
       <tr>
         {% if loop.first %}
         <td class="title-cell" rowspan="{{ file.versions|length }}">
-          <span class="file-name">{{ file.name }}</span>
+          <span class="file-name">{{ file.name|shortened }}</span>
           {% if file.picture and version.served %}<a class="preview-link" href="/work/files/{{ version.entry_id }}"><img src="/work/files/{{ version.entry_id }}" class="preview" alt="Preview of {{ file.name }}"></a>{% endif %}
         </td>
         {% endif %}

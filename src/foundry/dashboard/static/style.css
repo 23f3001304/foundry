@@ -305,6 +305,12 @@ h1, h2, h3, p, li, dt, dd, pre, label, a, .small, .need-title, .need-why, .mono,
 .faint { color: var(--ink-faint); }
 .note { color: var(--ink-soft); }
 .block { display: block; }
+/* A long name stays on one line and is cut in the middle, so its end still shows. */
+.long { display: inline-flex; min-width: 0; max-width: 100%; white-space: nowrap; }
+.long-head { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.long-tail { flex: none; }
+a:not(.row-link) .long > span { text-decoration: underline; text-decoration-thickness: 1px; text-decoration-color: var(--field); text-underline-offset: var(--space-4); }
+.row-link:hover .long > span { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: var(--space-4); }
 .strong { font-weight: 600; }
 .status { color: var(--ink-soft); }
 .lead-in { margin-top: 0; font-weight: 600; }
@@ -434,7 +440,10 @@ body.bare { display: flex; flex-direction: column; align-items: center; justify-
 .page-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-16); margin: var(--space-8) 0 0; max-width: none; }
 .page-head > .small { margin: var(--space-4) 0 0; }
 
-.title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-8); min-height: var(--control-32); padding-block: var(--space-4) 0; }
+/* One line, whatever is in it. The way back keeps its size, and a long name where you are ends in an ellipsis, with the whole of it under the mouse. */
+.title { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 0 var(--space-8); min-width: 0; min-height: var(--control-32); padding-block: var(--space-4) 0; white-space: nowrap; }
+.title > a { flex: none; }
+.title > span:last-child { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .title a { color: var(--ink-faint); text-decoration: none; transition: color var(--dur-fast) var(--ease-out); }
 .title a:hover { color: var(--ink); }
 .title-sep { color: var(--field); font-weight: 400; }
@@ -722,7 +731,7 @@ a:hover .go, .figure:hover .go, .job-row:hover .go { translate: var(--space-4) 0
 .job-count { margin: 0 0 var(--space-4); }
 .job-count b { color: var(--ink); font-family: var(--font-mono); font-weight: 600; }
 .owes { color: var(--ink-faint); font-size: var(--text-12); line-height: var(--line-12); }
-.owes span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.owes > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 table.list td.go-cell { padding-right: var(--space-20); color: var(--ink-faint); text-align: right; }
 table.list .job-row:hover .go-cell { color: var(--ink); }
 
@@ -825,7 +834,7 @@ table.list tbody tr:hover { background: var(--sunken); }
 .work-table th:nth-child(4) { width: var(--col-120); }
 .work-table th:nth-child(6) { width: var(--col-96); }
 .work-table td:last-child { text-align: right; }
-.file-name { display: block; font-weight: 500; }
+.file-name { display: block; min-width: 0; max-width: 100%; font-weight: 500; }
 .preview-link { display: block; width: var(--col-144); max-width: 100%; margin-top: var(--space-8); }
 .preview { display: block; width: 100%; height: auto; border: 1px solid var(--rule); border-radius: var(--radius-8); }
 
@@ -917,7 +926,7 @@ table.list .link-row:hover .go-cell { color: var(--ink); }
 .log-jobs-head { margin-top: var(--section); }
 .log-jobs { margin-top: 0; }
 .log-jobs > section { margin: 0; }
-.log-jobs .fold > summary h3 { min-width: 0; margin: 0; font-family: var(--font); font-size: var(--text-14); line-height: var(--line-14); font-weight: 600; letter-spacing: 0; }
+.log-jobs .fold > summary h3 { flex: 0 1 auto; min-width: 0; margin: 0; font-family: var(--font); font-size: var(--text-14); line-height: var(--line-14); font-weight: 600; letter-spacing: 0; }
 .log-jobs .fold > summary .stage { flex: none; }
 
 /* Generated work's header: a grid tile with a dark card over it, running off the edge */
@@ -941,6 +950,8 @@ ul.choice-list > li { padding: 0; }
 
 /* The chain behind a flagged thing: when, who and what, and what it rests on, down one line */
 
+.flag-head { margin-bottom: var(--gap); }
+.flag-head .lead { margin: var(--space-4) 0 0; }
 .chain-head, ol.chain > li { display: grid; grid-template-columns: var(--col-120) var(--size-32) minmax(0, 5fr) minmax(0, 8fr); }
 .chain-head { padding: 0 var(--space-16) var(--space-8); color: var(--ink-faint); font-size: var(--text-12); line-height: var(--line-12); font-weight: 500; border-bottom: 1px solid var(--rule-strong); }
 .chain-head :nth-child(2) { grid-column: 3; }
@@ -1252,6 +1263,7 @@ form.panel { gap: var(--space-16); margin: 0; }
   table.list tr { padding: var(--space-12) var(--space-16); border-bottom: 1px solid var(--rule); }
   .fold-body table.list tr { padding-inline: 0; }
   table.list td, table.list td:first-child, table.list td:last-child { position: relative; height: auto; padding: var(--space-4) 0 var(--space-4) var(--col-96); border: 0; }
+  .fold-body table.list td[data-label]:first-child { padding-left: var(--col-96); }
   table.list td:empty { display: none; }
   table.list td[data-label]::before { content: attr(data-label); position: absolute; left: 0; width: var(--col-96); padding-right: var(--space-8); color: var(--ink-faint); font-size: var(--text-12); line-height: var(--line-14); }
   table.list td.title-cell, table.list td.title-cell:first-child { padding: 0 var(--space-24) var(--space-4) 0; font-size: var(--text-14); }
@@ -1261,7 +1273,7 @@ form.panel { gap: var(--space-16); margin: 0; }
   table.list.jobs-table td.approver { display: flex; align-items: center; gap: var(--space-8); }
   .approver .hidden { position: static; width: auto; height: auto; overflow: visible; clip-path: none; white-space: normal; }
   .jobs-table td[data-label="Stages"] { display: none; }
-  .owes span, .job-row .small { overflow: visible; white-space: normal; }
+  .owes > span, .job-row .small { overflow: visible; white-space: normal; }
 
   table.list.log-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--space-12); }
   table.list.log-table td, table.list.log-table td:last-child { width: auto; padding: 0; }
@@ -1282,7 +1294,7 @@ form.panel { gap: var(--space-16); margin: 0; }
   table.list button.small, table.list a.button.small { min-height: var(--control-40); padding-inline: var(--space-12); }
   table.list.flagged-table td.go-cell, table.list.data-table td.go-cell { position: absolute; top: var(--space-12); right: var(--space-16); width: auto; padding: 0; }
   .log-jobs .fold > summary { flex-wrap: wrap; }
-  .log-jobs .fold > summary h3 { flex: 1 1 0; }
+  .log-jobs .fold > summary h3 { flex: 1 1 calc(100% - var(--size-16) - var(--space-12)); }
   .log-jobs .fold > summary .stage { margin-left: var(--space-32); }
   .work-head { padding: var(--space-48) 0 0 var(--space-32); }
 

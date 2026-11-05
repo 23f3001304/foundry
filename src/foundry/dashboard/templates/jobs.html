@@ -27,10 +27,10 @@
     {% for row in board.rows %}
     <tr class="job-row{% if row.tone == 'stuck' %} is-stuck{% elif row.yours %} is-yours{% endif %}">
       <td class="title-cell">
-        <a class="row-link" href="/jobs/{{ row.id }}">{{ row.title }}</a>
+        <a class="row-link" href="/jobs/{{ row.id }}">{{ row.title|shortened }}</a>
         {% if row.yours %}<span class="pill pill-needs">Needs you</span>{% endif %}
         {% if user.businesses|length > 1 and not business %}<span class="small block">{{ row.client }}</span>{% endif %}
-        {% for line in row.waiting %}<span class="small block">{{ line }}</span>{% endfor %}
+        {% for line in row.waiting %}<span class="small block">{{ line|shortened }}</span>{% endfor %}
       </td>
       <td data-label="Status"><span class="stage {{ row.tone }} fam-{{ row.family }}">{{ row.stage }}</span></td>
       <td data-label="Stages">
@@ -46,7 +46,7 @@
         <span class="faint">No inputs</span>
         {% endif %}
       </td>
-      <td data-label="Who owes what" class="owes">{% if row.owes %}<span title="{{ row.owes }}">{{ row.owes }}</span>{% endif %}</td>
+      <td data-label="Who owes what" class="owes">{% if row.owes %}<span title="{{ row.owes }}">{{ row.owes|shortened }}</span>{% endif %}</td>
       <td data-label="Approver" class="approver">{{ avatar(row.approver) }}<span class="hidden">{{ row.approver }}</span></td>
       <td class="go-cell"><span class="go" aria-hidden="true"></span></td>
     </tr>

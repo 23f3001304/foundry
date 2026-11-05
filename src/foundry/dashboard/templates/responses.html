@@ -4,13 +4,13 @@
 {% set more = card.detail or card.offer.buttons or card.offer.changes or card.offer.notice %}
 <li class="response" id="card-{{ card.request_id }}">
   {% if more %}<details class="response-fold"{% if opened %} open{% endif %}><summary class="response-row">{% else %}<div class="response-row">{% endif %}
-    <h3>{{ card.title }}</h3>
+    <h3>{{ card.title|shortened }}</h3>
     <span class="response-kind">{{ card.kind }}{% if user.businesses|length > 1 %}. {{ card.client }}{% endif %}</span>
     <span class="response-status"><span class="stage {{ {'open': 'waiting', 'answered': 'done'}.get(card.state, 'idle') }}{% if card.state == 'open' %} fam-azure{% endif %}">{{ card.status }}</span></span>
     {% if more %}<span class="icon icon-chevron" aria-hidden="true"></span>{% endif %}
   {% if more %}</summary>
   <div class="response-body">
-    {% if card.detail %}<pre class="text">{{ card.detail }}</pre>{% endif %}
+    {% if card.detail %}<pre class="text">{{ card.detail|shortened }}</pre>{% endif %}
     {% if card.offer.buttons or card.offer.changes %}
     <form class="stack" method="post" action="/responses/answer">
       <input type="hidden" name="csrf" value="{{ csrf }}">

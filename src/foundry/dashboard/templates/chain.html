@@ -2,34 +2,37 @@
 {% from "_ui.html" import page_title, job_tabs, empty_state %}
 {% block main %}
 <header class="page-head">
-  {{ page_title([("Action log", "/log"), (chain.flagged.text, "/log#flag-" ~ chain.flagged.id)], "Chain") }}
-  <p class="page-meta"><a href="/jobs/{{ chain.job_id }}">{{ chain.job_title }}</a></p>
-  <p class="lead">Flagged by {{ chain.flagged.who }}{% if chain.via_dashboard %} on the dashboard{% endif %}, {{ chain.flagged.at }}. This is everyone and every agent behind this one thing, and nothing else.</p>
+  {{ page_title([("Action log", "/log"), ("Flagged item", "/log#flag-" ~ chain.flagged.id, chain.flagged.text)], "Chain") }}
 </header>
 {% if tabs %}
 {{ job_tabs(tabs, "chain") }}
 {% if tabs.flags|length > 1 %}
 <nav class="chips" aria-label="The things flagged on this job">
   {% for id, text in tabs.flags %}
-  <a class="chip-link" href="/log/flagged/{{ id }}"{% if id == chain.flagged.id %} aria-current="true"{% endif %}>{{ text }}</a>
+  <a class="chip-link" href="/log/flagged/{{ id }}"{% if id == chain.flagged.id %} aria-current="true"{% endif %}>{{ text|shortened }}</a>
   {% endfor %}
 </nav>
 {% endif %}
 {% endif %}
+<div class="flag-head">
+  <h2>{{ chain.flagged.shown|shortened }}</h2>
+  <p class="lead">By {{ chain.flagged.who|shortened }}{% if chain.via_dashboard %} on the dashboard{% endif %}, {{ chain.flagged.at }}{% if chain.job_id and not chain.job_is_named %}, on <a href="/jobs/{{ chain.job_id }}">{{ chain.job_title|shortened }}</a>{% endif %}.{% if chain.steps|length > 1 %} This is everyone and every agent behind this one thing, and nothing else.{% endif %}</p>
+</div>
 {% if chain.steps %}
 <div class="chain-head" aria-hidden="true"><span>When</span><span>Who and what</span><span>Source</span></div>
 <ol class="chain">
   {% for step in chain.steps %}
   <li{% if step.label == "matched by value" or step.what == "no source found" %} class="unsure"{% endif %}>
     <span class="chain-when">{{ step.at|when }}</span>
-    <p class="chain-who"><span class="strong">{{ step.who }}</span> {{ step.what }}.</p>
+    <p class="chain-who"><span class="strong">{{ step.who|shortened }}</span> {{ step.what }}.</p>
     <div class="chain-source">
-      {% if step.detail %}<p>{{ step.detail }}</p>{% endif %}
+      {% if step.detail and not chain.flagged.shown.endswith(step.detail) %}<p>{{ step.detail|shortened }}</p>{% endif %}
       {% if step.label == "matched by value" %}<p class="small">This entry was matched by value only. The same number or words are in it, and that could be a coincidence.</p>{% endif %}
     </div>
   </li>
   {% endfor %}
 </ol>
+{% if chain.steps|length == 1 %}<p class="note section-foot">That is all this chain holds for this item.</p>{% endif %}
 {% else %}
 {{ empty_state("reviewer", "Nothing in this job is behind it.", "/log", "Back to the action log", "sun") }}
 {% endif %}
