@@ -1131,7 +1131,8 @@ class Coordinator:
         # "Team Lead C is blocked" says nothing about what the sender owes, however the name is written. It takes another person the reader could mean for that: "Team B", "my team" or "QA" is still the sender talking about themselves, and so is "I", "Team Lead C and me", or "a vendor", whose "a" isn't Team Lead A.
         # A name and an id are each compared on their own, because someone on a bridge has an id with nothing of their name in it, and it can hold a word of someone else's name.
         sender = heard.burst.sender
-        person = _name_words(re.sub(r"^a\s+", "", heard.reading.person or "", flags=re.IGNORECASE))
+        # Only a lowercase "a" is the article, because a capital one can be the start of a name, as in "A Rajan".
+        person = _name_words(re.sub(r"^a\s+", "", heard.reading.person or ""))
         if person == {"i"} or person & {"me", "we", "us"}:
             return False
         names = [_name_words(name) for name in (self._name_of(sender, heard.bucket), *(item.owner_name for item in pool))]
