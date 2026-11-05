@@ -11,6 +11,7 @@ fonts:
 style: solid
 business_type: Fizzy drinks brand
 audience: Teenagers and people in their twenties who buy a cold drink on the way somewhere
+stickers: playful
 voice: Loud, quick and playful. Short lines, jokes about noise and sparks, never mean, and never about age, alcohol or health.
 ---
 Phatakha Pop is a fictional fizzy drinks brand, made up for this demo along with everything in this folder. It is not a real company. Phatakha is Hindi for firecracker. Bhorvela Studio, the agency that makes its campaigns, is made up too.

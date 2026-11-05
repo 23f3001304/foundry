@@ -11,6 +11,7 @@ fonts:
 style: band
 business_type: Heritage tea house
 audience: People who buy a tin of tea as a gift, or for the pot at home
+stickers: subtle
 voice: Quiet and unhurried. Full sentences, no exclamation marks, the way a person pours tea slowly. Never says cheap, deal, sale or hurry.
 ---
 Ambaryug Teas is a fictional heritage tea house, made up for this demo along with everything in this folder. It is not a real company. Ambaryug is a made-up word that sounds like an age of amber skies. Bhorvela Studio, the agency that makes its campaigns, is made up too.

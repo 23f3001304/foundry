@@ -11,7 +11,9 @@ from pathlib import Path
 
 import httpx
 import yaml
+from foundry.brand import load_brand_dir
 from foundry.pack import load_pack
+from foundry.stickers import mode_for
 from register_desk import ENV_FILE, local_url, save
 from setup_makers import main as setup_makers
 
@@ -67,7 +69,7 @@ def main(mode: str, name: str, slug: str) -> None:
                 "brand_kit": kit,
                 "brand_dir": str(brand_dir),
                 "approver": template_approver(brand_dir),
-                "sticker_mode": os.environ.get("FOUNDRY_STICKER_MODE", "subtle"),
+                "sticker_mode": mode_for(load_brand_dir(brand_dir), os.environ.get("FOUNDRY_STICKER_MODE", "subtle")),
                 "agent_suffix": ending,
                 **reviewer_inputs(),
             },

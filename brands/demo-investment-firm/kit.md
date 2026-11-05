@@ -11,6 +11,7 @@ fonts:
 style: touchstone
 business_type: Global investment firm
 audience: The firm's partners and analysts, reading an internal report
+stickers: subtle
 voice: Plain, careful and exact. Says what each figure is and who gave it. No hype, no forecasts and no advice.
 ---
 Kasauti Capital Partners is a fictional global investment firm, made up for this demo along with everything in this folder, and every figure in it is made up too. It is not a real company. Kasauti is Hindi for touchstone, the dark stone a goldsmith rubs gold on to test it.

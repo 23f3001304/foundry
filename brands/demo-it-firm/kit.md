@@ -11,6 +11,7 @@ fonts:
 style: solid
 business_type: IT services firm
 audience: The client's project sponsor and the firm's own delivery team
+stickers: subtle
 voice: Exact and calm. Says what shipped, what is blocked and by when. No sales talk and no blame.
 ---
 Morpankh Systems is a fictional IT services firm, made up for this demo along with everything in this folder. It is not a real company. Morpankh is Hindi for peacock feather. Harsingar Stores, the client its scene names, is made up too.

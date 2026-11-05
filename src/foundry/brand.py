@@ -29,6 +29,7 @@ ALIASES = "The brand kit can't use YAML aliases (&name and *name). Write each va
 TOO_DEEP = "The brand kit's front matter is nested too deeply."
 NOT_CLOSED = "The brand kit's front matter has no closing --- line."
 LOGO = "logo.png"
+STICKER_MODES = ("off", "subtle", "playful")
 
 
 class BrandError(ToolError):
@@ -63,6 +64,7 @@ class Brand:
     guidance: str = ""
     style: str = "band"
     business_type: str = ""
+    stickers: str = ""
 
     def font_file(self, role: str) -> Path | None:
         path = self.logo_path.parent / "fonts" / f"{role}.ttf"
@@ -108,10 +110,14 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
     # Left out, or left blank, these are nothing and the ordinary look. Anything else has to be words.
     style = "band" if data.get("style") is None else _words(data["style"], "style")
     business_type = "" if data.get("business_type") is None else _words(data["business_type"], "business_type")
+    # YAML reads a bare off as false.
+    stickers = "off" if data.get("stickers") is False else "" if data.get("stickers") is None else _words(data["stickers"], "stickers")
+    if stickers and stickers not in STICKER_MODES:
+        raise BrandError(f"The brand kit's stickers must be one of {', '.join(STICKER_MODES)}.")
     logo_path = Path(assets_dir) / LOGO
     if not logo_path.exists():
         raise BrandError(f"The brand kit has no {LOGO} in its folder.")
-    return Brand(name, colours, fonts, voice, logo_path, guidance.strip(), style, business_type)
+    return Brand(name, colours, fonts, voice, logo_path, guidance.strip(), style, business_type, stickers)
 
 
 BRAND_PIN = "FOUNDRY_BRAND_DIR"

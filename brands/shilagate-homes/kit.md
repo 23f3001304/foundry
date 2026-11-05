@@ -11,6 +11,7 @@ fonts:
 style: solid
 business_type: Home builder
 audience: Home buyers and site teams
+stickers: subtle
 voice: Direct and sure. States what is built, what is next and by when. No sales talk.
 ---
 Shilagate Homes is a fictional home builder. Shila is Sanskrit for stone. Buyers and site teams read its material to know where each project stands.

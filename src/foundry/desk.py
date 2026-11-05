@@ -848,9 +848,8 @@ class Desk:
         deliver(job, self.client, job.room_id)
         self._reply_aloud(job, DELIVERED)
         self.log.add(self.clock(), job.bucket, job.room_id, DESK, "delivered", ", ".join(Path(path).name for path in job.artifacts), job_id=job.id)
-        self._sticker(job.room_id, "shipped")
-        if clean_run:
-            self._sticker(job.room_id, "celebrate")
+        # One sticker to end on, and the better one if nothing had to go back.
+        self._sticker(job.room_id, "celebrate" if clean_run and self._sticker_path(job.room_id, "celebrate") else "shipped")
 
     def _deliver_report(self, job: Job) -> None:
         # Logged in the room the report went to, with the notes it was made from, which is what the chain follows. No stickers: nothing was delivered to the room its notes came from.

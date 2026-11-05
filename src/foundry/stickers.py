@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from foundry.brand import load_brand_dir
+from foundry.brand import Brand, load_brand_dir
 
 STICKERS = Path(__file__).resolve().parents[2] / "stickers"
 MADE_STICKERS = Path(tempfile.gettempdir()) / "foundry-stickers"
@@ -69,15 +69,20 @@ def accessory_for(business_type: str) -> str | None:
     return next((accessory for word, accessory in ACCESSORY_WORDS.items() if word in words), None)
 
 
+def mode_for(brand: Brand, default: str) -> str:
+    # A kit says how much suits the company, unless whoever runs Foundry has turned stickers off.
+    return "off" if default == "off" else brand.stickers or default
+
+
 def branded_sticker(event: str, mode: str, brand_dir: Path | str, out_dir: Path | str = MADE_STICKERS) -> Path | None:
-    base = sticker_for(event, mode)
+    folder = Path(brand_dir)
+    brand = load_brand_dir(folder)
+    base = sticker_for(event, mode_for(brand, mode))
     if base is None:
         return None
-    folder = Path(brand_dir)
     path = Path(out_dir) / folder.name / base.name
     if path.exists() and path.stat().st_mtime >= (folder / "kit.md").stat().st_mtime:
         return path
-    brand = load_brand_dir(folder)
     image = Image.open(base).convert("RGBA")
     _recolour(image, _rgb(brand.colors["accent"]), _rgb(brand.colors["primary"]))
     accessory = accessory_for(brand.business_type)
