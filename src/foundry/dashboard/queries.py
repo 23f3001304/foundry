@@ -22,7 +22,7 @@ from foundry.items import COLUMNS as ITEM_COLUMNS
 from foundry.jobs import Job, State, _job
 from foundry.jobs import COLUMNS as JOB_COLUMNS
 from foundry.log import Entry, Log
-from foundry.text import headline
+from foundry.text import headline, shown_name
 
 # The kinds of file the desk delivers. Nothing else is served, whatever the log says a maker made.
 MEDIA = {
@@ -101,6 +101,8 @@ TONES = {
 }
 # A state nobody has named above gets the neutral mark, so it can't read as being worked on.
 NO_TONE = "idle"
+# The colour family of each stage. DESIGN.md says what each family means.
+STEP_FAMILIES = {"brief": "sun", "collecting": "sun", "made": "azure", "review": "orchid", "signoff": "orchid", "delivered": "lime", "stuck": "ember"}
 # A page that grows with every job would soon be too long to read, so it shows the newest and says what it left out.
 MOST_PAST_CARDS = 200
 MOST_TIMELINES = 20
@@ -177,6 +179,8 @@ class NavCounts:
 
     waiting: int = 0
     stuck: int = 0
+    # The stuck jobs of each business, so the switcher can say which one has them.
+    stuck_in: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -229,6 +233,9 @@ class JobRow:
     inputs_total: int = 0
     # A card about this job is addressed to this login.
     yours: bool = False
+    # Who approves it, by name, and the colour family its stage goes by.
+    approver: str = ""
+    family: str = ""
 
 
 @dataclass
@@ -311,6 +318,36 @@ class FileRow:
 
 
 @dataclass
+class JobChart:
+    """One of the three charts on a job's page, drawn from this job's own log. A line is its name, its colour family, and its running count at each point."""
+
+    title: str
+    lines: list[tuple[str, str, list[int]]]
+    times: list[str]
+    ends: tuple[str, str]
+    # What the last day added, and how that reads: good when it moved, flat when it didn't, stuck when the job has stopped here.
+    change: str
+    tone: str
+    # What the chart says instead when there is nothing to draw.
+    empty: str
+
+    @property
+    def drawn(self) -> bool:
+        return any(values and values[-1] for _, _, values in self.lines)
+
+
+@dataclass
+class Banner:
+    """The one loud thing on a job's page: stuck, waiting on a person, or just delivered."""
+
+    family: str
+    title: str
+    detail: str
+    href: str
+    go: str
+
+
+@dataclass
 class JobPage:
     row: JobRow
     brief: str
@@ -324,6 +361,14 @@ class JobPage:
     due_offer: Offer
     files: list[FileRow]
     can_flag: bool
+    # The facts beside the page: the earliest time an open input is due, and how many rooms this job has been in.
+    due_at: str = ""
+    rooms: int = 0
+    opened: str = ""
+    moved: str = ""
+    entries: int = 0
+    charts: list[JobChart] = field(default_factory=list)
+    banner: Banner | None = None
 
 
 @dataclass
@@ -505,6 +550,10 @@ STEP_OF = {
 NOT_FOR_REPORTS = ("collecting", "review")
 DAYS_SHOWN = 14
 TOOK_BANDS = (("Under 1 hour", 1), ("1 to 4 hours", 4), ("4 to 24 hours", 24), ("1 to 3 days", 72), ("Over 3 days", None))
+# How many points a job's charts have between the first thing logged on it and now. A job can last an hour or a month, so they are even steps of its own life and not days.
+JOB_CHART_POINTS = 12
+# A job delivered this recently still gets the page's banner.
+JUST_DELIVERED = timedelta(days=1)
 MOST_NEEDS = 5
 MOST_WHY = 110
 
@@ -550,6 +599,12 @@ def squeeze(text: str) -> str:
 
 def is_made_file(entry: Entry) -> bool:
     return entry.kind == "file_made" and bool(entry.ref) and LINK_MARK not in entry.ref
+
+
+def family_of(tone: str, step: str) -> str:
+    if tone == "stuck":
+        return "ember"
+    return "lime" if tone == "done" else STEP_FAMILIES.get(step, "none")
 
 
 def where_to_answer(card: Card) -> str:
@@ -630,18 +685,17 @@ class Reader:
         buckets = list(user.businesses)
         marks = ", ".join("?" * len(buckets))
 
-        def counted(path: Path | str, sql: str, *values: str) -> int:
+        def counted(path: Path | str, sql: str, *values: str) -> dict[str, int]:
             with closing(open_read_only(path, NAV_TIMEOUT)) as db:
-                return db.execute(sql, (*buckets, *values)).fetchone()[0]
+                return dict(db.execute(sql, (*buckets, *values)).fetchall())
 
         # The same cards the overview calls waiting, and the same jobs it calls stuck.
         try:
-            return NavCounts(
-                counted(self.settings.work_path, f"SELECT COUNT(*) FROM cards WHERE bucket IN ({marks}) AND state IN (?, ?)", OPEN, QUEUED),
-                counted(self.settings.jobs_path, f"SELECT COUNT(*) FROM jobs WHERE bucket IN ({marks}) AND state = ?", State.BLOCKED.value),
-            )
+            waiting = counted(self.settings.work_path, f"SELECT bucket, COUNT(*) FROM cards WHERE bucket IN ({marks}) AND state IN (?, ?) GROUP BY bucket", OPEN, QUEUED)
+            stuck = counted(self.settings.jobs_path, f"SELECT bucket, COUNT(*) FROM jobs WHERE bucket IN ({marks}) AND state = ? GROUP BY bucket", State.BLOCKED.value)
         except sqlite3.OperationalError:
             return NavCounts()
+        return NavCounts(sum(waiting.values()), sum(stuck.values()), stuck)
 
     def job_nav(self, user: User, job_id: str) -> JobNav | None:
         job = self.job_of(user, job_id)
@@ -768,9 +822,11 @@ class Reader:
         owes = status_line(asked) if asked else ""
         if len(items) > len(asked):
             owes = f"{owes}, {len(items) - len(asked)} not asked yet" if owes else NOBODY_ASKED
+        step = "" if job.state is State.DROPPED else STEP_OF.get(job.state, "")
         return JobRow(
             job.id, job.bucket, bucket_name(job.bucket), title_of(job), stage, sprite, owes, self._waiting(job, cards, known), tone_of(job),
-            "" if job.state is State.DROPPED else STEP_OF.get(job.state, ""), steps_of(job, bool(items)), sum(item.state in IN for item in counted), len(counted),
+            step, steps_of(job, bool(items)), sum(item.state in IN for item in counted), len(counted),
+            approver=known.get(job.approver) or shown_name("", job.approver) or NO_OWNER, family=family_of(tone_of(job), step),
         )
 
     def job_rows(self, user: User) -> list[JobRow]:
@@ -837,10 +893,64 @@ class Reader:
         if due_offer.buttons:
             # The three answers a due-time card offers, each as an action of its own.
             due_offer.buttons = [(action, label) for action, label in DUE_ACTIONS.items() if label in due.choices]
-        return JobPage(
-            self._row(job, cards, known), job.brief or "", job.report or "", list(job.attention), [self._item_row(item) for item in items],
-            answer, answer_offer, restart, due, due_offer, self._files(self.log.for_job(job.bucket, job.id)), job.approver == acts_as,
+        entries = self.log.for_job(job.bucket, job.id)
+        row = self._row(job, cards, known)
+        waiting_inputs = [item.due_at for item in items if item.state is ItemState.OPEN]
+        page = JobPage(
+            row, job.brief or "", job.report or "", list(job.attention), [self._item_row(item) for item in items],
+            answer, answer_offer, restart, due, due_offer, self._files(entries), job.approver == acts_as,
+            self.when(min(waiting_inputs)) if waiting_inputs else "",
+            len({job.room_id} | {entry.room_id for entry in entries}),
+            self.when(entries[0].at) if entries else "", self.when(entries[-1].at) if entries else "", len(entries),
+            self._job_charts(job, entries),
         )
+        page.banner = self._banner(job, page, entries)
+        return page
+
+    def _job_charts(self, job: Job, entries: list[Entry]) -> list[JobChart]:
+        # Only what this job's own log says. Each line is a running count, so the space between two of them is the real gap: asked for and not yet in, opened and not yet answered.
+        now = self.clock()
+        delivered = [entry.at for entry in entries if entry.kind == DELIVERED]
+        start = entries[0].at if entries else now
+        end = max(delivered[-1] if job.state is State.DELIVERED and delivered else now, start)
+        points = [start + (end - start) * place / (JOB_CHART_POINTS - 1) for place in range(JOB_CHART_POINTS)]
+        short = (lambda moment: f"{moment.astimezone(self.zone).day} {moment.astimezone(self.zone):%b}") if end - start >= timedelta(days=2) else (lambda moment: self.when(moment).split(", ")[1])
+
+        def line(wanted: list[Entry]) -> list[int]:
+            return [sum(entry.at <= point for entry in wanted) for point in points]
+
+        def kind(*names: str) -> list[Entry]:
+            return [entry for entry in entries if entry.kind in names]
+
+        def chart(title: str, lines: list[tuple[str, str, list[Entry]]], moved: str, empty: str, stopped: bool = False) -> JobChart:
+            lately = sum(entry.at > now - timedelta(days=1) for entry in lines[-1][2])
+            change, tone = ("Stopped", "stuck") if stopped else (f"+{lately} {moved}", "good") if lately else (f"0 {moved}", "flat")
+            return JobChart(title, [(name, family, line(wanted)) for name, family, wanted in lines], [self.when(point) for point in points], (short(start), short(end)), change, tone, empty)
+
+        stopped = job.state is State.BLOCKED
+        return [
+            chart("Inputs", [("Asked for", "sun", kind("item_asked")), ("In", "lime", kind("item_answer"))], "in 24h", "No input has been asked for on this job."),
+            chart("Cards", [("Opened", "azure", kind("card_opened")), ("Answered", "orchid", kind("card_answered"))], "in 24h", "No card has opened for this job."),
+            chart("Work made", [("Reviews", "orchid", kind("review")), ("Versions", "ember" if stopped else "azure", [entry for entry in entries if is_made_file(entry)])], "in 24h", "Nothing has been made yet.", stopped),
+        ]
+
+    def _banner(self, job: Job, page: JobPage, entries: list[Entry]) -> Banner | None:
+        row = page.row
+        can_act = page.answer_offer.buttons or page.answer_offer.changes or page.answer_offer.notice or page.restart.buttons or page.restart.notice or page.due_offer.buttons or page.due_offer.notice
+        if row.tone == "stuck":
+            why = page.attention[0] if page.attention else "It is waiting for someone to restart it."
+            return Banner("ember", "This job is stuck", why, "#act" if can_act else f"/log?job={job.id}", "What you can do" if can_act else "See the timeline")
+        if row.tone == "waiting":
+            why = row.waiting[0] if row.waiting else row.owes
+            if can_act:
+                return Banner(row.family, row.stage, why, "#act", "What you can do")
+            return Banner(row.family, row.stage, why, "#owes" if page.items else "/responses", "See who owes what" if page.items else "See the cards")
+        if job.state is State.DELIVERED:
+            sent = [entry for entry in entries if entry.kind == DELIVERED]
+            if sent and self.clock() - sent[-1].at <= JUST_DELIVERED:
+                href, go = (f"/work?job={job.id}", "See the files") if page.files else ("#report", "See the report") if page.report else (f"/log?job={job.id}", "See the timeline")
+                return Banner("lime", "Delivered", f"It went out {self.when(sent[-1].at)}.", href, go)
+        return None
 
     def _restart_offer(self, job: Job, card: Card, acts_as: str, known: dict[str, str]) -> Offer:
         if card.state not in (OPEN, EXPIRED) and not still_waits_on(job, card):

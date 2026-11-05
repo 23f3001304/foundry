@@ -26,7 +26,7 @@
 {% endmacro %}
 {% block main %}
 <header class="page-head">
-  <h1>Responses</h1>
+  <h1 class="title">Responses</h1>
   <p class="lead">Every card Foundry has opened, and how it was answered. Answering an open card here has the same effect as pressing its button in chat, and the chat card then closes.</p>
 </header>
 {% set open_cards = cards|selectattr("state", "equalto", "open")|list %}

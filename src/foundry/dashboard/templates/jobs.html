@@ -1,74 +1,56 @@
 {% extends "base.html" %}
-{% from "_ui.html" import sprite, empty_state, switcher %}
-{% macro figure(label, value, note, href, go, pose="", chart="", stuck=False) %}
-<div class="figure{% if stuck %} is-stuck{% endif %}">
-  <dt>{{ label }}</dt>
-  <dd>{{ value }}</dd>
-  <dd class="figure-note">{{ note }}</dd>
-  {% if pose %}<dd class="figure-sprite">{{ sprite(pose, 48, plays=True) }}</dd>{% endif %}
-  {% if chart %}<dd class="figure-chart">{{ chart }}</dd>{% endif %}
-  <dd class="figure-go"><a href="{{ href }}">{{ go }} <span class="go" aria-hidden="true"></span></a></dd>
-</div>
-{% endmacro %}
+{% from "_ui.html" import avatar, empty_state, page_title %}
 {% block main %}
-<header class="page-head">
-  <h1>Jobs</h1>
+<header class="page-head list-head">
+  {{ page_title([], "Jobs") }}
+  {% if board.yours %}<a class="button primary" href="/responses">{{ board.yours }} {{ "job needs" if board.yours == 1 else "jobs need" }} you</a>{% endif %}
 </header>
-{{ switcher(user, business, "/jobs", stage) }}
 {% if not board.total %}
 {{ empty_state("apprentice", "No jobs yet. A job starts when someone asks for something in a room Foundry works in.", "/connections", "See the connections") }}
 {% else %}
-<dl class="figures figures-strip">
-  {{ figure("Open jobs", board.open_jobs, "Of " ~ board.total ~ " in all", link("/jobs", business=business), "See them all") }}
-  {{ figure("Stuck", board.stuck, "Waiting for someone to restart them", link("/jobs", stage="stuck", business=business), "See the stuck jobs", "blocked" if board.stuck else "", "", board.stuck > 0) }}
-  {{ figure("Need you", board.yours, "A card about the job is addressed to you", "/responses", "See the cards", "tap" if board.yours else "") }}
-  {{ figure("Inputs in", board.inputs_in, "Of " ~ board.inputs_total ~ " asked for, on open jobs", link("/jobs", stage="collecting", business=business), "See the jobs collecting", "", charts.meter(board.inputs_in, board.inputs_total, "Inputs in", "accent")) }}
-</dl>
-
 <nav class="chips" aria-label="Filter the jobs by stage">
   {% for key, name, count, current in board.chips %}
-  <a class="chip-link{% if key == 'stuck' and count %} chip-stuck{% endif %}" href="{{ link('/jobs', stage=key, business=business) }}"{% if current %} aria-current="true"{% endif %}>{{ name }} <b>{{ count }}</b></a>
+  <a class="chip-link{% if key == 'stuck' and count %} chip-stuck{% endif %}" href="{{ link('/jobs', stage=key, business=business) }}"{% if current %} aria-current="true"{% endif %}><span class="dot fam-{{ families.get(key, 'none') }}" aria-hidden="true"></span>{{ name }} <b>{{ count }}</b></a>
   {% endfor %}
 </nav>
 
 {% if not board.rows %}
 {{ empty_state("smith", "No job is at this stage right now.", link("/jobs", business=business), "Show all jobs") }}
 {% else %}
-<div class="job-head" aria-hidden="true">
-  <span>Job</span>
-  <span class="job-head-steps">{% for step in board.rows[0].steps %}<span>{{ step.name }}</span>{% endfor %}</span>
-  <span>Who owes what</span>
-</div>
-<ul class="job-rows">
-  {% for row in board.rows %}
-  <li class="job-row{% if row.tone == 'stuck' %} is-stuck{% elif row.yours %} is-yours{% endif %}">
-    {{ sprite(row.sprite, 48, plays=row.tone == "stuck") }}
-    <div class="job-title">
-      <a class="row-link" href="/jobs/{{ row.id }}">{{ row.title }}</a>
-      {% if row.yours %}<span class="pill pill-accent">Needs you</span>{% endif %}
-      {% if user.businesses|length > 1 and not business %}<span class="small block">{{ row.client }}</span>{% endif %}
-      {% for line in row.waiting %}<span class="small block">{{ line }}</span>{% endfor %}
-    </div>
-    <div class="job-stage">
-      <ol class="stepper {{ row.tone }}" aria-label="Stages, with this job at {{ row.stage }}">
-        {% for step in row.steps %}<li class="step-{{ step.state }}"{% if step.state == "now" %} aria-current="step"{% endif %}><span>{{ step.name }}</span></li>{% endfor %}
-      </ol>
-      <span class="stage {{ row.tone }}">{{ row.stage }}</span>
-    </div>
-    <div class="job-inputs">
-      {% if row.inputs_total %}
-      <p class="job-count"><b>{{ row.inputs_in }}</b> of {{ row.inputs_total }} in</p>
-      {{ charts.meter(row.inputs_in, row.inputs_total, "Inputs in", "done" if row.inputs_in == row.inputs_total else "") }}
-      {% endif %}
-      {% if row.owes %}
-      <details class="owes"><summary>Who owes what</summary><p>{{ row.owes }}</p></details>
-      {% else %}
-      <span class="faint small">No inputs</span>
-      {% endif %}
-    </div>
-  </li>
-  {% endfor %}
-</ul>
+<table class="list jobs-table">
+  <thead>
+    <tr><th>Name</th><th>Status</th><th>Stages</th><th>Inputs</th><th>Who owes what</th><th>Approver</th><th aria-label="Open the job"></th></tr>
+  </thead>
+  <tbody>
+    {% for row in board.rows %}
+    <tr class="job-row{% if row.tone == 'stuck' %} is-stuck{% elif row.yours %} is-yours{% endif %}">
+      <td class="title-cell">
+        <a class="row-link" href="/jobs/{{ row.id }}">{{ row.title }}</a>
+        {% if row.yours %}<span class="pill pill-needs">Needs you</span>{% endif %}
+        {% if user.businesses|length > 1 and not business %}<span class="small block">{{ row.client }}</span>{% endif %}
+        {% for line in row.waiting %}<span class="small block">{{ line }}</span>{% endfor %}
+      </td>
+      <td data-label="Status"><span class="stage {{ row.tone }} fam-{{ row.family }}">{{ row.stage }}</span></td>
+      <td data-label="Stages">
+        <ol class="stepper {{ row.tone }} fam-{{ row.family }}" aria-label="Stages, with this job at {{ row.stage }}">
+          {% for step in row.steps %}<li class="step-{{ step.state }}"{% if step.state == "now" %} aria-current="step"{% endif %}><span>{{ step.name }}</span></li>{% endfor %}
+        </ol>
+      </td>
+      <td data-label="Inputs" class="job-inputs">
+        {% if row.inputs_total %}
+        <p class="job-count"><b>{{ row.inputs_in }}</b> of {{ row.inputs_total }} in</p>
+        {{ charts.meter(row.inputs_in, row.inputs_total, "Inputs in", "lime" if row.inputs_in == row.inputs_total else "sun") }}
+        {% else %}
+        <span class="faint">No inputs</span>
+        {% endif %}
+      </td>
+      <td data-label="Who owes what" class="owes">{% if row.owes %}<span title="{{ row.owes }}">{{ row.owes }}</span>{% endif %}</td>
+      <td data-label="Approver" class="approver">{{ avatar(row.approver) }}<span class="hidden">{{ row.approver }}</span></td>
+      <td class="go-cell"><span class="go" aria-hidden="true"></span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
 {% endif %}
 {% endif %}
 {% endblock %}

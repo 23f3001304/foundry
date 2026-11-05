@@ -1,8 +1,7 @@
 {% from "_ui.html" import sprite %}
 {% if recent %}
-<section class="card recent">
-  <div class="card-head"><h2>Your recent actions</h2></div>
-  <p class="small card-text">The desk applies these within a few seconds.</p>
+<section class="recent">
+  <div class="section-head"><h2>Your recent actions</h2><p class="small">The desk applies these within a few seconds.</p></div>
   <ul class="recent-rows">
     {% for action in recent %}
     <li>{% if loop.first and action.done %}{{ sprite("nod", 48, plays=True) }}{% endif %}<span>{{ action.what }}. <span class="{{ 'failed' if action.failed else 'status' }}">{{ action.status }}</span></span></li>

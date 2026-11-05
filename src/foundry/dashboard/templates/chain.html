@@ -1,9 +1,8 @@
 {% extends "base.html" %}
-{% from "_ui.html" import crumbs, job_tabs, empty_state %}
+{% from "_ui.html" import page_title, job_tabs, empty_state %}
 {% block main %}
 <header class="page-head">
-  {{ crumbs([("Action log", "/log"), (chain.flagged.text, "/log#flag-" ~ chain.flagged.id)], "Chain") }}
-  <h1>{{ chain.flagged.text }}</h1>
+  {{ page_title([("Action log", "/log"), (chain.flagged.text, "/log#flag-" ~ chain.flagged.id)], "Chain") }}
   <p class="page-meta"><a href="/jobs/{{ chain.job_id }}">{{ chain.job_title }}</a></p>
   <p class="lead">Flagged by {{ chain.flagged.who }}{% if chain.via_dashboard %} on the dashboard{% endif %}, {{ chain.flagged.at }}. This is everyone and every agent behind this one thing, and nothing else.</p>
 </header>
@@ -32,6 +31,6 @@
   {% endfor %}
 </ol>
 {% else %}
-{{ empty_state("reviewer", "Nothing in this job is behind it.", "/log", "Back to the action log") }}
+{{ empty_state("reviewer", "Nothing in this job is behind it.", "/log", "Back to the action log", "sun") }}
 {% endif %}
 {% endblock %}

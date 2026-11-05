@@ -26,10 +26,10 @@ from starlette.templating import Jinja2Templates
 
 from foundry.chain import SAID
 from foundry.commands import DUE_ACTIONS, KIT, CommandStore
-from foundry.dashboard import charts, gateway
+from foundry.dashboard import charts, gateway, shapes
 from foundry.dashboard import data as brand_data
 from foundry.dashboard.auth import COOKIE, LIFETIME, REFUSED, User, csrf_ok, current_user, end_session, find_session, start_session, switch_login
-from foundry.dashboard.queries import MEDIA, PICTURES, ConnectionRow, NavCounts, Reader, bucket_name, is_made_file
+from foundry.dashboard.queries import MEDIA, PICTURES, STEP_FAMILIES, ConnectionRow, NavCounts, Reader, bucket_name, is_made_file
 from foundry.desk import Settings
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,15 @@ def in_view(request: Request, user: User) -> tuple[User, str]:
     return user, ""
 
 
+def one_business(request: Request, user: User) -> tuple[User, str]:
+    # The overview shows one business at a time, so someone with several starts on their first and moves with the switcher.
+    shown, business = in_view(request, user)
+    if len(shown.businesses) > 1:
+        business = next(iter(shown.businesses))
+        return User(user.login, {business: user.businesses[business]}), business
+    return shown, business
+
+
 def job_of(request: Request, user: User, job_id: str):
     job = request.app.state.reader.job_of(user, job_id)
     if job is None:
@@ -224,7 +233,7 @@ async def own_connection(request: Request, user: User, bridge_id: str) -> Connec
 
 @signed_in
 async def overview(request: Request, user: User) -> Response:
-    shown, business = in_view(request, user)
+    shown, business = one_business(request, user)
     figures = await run_in_threadpool(request.app.state.reader.overview, shown)
     health = {}
     if shown.businesses:
@@ -623,6 +632,8 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
     environment.filters["when"] = reader.when
     environment.filters["client"] = bucket_name
     environment.globals["charts"] = charts
+    environment.globals["shapes"] = shapes
+    environment.globals["families"] = STEP_FAMILIES
     environment.globals["link"] = link
     app.state.settings, app.state.reader, app.state.commands = settings, reader, CommandStore(settings.commands_path)
     app.state.templates = Jinja2Templates(env=environment)

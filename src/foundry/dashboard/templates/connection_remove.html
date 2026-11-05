@@ -1,9 +1,8 @@
 {% extends "base.html" %}
-{% from "_ui.html" import crumbs %}
+{% from "_ui.html" import page_title %}
 {% block main %}
 <header class="page-head">
-  {{ crumbs([("Connections", "/connections")], "Remove a connection") }}
-  <h1>{% if row %}Remove {{ row.name }}{% else %}Remove a connection{% endif %}</h1>
+  {{ page_title([("Connections", "/connections")], ("Remove " ~ row.name) if row else "Remove a connection") }}
 </header>
 {% if problem %}<p class="alert" role="alert">{{ problem }}</p>{% endif %}
 {% if row and unsure %}

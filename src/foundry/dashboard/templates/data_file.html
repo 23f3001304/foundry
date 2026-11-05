@@ -1,9 +1,8 @@
 {% extends "base.html" %}
-{% from "_ui.html" import crumbs %}
+{% from "_ui.html" import page_title %}
 {% block main %}
 <header class="page-head">
-  {{ crumbs([("Data", "/data")], view.file) }}
-  <h1>{{ view.file }}</h1>
+  {{ page_title([("Data", "/data")], view.file) }}
   <p class="small">{{ view.kind }} for {{ view.client }}.</p>
 </header>
 <div class="grid">

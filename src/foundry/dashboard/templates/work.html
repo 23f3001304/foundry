@@ -1,15 +1,14 @@
 {% extends "base.html" %}
-{% from "_ui.html" import crumbs, job_tabs, empty_state %}
+{% from "_ui.html" import page_title, job_tabs, empty_state %}
 {% block main %}
 {% if tabs %}
 <header class="page-head">
-  {{ crumbs([("Jobs", "/jobs"), (tabs.title, "/jobs/" ~ tabs.id)], "Files") }}
-  <h1>{{ tabs.title }}</h1>
+  {{ page_title([("Jobs", "/jobs")], tabs.title) }}
 </header>
 {{ job_tabs(tabs, "files") }}
 {% else %}
 <header class="page-head">
-  <h1>Generated work</h1>
+  {{ page_title([], "Generated work") }}
 </header>
 {% endif %}
 {% if not jobs %}

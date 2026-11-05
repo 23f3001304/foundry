@@ -4,13 +4,12 @@
 <span class="sprite sprite-{{ size }} sheet-{{ name }}-{{ size }}{% if plays %} plays{% endif %}" aria-hidden="true"></span>
 {%- endmacro %}
 
-{% macro crumbs(trail, here) %}
-<nav class="crumbs" aria-label="Breadcrumb">
-  <ol>
-    {% for name, href in trail %}<li><a href="{{ href }}">{{ name }}</a></li>{% endfor %}
-    <li aria-current="page">{{ here }}</li>
-  </ol>
-</nav>
+{% macro tile(icon, family) -%}
+<span class="tile fam-{{ family }}" aria-hidden="true"><span class="icon icon-{{ icon }}"></span></span>
+{%- endmacro %}
+
+{% macro page_title(trail, here) %}
+<h1 class="title">{% for name, href in trail %}<a href="{{ href }}">{{ name }}</a><span class="title-sep" aria-hidden="true">/</span> {% endfor %}<span>{{ here }}</span></h1>
 {% endmacro %}
 
 {% macro job_tabs(tabs, here) %}
@@ -22,25 +21,52 @@
 </nav>
 {% endmacro %}
 
-{% macro empty_state(pose, words, href="", next="") %}
+{% macro empty_state(pose, words, href="", next="", family="lime") %}
 <div class="empty-state">
+  {{ shapes.grid_tile(family) }}
   {{ sprite(pose, 96, plays=True) }}
-  <div>
+  <div class="empty-card">
     <p class="empty">{{ words }}</p>
     {% if href %}<a class="button" href="{{ href }}">{{ next }}</a>{% endif %}
   </div>
 </div>
 {% endmacro %}
 
-{% macro switcher(user, business, path, stage="") %}
-{% if user.businesses|length > 1 %}
-<nav class="chips" aria-label="Which business to show">
-  <span class="chips-label">Showing</span>
-  <a class="chip-link" href="{{ link(path, stage=stage) }}"{% if not business %} aria-current="true"{% endif %}>All businesses</a>
-  {% for bucket in user.businesses %}
-  <a class="chip-link" href="{{ link(path, stage=stage, business=bucket) }}"{% if business == bucket %} aria-current="true"{% endif %}>{{ bucket|client }}</a>
+{% macro avatar(name) -%}
+{%- set words = name.split() -%}
+<span class="avatar" title="{{ name }}" aria-hidden="true">{{ (words[0][:1] ~ (words[1][:1] if words|length > 1 else ""))|upper if words else "?" }}</span>
+{%- endmacro %}
+
+{% macro legend(lines, running=True) %}
+<ul class="legend">
+  {% for name, family, values in lines %}
+  <li><span class="diamond fam-{{ family }}" aria-hidden="true"></span>{{ name }}<b>{{ values[-1] if running else values|sum }}</b></li>
   {% endfor %}
-</nav>
+</ul>
+{% endmacro %}
+
+{% macro switcher(user, business, path, stage, stuck_in, whole=True) %}
+{% if user.businesses|length > 1 %}
+<details class="switcher">
+  <summary class="switcher-head">
+    <span class="switcher-mark" aria-hidden="true"><span class="icon icon-group-work"></span></span>
+    <span class="hidden">Showing </span><span class="nav-name">{{ business|client if business else "All businesses" }}</span>
+    <span class="icon icon-chevron" aria-hidden="true"></span>
+  </summary>
+  <nav class="switcher-menu" aria-label="Which business to show">
+    {% if whole %}<a class="switcher-item" href="{{ link(path, stage=stage) }}"{% if not business %} aria-current="true"{% endif %}><span class="dot" aria-hidden="true"></span><span class="nav-name">All businesses</span></a>{% endif %}
+    {% for bucket in user.businesses %}
+    <a class="switcher-item" href="{{ link(path, stage=stage, business=bucket) }}"{% if business == bucket %} aria-current="true"{% endif %}><span class="dot {{ 'fam-ember' if stuck_in.get(bucket) else 'fam-lime' }}" aria-hidden="true"></span><span class="nav-name">{{ bucket|client }}</span>{% if stuck_in.get(bucket) %}<span class="pill pill-stuck">{{ stuck_in[bucket] }}<span class="hidden"> stuck</span></span>{% endif %}</a>
+    {% endfor %}
+  </nav>
+</details>
+{% elif user.businesses %}
+<div class="switcher is-one">
+  <div class="switcher-head">
+    <span class="switcher-mark" aria-hidden="true"><span class="icon icon-group-work"></span></span>
+    <span class="nav-name">{{ (user.businesses|list|first)|client }}</span>
+  </div>
+</div>
 {% endif %}
 {% endmacro %}
 

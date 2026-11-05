@@ -1,9 +1,8 @@
 {% extends "base.html" %}
-{% from "_ui.html" import crumbs %}
+{% from "_ui.html" import page_title %}
 {% block main %}
 <header class="page-head">
-  {{ crumbs([("Connections", "/connections")], "Add a connection") }}
-  <h1>Add a connection</h1>
+  {{ page_title([("Connections", "/connections")], "Add a connection") }}
   {% if unsure %}
   {% elif chosen %}
   <p class="lead">Adding a {{ chosen.name }} connection. Anything secret you type here goes straight to Switch. Foundry does not keep it, log it or show it again, so if Switch says no, enter it again.</p>

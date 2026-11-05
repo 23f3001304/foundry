@@ -6,8 +6,17 @@
 <title>{{ title }} - Foundry</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
+{% from "_ui.html" import switcher, avatar %}
 {% macro nav_item(key, href, name, count=0, says="waiting") %}
 <li><a class="nav-item" href="{{ href }}"{% if page == key %} aria-current="page"{% endif %}><span class="icon icon-{{ key }}" aria-hidden="true"></span><span class="nav-name">{{ name }}</span>{{ badge(count, says) }}</a></li>
+{% endmacro %}
+{% macro nav_group(key, family, name, pages) %}
+<details class="nav-group fam-{{ family }}{% if page in pages %} is-current{% endif %}" open>
+  <summary class="nav-group-head"><span class="icon icon-group-{{ key }}" aria-hidden="true"></span><span class="nav-name">{{ name }}</span><span class="icon icon-updown" aria-hidden="true"></span></summary>
+  <ul class="nav-list nav-children">
+    {{ caller() }}
+  </ul>
+</details>
 {% endmacro %}
 {% macro badge(count, says) %}{% if count %}<span class="pill{% if says == 'stuck' %} pill-stuck{% endif %}">{{ count }}<span class="hidden"> {{ says }}</span></span>{% endif %}{% endmacro %}
 {% macro tab(key, href, name, full="", count=0, says="waiting") %}
@@ -16,43 +25,43 @@
 {% macro sign_out() %}
 <form class="who" method="post" action="/logout">
   <input type="hidden" name="csrf" value="{{ csrf }}">
+  {{ avatar(user.login.replace("-", " ")) }}
   <span title="{{ user.login }}">{{ user.login }}</span>
   <button class="quiet" type="submit">Sign out</button>
 </form>
 {% endmacro %}
 <body class="{{ 'shell' if user else 'bare' }}{% if page %} page-{{ page }}{% endif %}">
 <a class="skip" href="#main">Skip to the page</a>
+{{ shapes.defs() }}
 {% if user %}
+<input class="side-toggle" type="checkbox" id="side-toggle" aria-label="Fold the side bar">
 <aside class="side">
-  <a class="mark" href="{{ link('/', business=business) }}">Foundry</a>
+  <div class="side-top">
+    <a class="mark" href="{{ link('/', business=business) }}"><img class="wordmark" src="/static/wordmark.svg" alt="Foundry"><img class="logo" src="/static/logo.svg" alt=""></a>
+    <label class="side-fold" for="side-toggle" title="Fold the side bar"><span class="icon icon-panel" aria-hidden="true"></span></label>
+  </div>
+  {{ switcher(user, business or (job.row.bucket if job else ""), "/jobs" if page == "jobs" else "/", stage if page == "jobs" else "", counts.stuck_in, page == "jobs") }}
   <nav class="side-nav" aria-label="Pages">
-    <div>
-      <p class="nav-group" id="nav-work">Work</p>
-      <ul class="nav-list" aria-labelledby="nav-work">
-        {{ nav_item("overview", link("/", business=business), "Overview") }}
-        {{ nav_item("jobs", link("/jobs", business=business), "Jobs", counts.stuck, "stuck") }}
-        {{ nav_item("responses", "/responses", "Responses", counts.waiting) }}
-        {{ nav_item("work", "/work", "Generated work") }}
-      </ul>
-    </div>
-    <div>
-      <p class="nav-group" id="nav-records">Records</p>
-      <ul class="nav-list" aria-labelledby="nav-records">
-        {{ nav_item("log", "/log", "Action log") }}
-      </ul>
-    </div>
-    <div>
-      <p class="nav-group" id="nav-setup">Setup</p>
-      <ul class="nav-list" aria-labelledby="nav-setup">
-        {{ nav_item("connections", "/connections", "Connections") }}
-        {{ nav_item("data", "/data", "Data") }}
-      </ul>
-    </div>
+    <ul class="nav-list">
+      {{ nav_item("overview", link("/", business=business), "Overview") }}
+      {{ nav_item("responses", "/responses", "Responses", counts.waiting) }}
+    </ul>
+    {% call nav_group("work", "lime", "Work", ("jobs", "work")) %}
+      {{ nav_item("jobs", link("/jobs", business=business), "Jobs", counts.stuck, "stuck") }}
+      {{ nav_item("work", "/work", "Generated work") }}
+    {% endcall %}
+    {% call nav_group("records", "sun", "Records", ("log",)) %}
+      {{ nav_item("log", "/log", "Action log") }}
+    {% endcall %}
+    {% call nav_group("setup", "azure", "Setup", ("connections", "data")) %}
+      {{ nav_item("connections", "/connections", "Connections") }}
+      {{ nav_item("data", "/data", "Data") }}
+    {% endcall %}
   </nav>
   {{ sign_out() }}
 </aside>
 {% else %}
-<header class="bare-head"><a class="mark" href="/">Foundry</a></header>
+<header class="bare-head"><a class="mark" href="/"><img class="wordmark" src="/static/wordmark.svg" alt="Foundry"></a></header>
 {% endif %}
 <main id="main">
 {% block main %}{% endblock %}

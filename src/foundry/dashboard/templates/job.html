@@ -1,30 +1,69 @@
 {% extends "base.html" %}
-{% from "_ui.html" import sprite, crumbs, job_tabs %}
-{% block main %}
-<header class="page-head with-sprite">
-  <div>
-    {{ crumbs([("Jobs", "/jobs")], job.row.title) }}
-    <h1>{{ job.row.title }}</h1>
-    <p class="page-meta"><span class="stage {{ job.row.tone }}">{{ job.row.stage }}</span>{% if user.businesses|length > 1 %}<span class="small">{{ job.row.client }}</span>{% endif %}</p>
-    {% for line in job.row.waiting %}<p class="small">{{ line }}</p>{% endfor %}
+{% from "_ui.html" import avatar, sprite, tile, legend, page_title, job_tabs %}
+{% macro fold(key, icon, family, name, meta="", open=True) %}
+<details class="fold"{% if key %} id="{{ key }}"{% endif %}{% if open %} open{% endif %}>
+  <summary>
+    <span class="icon icon-chevron" aria-hidden="true"></span>
+    {{ tile(icon, family) }}
+    <h2>{{ name }}</h2>
+    {% if meta %}<span class="fold-meta">{{ meta }}</span>{% endif %}
+  </summary>
+  <div class="fold-body">
+    {{ caller() }}
   </div>
-  {{ sprite(job.row.sprite, 96, plays=job.row.tone in ("stuck", "done") or job.row.sprite == "tap") }}
+</details>
+{% endmacro %}
+{% set can_act = job.answer_offer.buttons or job.answer_offer.changes or job.answer_offer.notice or job.restart.buttons or job.restart.notice or job.due_offer.buttons or job.due_offer.notice %}
+{% block main %}
+<div class="with-rail">
+<div class="with-rail-main">
+<header class="page-head">
+  {{ page_title([("Jobs", "/jobs")], job.row.title) }}
 </header>
 {{ job_tabs(tabs, "job") }}
-
-<div class="grid">
-<div class="stacked span-8">
-<div class="card job-progress">
-  <ol class="stepper stepper-named {{ job.row.tone }}" aria-label="Stages, with this job at {{ job.row.stage }}">
-    {% for step in job.row.steps %}<li class="step-{{ step.state }}"{% if step.state == "now" %} aria-current="step"{% endif %}>{% if step.state != "skipped" %}<span>{{ step.name }}</span>{% endif %}</li>{% endfor %}
-  </ol>
+<div class="state-pills">
+  <span class="state-pill is-current fam-{{ job.row.family }}"><span class="dot" aria-hidden="true"></span><span class="stage {{ job.row.tone }} is-bare">{{ job.row.stage }}</span></span>
+  {% if user.businesses|length > 1 %}<a class="state-pill" href="{{ link('/', business=job.row.bucket) }}"><span class="dot fam-none" aria-hidden="true"></span>{{ job.row.client }}</a>{% endif %}
 </div>
 
-{% if job.answer_offer.buttons or job.answer_offer.changes or job.answer_offer.notice or job.restart.buttons or job.restart.notice or job.due_offer.buttons or job.due_offer.notice %}
-<section class="card card-action" id="act">
-  <div class="card-head"><h2>What you can do</h2></div>
+{% if job.banner %}
+<div class="banner fam-{{ job.banner.family }}">
+  <div class="banner-words">
+    <p class="banner-title">{{ job.banner.title }}</p>
+    {% if job.banner.detail %}<p class="banner-detail">{{ job.banner.detail }}</p>{% endif %}
+  </div>
+  <a class="banner-go" href="{{ job.banner.href }}">{{ job.banner.go }}</a>
+</div>
+{% endif %}
+
+<div class="chart-panel job-charts">
+  <div class="panel-strip">
+    {% if job.opened %}<span><span class="diamond fam-lime" aria-hidden="true"></span>Opened <b>{{ job.opened }}</b></span>{% endif %}
+    {% if job.moved %}<span><span class="diamond fam-azure" aria-hidden="true"></span>Last moved <b>{{ job.moved }}</b></span>{% endif %}
+    <a class="strip-link" href="/log?job={{ job.row.id }}">{{ job.entries }} {{ "thing" if job.entries == 1 else "things" }} logged</a>
+  </div>
+  {% if job.charts|selectattr("drawn")|list %}
+  {% for chart in job.charts %}
+  <div class="chart-cell span-4">
+    <div class="cell-head"><h3>{{ chart.title }}</h3>{% if chart.drawn %}<span class="delta delta-{{ chart.tone }}">{{ chart.change }}</span>{% endif %}</div>
+    {% if chart.drawn %}
+    {{ charts.area(chart.times, chart.lines, chart.title, band=True, running=True, ends=chart.ends) }}
+    {{ legend(chart.lines) }}
+    {% else %}
+    <p class="no-data">{{ chart.empty }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+  {% endif %}
+</div>
+
+<div class="folds">
+{% if can_act %}
+<details class="fold fold-act" id="act" open>
+  <summary><span class="icon icon-chevron" aria-hidden="true"></span>{{ tile("go", "lime") }}<h2>What you can do</h2></summary>
+  <div class="fold-body">
   {% if job.answer_offer.buttons or job.answer_offer.changes %}
-  <p class="lead-in card-text">{{ job.answer.title }}</p>
+  <p class="lead-in">{{ job.answer.title }}</p>
   <form class="stack" method="post" action="/jobs/{{ job.row.id }}/answer">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <input type="hidden" name="request_id" value="{{ job.answer.request_id }}">
@@ -50,7 +89,7 @@
   {% endif %}
   {% if job.restart.notice %}<p class="small">{{ job.restart.notice }}</p>{% endif %}
   {% if job.due_offer.buttons %}
-  <p class="lead-in card-text">{{ job.due.title }}</p>
+  <p class="lead-in">{{ job.due.title }}</p>
   <form class="buttons" method="post" action="/jobs/{{ job.row.id }}/act">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     {% for action, label in job.due_offer.buttons %}<button type="submit" name="action" value="{{ action }}">{{ label }}</button>{% endfor %}
@@ -58,14 +97,28 @@
   <p class="small">Choosing "Ask someone else" here only presses the button. Whoever asked then names the person in chat.</p>
   {% endif %}
   {% if job.due_offer.notice %}<p class="small">{{ job.due.title }}. {{ job.due_offer.notice }}</p>{% endif %}
-</section>
+  </div>
+</details>
+{% endif %}
+
+{# What the banner already says isn't said again below it. #}
+{% set said = job.banner.detail if job.banner else "" %}
+{% set waiting_lines = job.row.waiting|reject("equalto", said)|list %}
+{% set attention_lines = job.attention|reject("equalto", said)|list %}
+{% if waiting_lines %}
+{% call fold("waiting", "needs", job.row.family, "What it is waiting for") %}
+  <ul class="plain">{% for line in waiting_lines %}<li>{{ line }}</li>{% endfor %}</ul>
+{% endcall %}
+{% endif %}
+
+{% if attention_lines %}
+{% call fold("attention", "stuck", "ember", "Needs attention") %}
+  <ul class="plain">{% for line in attention_lines %}<li>{{ line }}</li>{% endfor %}</ul>
+{% endcall %}
 {% endif %}
 
 {% if job.items %}
-<section class="card">
-  <div class="card-head"><h2>Who owes what</h2></div>
-  <p class="card-text">{{ job.row.owes }}</p>
-  <div class="scroll">
+{% call fold("owes", "inputs", "sun", "Who owes what", job.row.owes) %}
   <table class="list items-table">
     <thead><tr><th>Who</th><th>Input</th><th>Exact measure</th><th>Due</th><th>Where it stands</th></tr></thead>
     <tbody>
@@ -80,57 +133,74 @@
     {% endfor %}
     </tbody>
   </table>
-  </div>
-</section>
-{% endif %}
-
-{% if job.attention %}
-<section class="card" id="attention">
-  <div class="card-head"><h2>Needs attention</h2></div>
-  <ul class="plain">{% for line in job.attention %}<li>{{ line }}</li>{% endfor %}</ul>
-</section>
+{% endcall %}
 {% endif %}
 
 {% if job.brief %}
-<section class="card">
-  <div class="card-head"><h2>What was asked for</h2></div>
+{% call fold("", "brief", "lime", "What was asked for") %}
   <pre class="text">{{ job.brief }}</pre>
-</section>
+{% endcall %}
 {% endif %}
 {% if job.report %}
-<section class="card">
-  <div class="card-head"><h2>Report</h2></div>
+{% call fold("report", "brief", "orchid", "Report") %}
   <pre class="text">{{ job.report }}</pre>
-</section>
+{% endcall %}
+{% endif %}
+
+{% if job.files %}
+{% call fold("", "work", "azure", "Files", job.files|length ~ (" file" if job.files|length == 1 else " files")) %}
+  <ul class="rows file-rows">
+    {% for file in job.files %}
+    <li>
+      <span class="file-name">{{ file.name }}</span>
+      {% if job.can_flag %}
+      <details class="flag-fold">
+        <summary>Flag something in this file</summary>
+        <form class="stack flag-form" method="post" action="/log/flag">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input type="hidden" name="job_id" value="{{ job.row.id }}">
+          <input type="hidden" name="what" value="text">
+          <input type="hidden" name="file" value="{{ file.entry_id }}">
+          <label for="statement-{{ file.entry_id }}">Flag a number or statement in {{ file.name }}</label>
+          <div class="inline-field">
+            <input id="statement-{{ file.entry_id }}" name="statement" type="text" maxlength="200" required>
+            <button type="submit">Flag it</button>
+          </div>
+        </form>
+      </details>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="section-foot"><a href="/work?job={{ job.row.id }}">All versions and downloads</a></p>
+{% endcall %}
 {% endif %}
 </div>
-
-<div class="stacked span-4">
-{% if job.files %}
-<section class="card">
-  <div class="card-head"><h2>Files</h2></div>
-  <ul class="rows">
-    {% for file in job.files %}<li>{{ file.name }}</li>{% endfor %}
-  </ul>
-  <p class="card-foot"><a href="/work?job={{ job.row.id }}">All versions and downloads</a></p>
-  {% if job.can_flag %}
-  {% for file in job.files %}
-  <form class="stack flag-form" method="post" action="/log/flag">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <input type="hidden" name="job_id" value="{{ job.row.id }}">
-    <input type="hidden" name="what" value="text">
-    <input type="hidden" name="file" value="{{ file.entry_id }}">
-    <label for="statement-{{ file.entry_id }}">Flag a number or statement in {{ file.name }}</label>
-    <div class="inline-field">
-      <input id="statement-{{ file.entry_id }}" name="statement" type="text" maxlength="200" required>
-      <button type="submit">Flag it</button>
-    </div>
-  </form>
-  {% endfor %}
-  {% endif %}
-</section>
-{% endif %}
 {% include "_recent.html" %}
 </div>
+
+<aside class="rail" aria-label="About this job">
+  <dl class="facts">
+    <div><dt>Key</dt><dd class="mono">{{ job.row.id }}</dd></div>
+    <div><dt>Approver</dt><dd class="fact-person">{{ avatar(job.row.approver) }}{{ job.row.approver }}</dd></div>
+    <div><dt>Due</dt><dd>{{ job.due_at or "Nothing open is due" }}</dd></div>
+    <div><dt>Business</dt><dd>{{ job.row.client }}</dd></div>
+    <div><dt>Rooms</dt><dd>{{ job.rooms }}</dd></div>
+  </dl>
+  <h2 class="rail-head">Stages</h2>
+  <ol class="stepper stepper-named {{ job.row.tone }} fam-{{ job.row.family }}" aria-label="Stages, with this job at {{ job.row.stage }}">
+    {% for step in job.row.steps if step.state != "skipped" %}
+    <li class="step-{{ step.state }}"{% if step.state == "now" %} aria-current="step"{% endif %}>
+      <span>{{ step.name }}</span>
+      {% if step.state == "now" %}
+      <span class="step-status">{{ {"stuck": "Stuck here", "done": "Finished", "waiting": "Waiting on a person", "working": "Foundry is working"}.get(job.row.tone, "Here") }}</span>
+      {{ sprite(job.row.sprite, 48, plays=job.row.tone in ("stuck", "done") or job.row.sprite == "tap") }}
+      {% else %}
+      <span class="step-status">{{ {"past": "Completed", "next": "Not started"}[step.state] }}</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ol>
+</aside>
 </div>
 {% endblock %}

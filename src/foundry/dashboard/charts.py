@@ -9,7 +9,9 @@ from math import ceil, pi
 
 from markupsafe import Markup, escape
 
-SPARK_HEIGHT, BARS_HEIGHT, FLOW_HEIGHT, METER_HEIGHT = 72, 224, 88, 8
+AREA_HEIGHT, BARS_HEIGHT, FLOW_HEIGHT, METER_HEIGHT = 136, 136, 128, 8
+# How far each end of a line is marked, in whole pixels either way.
+END_MARK = 1
 
 
 def _n(value: float) -> str:
@@ -31,32 +33,56 @@ def _scale_top(highest: int) -> int:
     return max(2, ceil(highest / 2) * 2)
 
 
-def sparkline(values: Sequence[int], days: Sequence[str], label: str, tone: str = "", href: str = "") -> Markup:
-    """A thin line with one point per day, the highest day at the top, and the first and last day named under it."""
-    count, highest = len(values), max(values, default=0)
-    top, bottom = 18, 76
-    if count < 2:
-        return _svg(f"spark {tone}", f"{label}: nothing to show yet", "", 'width="100%"', f'height="{SPARK_HEIGHT}"')
+def area(times: Sequence[str], lines: Sequence[tuple[str, str, Sequence[int]]], label: str, band: bool = False, running: bool = False, ends: tuple[str, str] | None = None, href: str = "") -> Markup:
+    """Saturated lines with a soft fill under them, all on one scale, and a dashed line at zero. Each line is a name, a colour family and one number per time. With band, the space between the first two lines is filled, because that space means something. With running, each number already counts everything before it."""
+    count, highest = len(times), max((max(values, default=0) for _, _, values in lines), default=0)
+    if count < 2 or not highest:
+        return _svg("area", f"{label}: nothing to show yet", "", 'width="100%"', f'height="{AREA_HEIGHT}"')
+    scale = _scale_top(highest)
+    left, top, bottom = 7.0, 6.0, 84.0
 
     def x(index: int) -> float:
-        return 1 + 98 * index / (count - 1)
+        return 100 * index / (count - 1)
 
     def y(value: int) -> float:
-        return bottom - (bottom - top) * value / highest if highest else bottom
+        return 100 - 100 * value / scale
 
-    parts = [f'<line class="grid" x1="0" x2="100%" y1="{bottom}%" y2="{bottom}%"/>', f'<line class="grid" x1="0" x2="100%" y1="{top}%" y2="{top}%"/>']
-    # Lines rather than one polyline, because only these can be placed in percentages and so stay sharp at any width.
-    parts += [f'<line class="spark-line" x1="{_n(x(i))}%" y1="{_n(y(values[i]))}%" x2="{_n(x(i + 1))}%" y2="{_n(y(values[i + 1]))}%"/>' for i in range(count - 1)]
-    parts.append(f'<circle class="spark-end" cx="{_n(x(count - 1))}%" cy="{_n(y(values[-1]))}%" r="3"/>')
-    width = 100 / count
-    parts += [_linked(f'<rect class="hit" x="{_n(width * i)}%" y="0" width="{_n(width)}%" height="100%"><title>{escape(days[i])}: {values[i]}</title></rect>', href) for i in range(count)]
+    def down(share: float) -> float:
+        return top + (bottom - top) * share / 100
+
+    def trace(values: Sequence[int]) -> str:
+        return " ".join(f"{'L' if index else 'M'}{_n(x(index))} {_n(y(value))}" for index, value in enumerate(values))
+
+    fills = []
+    if band and len(lines) > 1:
+        first, second = lines[0][2], lines[1][2]
+        back = " ".join(f"L{_n(x(index))} {_n(y(second[index]))}" for index in range(count - 1, -1, -1))
+        fills.append(f'<path class="band" fill="url(#soft-{escape(lines[0][1])})" d="{trace(first)} {back} Z"/>')
+    else:
+        fills += [f'<path class="band" fill="url(#soft-{escape(family)})" d="{trace(values)} L100 100 L0 100 Z"/>' for _, family, values in lines]
+    strokes = [f'<path class="area-line line-{escape(family)}" d="{trace(values)}"/>' for _, family, values in lines]
+    parts = []
+    for tick in (scale, scale // 2):
+        parts.append(f'<line class="grid" x1="{left}%" x2="100%" y1="{_n(down(y(tick)))}%" y2="{_n(down(y(tick)))}%"/>')
+    parts.append(f'<line class="baseline" x1="{left}%" x2="100%" y1="{bottom}%" y2="{bottom}%"/>')
+    for tick in (scale, scale // 2, 0):
+        parts.append(f'<text class="axis" x="0" y="{_n(down(y(tick)))}%" dy="4">{tick}</text>')
+    parts.append(f'<svg class="area-plot" x="{left}%" y="{top}%" width="{100 - left}%" height="{bottom - top}%" viewBox="0 0 100 100" preserveAspectRatio="none">{"".join(fills)}{"".join(strokes)}</svg>')
+    width = (100 - left) / count
+    for index in range(count):
+        said = ", ".join(f"{values[index]} {name.lower()}" for name, _, values in lines)
+        parts.append(_linked(f'<rect class="hit" x="{_n(left + width * index)}%" y="0" width="{_n(width)}%" height="{bottom}%"><title>{escape(times[index])}: {escape(said)}</title></rect>', href))
+    for _, family, values in lines:
+        across, height = left + (100 - left) * x(count - 1) / 100, down(y(values[-1]))
+        parts.append(f'<svg class="area-end" x="{_n(across)}%" y="{_n(height)}%" width="{END_MARK}" height="{END_MARK}" overflow="visible"><path class="end-{escape(family)}" d="M0 -4L4 0L0 4L-4 0Z"/></svg>')
+    first_time, last_time = ends or (times[0], times[-1])
     parts += [
-        f'<text class="axis" x="0" y="{top}%" dy="-3">{highest}</text>',
-        f'<text class="axis" x="0" y="100%" dy="-1">{escape(days[0])}</text>',
-        f'<text class="axis" x="100%" y="100%" dy="-1" text-anchor="end">{escape(days[-1])}</text>',
+        f'<text class="axis" x="{left}%" y="100%" dy="-1">{escape(first_time)}</text>',
+        f'<text class="axis" x="100%" y="100%" dy="-1" text-anchor="end">{escape(last_time)}</text>',
     ]
-    said = f"{label}: {sum(values)} in the last {count} days, and at most {highest} in a day." if highest else f"{label}: none in the last {count} days."
-    return _svg(f"spark {tone}", said, "".join(parts), 'width="100%"', f'height="{SPARK_HEIGHT}"')
+    totals = ", ".join(f"{values[-1] if running else sum(values)} {name.lower()}" for name, _, values in lines)
+    said = f"{label}: {totals}, from {first_time} to {last_time}."
+    return _svg("area", said, "".join(parts), 'width="100%"', f'height="{AREA_HEIGHT}"')
 
 
 def bars(days: Sequence[str], series: Sequence[tuple[str, str, Sequence[int]]], label: str, links: Mapping[str, str] | None = None) -> Markup:
@@ -126,7 +152,7 @@ def flow(stages: Sequence[tuple[str, str, int]], label: str, links: Mapping[str,
     if not count:
         return _svg("flow", f"{label}: nothing to show yet", "", 'width="100%"', f'height="{FLOW_HEIGHT}"')
     highest = max((number for _, _, number in stages), default=0)
-    width, middle, most = 600.0, 50.0, 46.0
+    width, middle, most = 600.0, 50.0, 34.0
     each = width / count
     half = [2 + (most - 2) * number / highest if highest and number else 1.0 for _, _, number in stages]
     edges = [(each * index + each * 0.3, each * index + each * 0.7) for index in range(count)]
@@ -148,7 +174,7 @@ def flow(stages: Sequence[tuple[str, str, int]], label: str, links: Mapping[str,
     over = f"{edge(-1, ahead)} L {_n(width)} {_n(middle - half[-1])}"
     under = f"{edge(1, ahead[::-1])} L 0 {_n(middle + half[0])}"
     shapes = [
-        f'<path class="flow-band" d="M 0 {_n(middle - half[0])} {over} L {_n(width)} {_n(middle + half[-1])} {under} Z"/>',
+        f'<path class="flow-band" fill="url(#through-stages)" d="M 0 {_n(middle - half[0])} {over} L {_n(width)} {_n(middle + half[-1])} {under} Z"/>',
         f'<path class="flow-edge" d="M 0 {_n(middle - half[0])} {over}"/>',
         f'<path class="flow-edge" d="M {_n(width)} {_n(middle + half[-1])} {under}"/>',
     ]
@@ -160,7 +186,7 @@ def flow(stages: Sequence[tuple[str, str, int]], label: str, links: Mapping[str,
 
 
 def meter(value: int, total: int, label: str, tone: str = "") -> Markup:
-    """A thin rounded bar on a dark track."""
+    """A thin rounded bar on a quiet track."""
     share = 100 * value / total if total else 0
     fill = f'<rect class="meter-fill" width="{_n(max(share, 2))}%" height="{METER_HEIGHT}" rx="4"/>' if value else ""
     return _svg(f"meter {tone}", f"{label}: {value} of {total}", f'<rect class="meter-track" width="100%" height="{METER_HEIGHT}" rx="4"/>{fill}', 'width="100%"', f'height="{METER_HEIGHT}"')
