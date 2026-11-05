@@ -425,7 +425,7 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     deck.slide_width, deck.slide_height = Pt(WIDTH), Pt(HEIGHT)
     _apply_theme(deck, brand)
     # The library's own author is a real person's name, which does not belong on a client's work. The file is the brand's.
-    deck.core_properties.author = deck.core_properties.last_modified_by = brand.name
+    deck.core_properties.author = deck.core_properties.last_modified_by = brand.name[:MOST_PROPERTY_CHARS]
     # A file property holds at most 255 characters, and a title too long for that is the deck's own problem to say, which the slide's check does, so it is cut here and not refused.
     deck.core_properties.title = "".join(character for character in " ".join(title.split()) if character.isprintable())[:MOST_PROPERTY_CHARS]
     if slides and bullets:
