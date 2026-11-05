@@ -1,5 +1,6 @@
 """MCP tool for maker agents: builds a slide deck whose colours, fonts, logo and layout come from the brand kit."""
 
+import io
 import math
 import re
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from pptx.util import Pt
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
 from foundry.checks import PERIOD, figure, outliers
-from foundry.tools import confine
+from foundry.tools import confine, touchstone
 from foundry.tools.layout import LINE_SPACING, NOT_RECEIVED, MakerError, contrast, figure_text, fit_size, load_font, mix, words_of, wrap
 
 mcp = MCPServer("foundry-deck")
@@ -33,13 +34,13 @@ MOST_PROPERTY_CHARS = 255
 TABLE_SIZES = (20, 9)
 CELL_PAD = 6
 # Figures are the point of a table, so they are this much larger than its words, and the lit one larger again. With more than two columns of them there is no room, and they stay the size of the words.
-FIGURE_SCALE, LIT_SCALE, MOST_FIGURE, MOST_LIT, MOST_LARGE_COLUMNS = 2.5, 1.3, 44, 56, 2
+FIGURE_SCALE, LIT_SCALE, MOST_FIGURE, MOST_LIT, MOST_LARGE_COLUMNS = 2.8, 1.3, 44, 56, 2
 HEADING_SMALLER = 4
 # Space between a figure and the words in the next column, because a figure lines up on its right.
 FIGURE_GAP = 14
 # Rows take up the room there is, to this height. A word this large or larger gets its whole line beside the title, or the table goes under the title where it is wider.
 TALLEST_FIGURE_ROW, TALLEST_WORD_ROW, ONE_LINE_FROM = 88, 44, 13
-SIDE_TITLE_WIDTH, SIDE_TITLE_HEIGHT, SIDE_GAP = 290, 300, 28
+SIDE_TITLE_WIDTH, SIDE_GAP, ABOVE_CORNER_LOGO = 322, 28, 444
 NO_STYLE_NO_GRID = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"
 # A little more than the padding, because PowerPoint sets a word slightly wider than the measure here does.
 WORD_SLACK = 4
@@ -49,12 +50,14 @@ ROWS_SHAPE = 'A table\'s "rows" is a list of rows, and each row is a list of cel
 TABLE_TOO_TALL = "This table is too big to fit on one slide, because it is too tall. Show fewer rows, shorten the cells, or split it over two slides."
 TABLE_TOO_WIDE = "This table is too big to fit on one slide, because it is too wide: its longest words do not fit side by side at the smallest size. Use fewer columns or shorter words."
 DRAWING = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+SLIDE_MARKUP = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+RELATIONSHIPS = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 # The small line under a slide's content that says where its numbers came from. It stops short of the corner logo.
 SOURCE_RIGHT, SOURCE_TOP, SOURCE_HEIGHT = 836, 500, 28
 NARROW_SOURCE_BOX = (56, 500, 580, 28)
 SOURCE_SIZES = (11, 7)
 SOURCE_SHAPE = 'Each source is {"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 IST"}.'
-SOLID, BAND = "solid", "band"
+SOLID, BAND, TOUCHSTONE = "solid", "band", "touchstone"
 # Said on the slide beside a figure far from the others, so the reader does not take it for a mistake and does not have to find it themselves. The figure stays as it was given.
 FAR_OFF = "{names}: far from the others. Shown as given."
 # The accent is deepened only as far as it takes to read at this contrast, the web's measure for large type.
@@ -64,7 +67,14 @@ READ_CONTRAST = 4.5
 SOFT_SHARE = 0.25
 BACK_ON_DARK, BACK_ON_PAPER = 0.35, 0.65
 BAND_WIDTH, COVER_BAND_WIDTH = 24, 48
-SIDE_MARGINS = {SOLID: 56, BAND: 72}
+SIDE_MARGINS = {SOLID: 56, BAND: 72, TOUCHSTONE: 48}
+# On the stone: lit letters this large are filled with rubbed metal, because a picture does not read in small ones. Row lines are this share of the way from the ground to the words.
+METAL_FROM, HAIR_SHARE = 40, 0.18
+FOOT_LOGO_LEFT, FOOT_LOGO_TOP, FOOT_LOGO_WIDTH = 876, 494, 36
+COVER_LOGO_SIZE = 46
+COVER_TITLE_LARGEST, COVER_LINE_SPACING, COVER_LINE_PITCH = 92, 0.9, 1.13
+# A rub on the first slide follows the last line of the title when it has this much room, and has its own row when it does not. It runs off the edge of the slide.
+RUB_NEEDS_ROOM, RUB_RUNS_ON = 240, 120
 TITLE_TOP, TITLE_HEIGHT = 44, 90
 # What a slide holds under its title ends here, above the source line and left of the corner logo.
 BODY_TOP, BODY_BOTTOM, BODY_RIGHT = 150, 490, 850
@@ -122,11 +132,12 @@ class Look:
 
 
 def _apply_theme(deck: Presentation, brand: Brand) -> None:
-    # So that a person who edits the deck later still picks from the brand's colours and fonts.
+    # So that a person who edits the deck later still picks from the brand's colours and fonts. On a dark ground, text a person types has to be the light colour, which the theme's first pair decides.
     theme = deck.slide_master.part.part_related_by(RT.THEME)
     root = etree.fromstring(theme.blob)
     palette = root.find(f".//{DRAWING}clrScheme")
-    for slot, name in (("accent1", "primary"), ("accent2", "accent"), ("dk2", "ink"), ("lt2", "paper")):
+    first_pair = (("dk1", "ink"), ("lt1", "paper")) if brand.style == TOUCHSTONE else ()
+    for slot, name in (("accent1", "primary"), ("accent2", "accent"), ("dk2", "ink"), ("lt2", "paper"), *first_pair):
         entry = palette.find(f"{DRAWING}{slot}")
         entry.clear()
         etree.SubElement(entry, f"{DRAWING}srgbClr", val=brand.colors[name].removeprefix("#"))
@@ -154,29 +165,59 @@ def _look(brand: Brand, loud: bool) -> Look:
     # Loud is a slide with one thing to say: the cover, a statement, a big number and a chart. A solid kit has those on its primary colour.
     colours = brand.colors
     dark = brand.style == SOLID and loud
+    stone = brand.style == TOUCHSTONE
     ground, words = (colours["primary"], colours["paper"]) if dark else (colours["paper"], colours["ink"])
     return Look(
         ground=ground,
-        title=words if dark else colours["primary"],
+        title=words if dark or stone else colours["primary"],
         words=words,
         soft=_faded(words, ground),
-        source=words,
+        source=colours["primary"] if stone else words,
         lit=_readable(colours["accent"], ground, words),
-        back=mix(colours["primary"], colours["paper"], BACK_ON_DARK if dark else BACK_ON_PAPER),
-        line=colours["ink"],
-        left=SIDE_MARGINS[SOLID if brand.style == SOLID else BAND],
-        right=BODY_RIGHT,
-        band=BAND_WIDTH if brand.style != SOLID else 0,
+        back=colours["primary"] if stone else mix(colours["primary"], colours["paper"], BACK_ON_DARK if dark else BACK_ON_PAPER),
+        line=mix(colours["paper"], colours["ink"], HAIR_SHARE) if stone else colours["ink"],
+        left=SIDE_MARGINS.get(brand.style, SIDE_MARGINS[BAND]),
+        right=SIDE_RIGHT if stone else BODY_RIGHT,
+        band=0 if brand.style in (SOLID, TOUCHSTONE) else BAND_WIDTH,
     )
 
 
-def _new_slide(deck: Presentation, look: Look, cover: bool = False) -> object:
+def _new_slide(deck: Presentation, brand: Brand, look: Look, cover: bool = False) -> object:
     slide = deck.slides.add_slide(deck.slide_layouts[TITLE_ONLY])
-    slide.background.fill.solid()
-    slide.background.fill.fore_color.rgb = _rgb(look.ground)
+    if brand.style == TOUCHSTONE:
+        _stone_ground(slide, brand)
+    else:
+        slide.background.fill.solid()
+        slide.background.fill.fore_color.rgb = _rgb(look.ground)
     if look.band:
         _block(slide, look.title, 0, 0, COVER_BAND_WIDTH if cover else look.band, HEIGHT)
     return slide
+
+
+def _picture_fill(part, picture: bytes) -> etree._Element:
+    # A fill made of a picture. Adding the same picture again reuses it, so a deck holds one stone however many slides it has.
+    _, relation = part.get_or_add_image_part(io.BytesIO(picture))
+    fill = etree.Element(f"{DRAWING}blipFill", dpi="0", rotWithShape="1")
+    etree.SubElement(fill, f"{DRAWING}blip", {f"{RELATIONSHIPS}embed": relation})
+    etree.SubElement(fill, f"{DRAWING}srcRect")
+    etree.SubElement(etree.SubElement(fill, f"{DRAWING}stretch"), f"{DRAWING}fillRect")
+    return fill
+
+
+def _stone_ground(slide, brand: Brand) -> None:
+    ground = etree.Element(f"{SLIDE_MARKUP}bg")
+    properties = etree.SubElement(ground, f"{SLIDE_MARKUP}bgPr")
+    properties.append(_picture_fill(slide.part, touchstone.stone(brand.colors["paper"])))
+    etree.SubElement(properties, f"{DRAWING}effectLst")
+    slide._element.find(f"{SLIDE_MARKUP}cSld").insert(0, ground)
+
+
+def _paint(run, part, brand: Brand, look: Look, colour: str) -> None:
+    # A run in its colour, once it has its size. Large lit letters on the stone are filled with rubbed metal. They stay real text, which a person can edit and the number check can read.
+    run.font.color.rgb = _rgb(colour)
+    if brand.style == TOUCHSTONE and colour == look.lit and run.font.size >= Pt(METAL_FROM):
+        properties = run._r.get_or_add_rPr()
+        properties.replace(properties.find(f"{DRAWING}solidFill"), _picture_fill(part, touchstone.metal_sheet(brand.colors["accent"])))
 
 
 def _block(slide, colour: str, left: int, top: int, width: int, height: int) -> None:
@@ -216,7 +257,7 @@ def _write(shape, brand: Brand, look: Look, role: str, colour: str, box: tuple[f
             run.text = piece
             run.font.size = Pt(size)
             run.font.name = brand.fonts[role]
-            run.font.color.rgb = _rgb(look.lit if piece == lit else colour)
+            _paint(run, shape.part, brand, look, look.lit if piece == lit else colour)
 
 
 def _text_box(slide, brand: Brand, look: Look, role: str, colour: str, box: tuple[int, int, int, int], paragraphs: list[str], largest: int, smallest: int, gap: int = 0, highlight: str = "") -> None:
@@ -229,30 +270,68 @@ def _title(slide, brand: Brand, look: Look, box: tuple[int, int, int, int], text
 
 
 def _corner_logo(slide, brand: Brand, look: Look) -> None:
+    if brand.style == TOUCHSTONE:
+        slide.shapes.add_picture(str(brand.logo_path), Pt(FOOT_LOGO_LEFT), Pt(FOOT_LOGO_TOP), width=Pt(FOOT_LOGO_WIDTH)).name = "Logo"
+        return
     # The logo goes on the paper colour, so on any other ground it brings a piece of paper with it.
     if look.ground != brand.colors["paper"]:
         _block(slide, brand.colors["paper"], 860, 440, 100, 100)
     slide.shapes.add_picture(str(brand.logo_path), Pt(872), Pt(452), width=Pt(76))
 
 
+def _accent_rule(slide, brand: Brand, left: int, top: int) -> None:
+    # The short mark over a slide that has nothing lit, so the accent is still on it once.
+    if brand.style == TOUCHSTONE:
+        picture, pad = touchstone.rub(96, 7, brand.colors["accent"], True, False, "rule")
+        slide.shapes.add_picture(io.BytesIO(picture), Pt(left - pad), Pt(top - pad), width=Pt(96 + 2 * pad), height=Pt(7 + 2 * pad))
+    else:
+        _block(slide, brand.colors["accent"], left, top, 96, 6)
+
+
+def _stone_cover(deck: Presentation, brand: Brand, look: Look, title: str, subtitle: str, highlight: str) -> None:
+    # The firm's mark and name at the top, the title large, and one rub of metal after its last line.
+    slide = _new_slide(deck, brand, look)
+    slide.shapes.add_picture(str(brand.logo_path), Pt(look.left), Pt(34), width=Pt(COVER_LOGO_SIZE)).name = "Logo"
+    _line(slide, brand, look, "body", look.soft, (look.left + COVER_LOGO_SIZE + 10, 34, 500, COVER_LOGO_SIZE), brand.name, 15, name="Firm")
+    together = _periods_together(title)
+    box = (look.left, 150, SIDE_RIGHT - look.left, 280)
+    size = fit_size(together, brand.font_file("heading"), box[2], box[3], COVER_TITLE_LARGEST, 22)
+    _title(slide, brand, look, box, title, size, size, highlight=highlight)
+    for paragraph in slide.shapes.title.text_frame.paragraphs:
+        paragraph.line_spacing = COVER_LINE_SPACING
+    lines = wrap(together, _measured(brand.font_file("heading"), size), box[2])
+    pitch = size * COVER_LINE_PITCH
+    after = box[0] + _measured(brand.font_file("heading"), size).getlength(lines[-1]) + size * 0.28
+    beside = WIDTH - after >= RUB_NEEDS_ROOM
+    thick = size * 0.72 if beside else size * 0.4
+    left, top = (after, box[1] + (len(lines) - 1) * pitch + size * 0.22) if beside else (box[0], box[1] + len(lines) * pitch + 6)
+    length = WIDTH - left + RUB_RUNS_ON
+    picture, pad = touchstone.cover_rub(round(length), round(thick), brand.colors["accent"])
+    slide.shapes.add_picture(io.BytesIO(picture), Pt(left - pad), Pt(top - pad), width=Pt(round(length) + 2 * pad), height=Pt(round(thick) + 2 * pad)).name = "Rub of metal"
+    if subtitle:
+        _text_box(slide, brand, look, "body", look.soft, (look.left, 448, SOURCE_RIGHT - look.left, 40), [_periods_together(subtitle)], 21, 14)
+
+
 def _title_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, highlight: str = "") -> None:
     _check_highlight(highlight, title)
     look = _look(brand, loud=True)
-    accent = brand.colors["accent"]
+    if brand.style == TOUCHSTONE:
+        _stone_cover(deck, brand, look, title, subtitle, highlight)
+        return
     if brand.style == SOLID:
-        slide = _new_slide(deck, look)
+        slide = _new_slide(deck, brand, look)
         _block(slide, brand.colors["paper"], 680, 0, 280, HEIGHT)
         if not highlight:
-            _block(slide, accent, 56, 130, 96, 6)
+            _accent_rule(slide, brand, 56, 130)
         slide.shapes.add_picture(str(brand.logo_path), Pt(730), Pt(180), width=Pt(180))
         title_box, subtitle_box = (56, 150, 580, 230), (56, 400, 580, 60)
     else:
-        slide = _new_slide(deck, look, cover=True)
+        slide = _new_slide(deck, brand, look, cover=True)
         if not highlight:
-            _block(slide, accent, 96, 130, 96, 6)
+            _accent_rule(slide, brand, 96, 130)
         slide.shapes.add_picture(str(brand.logo_path), Pt(770), Pt(36), width=Pt(150))
         title_box, subtitle_box = (96, 150, 640, 230), (96, 400, 640, 60)
-    _title(slide, brand, look, title_box, title, 54, 22, highlight=highlight)
+    _title(slide, brand, look, title_box, title, 72, 22, highlight=highlight)
     if subtitle:
         _text_box(slide, brand, look, "body", look.words, subtitle_box, [_periods_together(subtitle)], 24, 14)
 
@@ -275,9 +354,9 @@ def _make_title(deck: Presentation, brand: Brand, spec: dict) -> None:
 def _titled_slide(deck: Presentation, brand: Brand, title: str, highlight: str) -> tuple:
     # The start of every slide that holds something under its title, and the box left for it: clear of the corner logo and the source line.
     look = _look(brand, loud=False)
-    slide = _new_slide(deck, look)
-    _title(slide, brand, look, (look.left, TITLE_TOP, BODY_RIGHT - look.left, TITLE_HEIGHT), title, 36, 16, highlight=highlight)
-    return slide, look, (look.left, BODY_TOP, BODY_RIGHT - look.left, BODY_BOTTOM - BODY_TOP)
+    slide = _new_slide(deck, brand, look)
+    _title(slide, brand, look, (look.left, TITLE_TOP, look.right - look.left, TITLE_HEIGHT), title, 36, 16, highlight=highlight)
+    return slide, look, (look.left, BODY_TOP, look.right - look.left, BODY_BOTTOM - BODY_TOP)
 
 
 def _make_content(deck: Presentation, brand: Brand, spec: dict) -> None:
@@ -414,10 +493,15 @@ def _fit_table(brand: Brand, cells: list[list[str]], figures: list[bool], lit: i
 
 
 def _with_room(heights: list[float], height: float, has_figures: bool) -> list[float]:
-    # The rows under the headings share the room left, each up to the tallest a row should be, so a short table is not squeezed into the top of the slide.
-    tallest, spare = (TALLEST_FIGURE_ROW if has_figures else TALLEST_WORD_ROW), height - sum(heights)
-    rows = len(heights) - 1
-    return heights[:1] + [max(high, min(tallest, high + spare / rows)) for high in heights[1:]]
+    # The rows under the headings share the room there is, all one height where they can be, up to the tallest a row should be, so a short table is not squeezed into the top of the slide.
+    body, room = heights[1:], height - heights[0]
+    even = min(TALLEST_FIGURE_ROW if has_figures else TALLEST_WORD_ROW, room / len(body))
+    for _ in body:
+        taller = [high for high in body if high > even]
+        if len(taller) == len(body):
+            break
+        even = min(even, (room - sum(taller)) / (len(body) - len(taller)))
+    return heights[:1] + [max(high, even) for high in body]
 
 
 def _far_off(labels: list[str], *columns: list[str]) -> str:
@@ -467,7 +551,7 @@ def _set_table(slide, brand: Brand, look: Look, cells: list[list[str]], figures:
             run.text = text
             run.font.size = Pt(size)
             run.font.name = brand.fonts[role]
-            run.font.color.rgb = _rgb(_cell_colour(look, text, number, at, role == "heading", on))
+            _paint(run, slide.part, brand, look, _cell_colour(look, text, number, at, role == "heading", on))
             _underline(cell, look)
 
 
@@ -485,12 +569,12 @@ def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
     flag = _far_off([row[0] for row in cells[1:]], *([row[at] for row in cells[1:]] for at in range(1, len(figures)) if figures[at])) if spec.get("sources") else ""
     look = _look(brand, loud=False)
     side_left = look.left + SIDE_TITLE_WIDTH + SIDE_GAP
-    beside, _ = _fit_table(brand, cells, figures, lit, measure, BODY_RIGHT - side_left, BODY_BOTTOM - TITLE_TOP)
+    # Beside its title a table can run to the slide's right margin, above the corner logo unless the logo is down in the foot.
+    side_bottom = BODY_BOTTOM if brand.style == TOUCHSTONE else ABOVE_CORNER_LOGO
+    beside, _ = _fit_table(brand, cells, figures, lit, measure, SIDE_RIGHT - side_left, side_bottom - TITLE_TOP)
     if beside is not None and beside.one_line and beside.size >= ONE_LINE_FROM:
-        slide = _new_slide(deck, look)
-        _title(slide, brand, look, (look.left, TITLE_TOP, SIDE_TITLE_WIDTH, SIDE_TITLE_HEIGHT), title, 34, 16, highlight=lit_title)
-        if flag:
-            _text_box(slide, brand, look, "body", look.words, (look.left, TITLE_TOP + SIDE_TITLE_HEIGHT + 12, SIDE_TITLE_WIDTH, BODY_BOTTOM - TITLE_TOP - SIDE_TITLE_HEIGHT - 12), [flag], 15, 11)
+        slide = _new_slide(deck, brand, look)
+        _title_and_words(slide, brand, look, (look.left, TITLE_TOP, SIDE_TITLE_WIDTH, BODY_BOTTOM), title, [(flag, look.words)] if flag else [], 34, lit_title)
         _set_table(slide, brand, look, cells, figures, beside, side_left, TITLE_TOP, lit, measure, highlight)
     else:
         slide, look, (left, top, width, height) = _titled_slide(deck, brand, title, lit_title)
@@ -548,9 +632,9 @@ def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
     highlight = spec.get("highlight", "")
     _check_highlight(highlight, text)
     look = _look(brand, loud=True)
-    slide = _new_slide(deck, look)
+    slide = _new_slide(deck, brand, look)
     if not highlight:
-        _block(slide, brand.colors["accent"], 96, 110, 96, 6)
+        _accent_rule(slide, brand, 96, 110)
     _title(slide, brand, look, (96, 130, 740, 290), text, 60, 22, middle=True, highlight=highlight)
     _corner_logo(slide, brand, look)
 
@@ -626,20 +710,25 @@ def _line(slide, brand: Brand, look: Look, role: str, colour: str, box: tuple[fl
             run.text = piece
             run.font.size = Pt(round(max(piece_size, 8)))
             run.font.name = brand.fonts[role]
-            run.font.color.rgb = _rgb(colour)
+            _paint(run, shape.part, brand, look, colour)
 
 
-def _stroke(slide, look: Look, label: str, box: tuple[float, float, float, float], lit: bool) -> None:
+def _stroke(slide, brand: Brand, look: Look, label: str, box: tuple[float, float, float, float], lit: bool, upright: bool = False) -> None:
     # One figure's mark, exactly as long as the figure on the slide's one scale. A figure of nothing has no mark.
     left, top, width, height = box
     if width <= 0 or height <= 0:
         return
-    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Pt(left), Pt(top), Pt(width), Pt(height))
+    if brand.style == TOUCHSTONE:
+        length, thick = (height, width) if upright else (width, height)
+        picture, pad = touchstone.rub(length, thick, brand.colors["accent"] if lit else look.back, lit, upright, f"{label}|{length}|{lit}")
+        shape = slide.shapes.add_picture(io.BytesIO(picture), Pt(left - pad), Pt(top - pad), width=Pt(width + 2 * pad), height=Pt(height + 2 * pad))
+    else:
+        shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Pt(left), Pt(top), Pt(width), Pt(height))
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = _rgb(look.lit if lit else look.back)
+        shape.line.fill.background()
+        shape.shadow.inherit = False
     shape.name = f"{label} stroke"
-    shape.fill.solid()
-    shape.fill.fore_color.rgb = _rgb(look.lit if lit else look.back)
-    shape.line.fill.background()
-    shape.shadow.inherit = False
 
 
 def _shown_width(brand: Brand, point: Point, size: float) -> float:
@@ -650,6 +739,11 @@ def _size_to_fit(brand: Brand, point: Point, width: float, largest: int, least: 
     return next((size for size in range(largest, least - 1, -1) if _shown_width(brand, point, size) <= width), least)
 
 
+def _clear_of_stroke(size: int) -> float:
+    # How far the foot of a large figure stands off the stroke under it. Generous, because where a font's digits stop in their box differs between fonts, and when PowerPoint has to substitute one.
+    return size * 0.13
+
+
 def _lit_figure(slide, brand: Brand, look: Look, point: Point, left: float, baseline: float, size: int) -> None:
     # The figure the slide is for, placed by the foot of its digits. Words saying it did not come are not lit, because there is nothing to light.
     colour = look.soft if point.value is None else look.lit
@@ -657,17 +751,16 @@ def _lit_figure(slide, brand: Brand, look: Look, point: Point, left: float, base
     _line(slide, brand, look, "heading", colour, (left, top, _shown_width(brand, point, size) + size * 0.1, size * 0.92), point.written, size, point.unit, anchor=MSO_ANCHOR.TOP, name="Lit figure")
 
 
-def _title_and_words(slide, brand: Brand, look: Look, box: tuple[float, float, float, float], title: str, words: list[tuple[str, str]], largest: int) -> None:
+def _title_and_words(slide, brand: Brand, look: Look, box: tuple[float, float, float, float], title: str, words: list[tuple[str, str]], largest: int, highlight: str = "") -> None:
     # A title with its smaller lines under it, the title taking whatever room they leave. Each is only as tall as it is measured to be, so nothing runs into what comes next.
     left, top, width, bottom = box
-    # PowerPoint sets a line slightly wider than the measure here does.
-    measure = width * 0.96
-    heights = [len(wrap(text, _measured(brand.font_file("body"), SMALL_WORDS), measure)) * SMALL_WORDS * LINE_SPACING + 2 for text, _ in words]
+    # PowerPoint sets a line of small words slightly wider than the measure here does.
+    heights = [len(wrap(text, _measured(brand.font_file("body"), SMALL_WORDS), width * 0.96)) * SMALL_WORDS * LINE_SPACING + 2 for text, _ in words]
     together = _periods_together(title)
     room = bottom - top - sum(heights) - 8 * len(heights)
-    size = fit_size(together, brand.font_file("heading"), measure, room, largest, 16)
-    high = len(wrap(together, _measured(brand.font_file("heading"), size), measure)) * size * LINE_SPACING + 2
-    _title(slide, brand, look, (left, top, width, high), title, size, size)
+    size = fit_size(together, brand.font_file("heading"), width, room, largest, 16)
+    high = len(wrap(together, _measured(brand.font_file("heading"), size), width)) * size * LINE_SPACING + 2
+    _title(slide, brand, look, (left, top, width, high), title, size, size, highlight=highlight)
     y = top + high + 8
     for (text, colour), height in zip(words, heights):
         _text_box(slide, brand, look, "body", colour, (left, y, width, height), [_periods_together(text)], SMALL_WORDS, SMALL_WORDS)
@@ -697,7 +790,7 @@ def _number_alone(deck: Presentation, brand: Brand, spec: dict, title: str) -> N
     missing = number is None or (isinstance(number, str) and number.strip().casefold() == NOT_RECEIVED)
     written = NOT_RECEIVED if missing else number.strip() if isinstance(number, str) else figure_text(number)
     look = _look(brand, loud=True)
-    slide = _new_slide(deck, look)
+    slide = _new_slide(deck, brand, look)
     _title(slide, brand, look, (look.left, TITLE_TOP, SIDE_RIGHT - look.left, TITLE_HEIGHT), title, 36, 16)
     point = Point("", None if missing else 1, written, "")
     size = _size_to_fit(brand, point, look.right - look.left, ALONE_LARGEST, HERO_LEAST)
@@ -716,7 +809,7 @@ def _number_over_strokes(deck: Presentation, brand: Brand, spec: dict, title: st
     label_size = next((size for size in range(LABEL_LARGEST, LABEL_LEAST - 1, -1) if max(_width_of(brand, ("body", size), point.label) for point in points) <= WIDEST_LABEL), None)
     if label_size is None:
         raise MakerError(LABEL_TOO_LONG.format(label=max((point.label for point in points), key=len)[:40]))
-    slide = _new_slide(deck, look)
+    slide = _new_slide(deck, brand, look)
     rows = len(points)
     thick = min(THICKEST_ROW, ROWS_HEIGHT / (rows + (rows - 1) * ROW_GAP_SHARE))
     gap = thick * ROW_GAP_SHARE
@@ -726,7 +819,7 @@ def _number_over_strokes(deck: Presentation, brand: Brand, spec: dict, title: st
     if any(point.value is not None for point in points):
         _line(slide, brand, look, "body", look.words, (look.left, TOP_OF_FIGURES - 4, column - look.left - 20, 22), lit.label, 15, name="Lit label")
     size = _size_to_fit(brand, lit, column - look.left - 24, 64 if lit.value is None else HERO_LARGEST, HERO_LEAST)
-    _lit_figure(slide, brand, look, lit, look.left, plot_top - 36, size)
+    _lit_figure(slide, brand, look, lit, look.left, plot_top - 44, size)
     plot_left = look.left + max(_width_of(brand, ("body", label_size), point.label) for point in points) + 14
     row_figure = max(LEAST_FIGURE, min(ROW_FIGURE_LARGEST, round(thick * 0.66)))
     # One scale for every stroke, as long as it can be with each figure still on the slide after its stroke.
@@ -739,7 +832,7 @@ def _number_over_strokes(deck: Presentation, brand: Brand, spec: dict, title: st
         _line(slide, brand, look, "body", look.words if lit_row else look.soft, (look.left, top, plot_left - look.left - 6, thick), point.label, label_size, name=f"{point.label} label")
         length = (point.value or 0) * scale
         if point.value is not None:
-            _stroke(slide, look, point.label, (plot_left, top, length, thick), lit_row)
+            _stroke(slide, brand, look, point.label, (plot_left, top, length, thick), lit_row)
         if not lit_row:
             wide = _width_of(brand, ("heading", row_figure), NOT_RECEIVED) if point.value is None else _shown_width(brand, point, row_figure)
             _line(slide, brand, look, "heading", look.soft, (plot_left + length + (10 if point.value is not None else 0), top, wide + 6, thick), point.written, row_figure, point.unit, name=f"{point.label} figure")
@@ -752,14 +845,14 @@ def _make_chart(deck: Presentation, brand: Brand, spec: dict) -> None:
     lit = _lit_point(given, spec)
     points = _in_place(given, spec)
     look = _look(brand, loud=True)
-    slide = _new_slide(deck, look)
+    slide = _new_slide(deck, brand, look)
     _title_and_words(slide, brand, look, (look.left, TITLE_TOP, TALL_LEFT_WIDTH, BODY_BOTTOM), title, _chart_words(look, spec, given), 34)
     plot_left = look.left + TALL_LEFT_WIDTH + TALL_GAP
     pitch = (look.right - plot_left) / len(points)
     thick = min(THICKEST_TALL, pitch * TALL_SHARE)
     base = BODY_BOTTOM - TALL_FOOT
     others = [point for point in points if point is not lit and point.value is not None]
-    figure_size = min([TALL_FIGURE_LARGEST, *(_size_to_fit(brand, point, pitch - 4, TALL_FIGURE_LARGEST, LEAST_FIGURE) for point in others)])
+    figure_size = min([TALL_FIGURE_LARGEST, *(_size_to_fit(brand, point, pitch - 12, TALL_FIGURE_LARGEST, LEAST_FIGURE) for point in others)])
     figure_high = figure_size * 1.15
     size = _size_to_fit(brand, lit, look.right - plot_left, 64 if lit.value is None else TALL_HERO_LARGEST, TALL_HERO_LEAST)
     lit_at = points.index(lit)
@@ -772,18 +865,18 @@ def _make_chart(deck: Presentation, brand: Brand, spec: dict) -> None:
     head_room = base - TOP_OF_FIGURES - DIGIT_SHARE * size
     limits = [base - TOP_OF_FIGURES, *((base - TOP_OF_FIGURES - figure_high) * most / point.value for point in others if point.value), *((head_room - figure_high - 4) * most / point.value for point in under if point.value)]
     if lit.value:
-        limits.append((head_room - 8) * most / lit.value)
+        limits.append((head_room - _clear_of_stroke(size)) * most / lit.value)
     tallest = min(limits)
     scale = tallest / most
     tops = {point.label: base - (point.value or 0) * scale for point in points}
-    baseline = min([tops[lit.label] - 8, *(tops[point.label] - figure_high - 4 for point in under)])
+    baseline = min([tops[lit.label] - _clear_of_stroke(size), *(tops[point.label] - figure_high - 4 for point in under)])
     _lit_figure(slide, brand, look, lit, hero_left, baseline, size)
     for at, point in enumerate(points):
         lit_one = point is lit and point.value is not None
         if point.value is not None:
-            _stroke(slide, look, point.label, (place[at], tops[point.label], thick, (point.value or 0) * scale), lit_one)
+            _stroke(slide, brand, look, point.label, (place[at], tops[point.label], thick, (point.value or 0) * scale), lit_one, upright=True)
         if point.value is None and point is not lit:
-            _line(slide, brand, look, "heading", look.soft, (plot_left + at * pitch + 2, base - 44, pitch - 4, 44), point.written, 13, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.BOTTOM, name=f"{point.label} figure", wraps=True)
+            _line(slide, brand, look, "heading", look.soft, (plot_left + at * pitch + 2, base - 44, pitch - 4, 44), point.written, 16, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.BOTTOM, name=f"{point.label} figure", wraps=True)
         elif point is not lit:
             _line(slide, brand, look, "heading", look.soft, (plot_left + at * pitch + 2, tops[point.label] - figure_high, pitch - 4, figure_high), point.written, figure_size, point.unit, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.BOTTOM, name=f"{point.label} figure")
         label_box = (plot_left + at * pitch + 1, base + 5, pitch - 2, BODY_BOTTOM - base - 5)

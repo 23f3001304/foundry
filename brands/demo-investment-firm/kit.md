@@ -1,14 +1,14 @@
 ---
 name: Kasauti Capital Partners
 colors:
-  primary: "#262B36"
-  accent: "#C9962B"
-  ink: "#14161B"
-  paper: "#F4F1EA"
+  primary: "#9D988C"
+  accent: "#EBC15F"
+  ink: "#F1EADC"
+  paper: "#141312"
 fonts:
   heading: Source Serif Pro
   body: Source Sans Pro
-style: solid
+style: touchstone
 business_type: Global investment firm
 audience: The firm's partners and analysts, reading an internal report
 voice: Plain, careful and exact. Says what each figure is and who gave it. No hype, no forecasts and no advice.
