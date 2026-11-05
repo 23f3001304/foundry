@@ -1419,8 +1419,9 @@ class Desk:
         choice = outcome.chosen_from(card.choices)
         if choice is None:
             logger.warning("Routine card %s had an answer naming no known choice: %s", card.request_id, outcome.answers)
-        approved = self.cards.answer_routine(card.request_id, choice, lambda item: self._hand_off(item, outcome))
-        left = len(card.data["items"]) - len(approved)
+        self.cards.answer_routine(card.request_id, choice, lambda item: self._hand_off(item, outcome))
+        # What comes back at the next set time. An item that closed meanwhile does not, so it is not counted.
+        left = sum(self.cards.get(item_id).state == QUEUED for item_id in card.data["items"])
         if choice == APPROVE_CLEAN and left:
             self.client.post_message(card.room_id, ROUTINE_STILL_WAITING.format(count=left))
         elif choice == SHOW_NEEDS:
