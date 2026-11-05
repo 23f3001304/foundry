@@ -299,18 +299,22 @@ def logo_colours(path: Path) -> list[str]:
 
 def logo_for(brand: Brand, ground: str) -> tuple[Path, bool]:
     """Which logo file goes on this ground, and whether it needs a plate. Its dark colour has to read there, because that is what draws its outline."""
-    darkest = min(logo_colours(brand.logo_path), key=lambda colour: contrast(colour, "#000000"))
+    # A logo drawn too faintly to read a colour from has no outline to trust, so it goes on the plate.
+    colours = logo_colours(brand.logo_path)
+    if not colours:
+        return brand.logo_path, True
+    darkest = min(colours, key=lambda colour: contrast(colour, "#000000"))
     if contrast(darkest, ground) >= LARGE_CONTRAST:
         return brand.logo_path, False
-    reversed_logo = brand.logo_on_dark
-    if reversed_logo and contrast(logo_colours(reversed_logo)[0], ground) >= LARGE_CONTRAST:
-        return reversed_logo, False
+    reversed_colours = logo_colours(brand.logo_on_dark) if brand.logo_on_dark else []
+    if reversed_colours and contrast(reversed_colours[0], ground) >= LARGE_CONTRAST:
+        return brand.logo_on_dark, False
     return brand.logo_path, True
 
 
 def ink_box(art: Image.Image) -> tuple[int, int, int, int]:
-    """What a logo file actually draws, without the clear padding round it."""
-    return art.getchannel("A").point(lambda value: 255 if value > 16 else 0).getbbox()
+    """What a logo file actually draws, without the clear padding round it. A file that draws nothing is taken whole."""
+    return art.getchannel("A").point(lambda value: 255 if value > 16 else 0).getbbox() or (0, 0, art.width, art.height)
 
 
 def _plate_mask(art: Image.Image, pad: int) -> Image.Image:
@@ -321,7 +325,7 @@ def _plate_mask(art: Image.Image, pad: int) -> Image.Image:
 
 
 def place_logo(canvas: Image.Image, brand: Brand, ground: str, side: int, right: int, bottom: int) -> dict:
-    """Puts the logo's visible edge on this right and bottom, within a square of this side. Returns what check_design and the tests read back."""
+    """Puts the logo's visible edge on this right and bottom, within a square of this side. Returns what the tests read back."""
     path, plated = logo_for(brand, ground)
     with Image.open(path) as logo:
         art = logo.convert("RGBA")
