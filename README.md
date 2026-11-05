@@ -112,7 +112,9 @@ Once it's running, **Settings** in the dashboard shows what's connected, gives t
 
 A hosted version, with sign-up and bots you just install, is what comes next. It isn't built.
 
-There are two commands. On Windows, use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` wherever this says `./setup.sh`, with the same flags. A default Windows machine refuses to run a script any other way. The Bypass applies only to that one run and changes no setting on your machine.
+To have your own AI agent do it, paste this into Claude Code, Codex, Gemini CLI or another agent that can run commands in this folder: `Follow SETUP-WITH-AI.md to set up Foundry on my machine.` It never asks for a token or key in chat, because you enter those in Settings yourself. This hasn't been tried on a clean machine yet.
+
+Otherwise there are two commands. On Windows, use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` wherever this says `./setup.sh`, with the same flags. A default Windows machine refuses to run a script any other way. The Bypass applies only to that one run and changes no setting on your machine.
 
 **To look at it, with no agents and nothing else installed but [uv](https://docs.astral.sh/uv/):**
 
@@ -124,7 +126,7 @@ There are two commands. On Windows, use `powershell -ExecutionPolicy Bypass -Fil
 powershell -ExecutionPolicy Bypass -File .\setup.ps1 --try
 ```
 
-This starts the dashboard on made-up data and prints its address and a made-up login that exists for this mode only. No agents run, and pressing a button sends nothing anywhere. It opens no connection to anything outside this machine, doesn't read or write a real `.env`, and every page has a banner that says the data is made up. It takes about half a minute: 28 seconds on a fast connection with uv fetching Python and the packages, and 20 seconds once it has them. Press Ctrl+C to stop it.
+This starts the dashboard on made-up data and prints its address. No agents run, and pressing a button sends nothing anywhere. It opens no connection to anything outside this machine, doesn't read or write a real `.env`, and every page has a banner that says the data is made up. It takes about half a minute: 28 seconds on a fast connection with uv fetching Python and the packages, and 20 seconds once it has them. Press Ctrl+C to stop it.
 
 **To run the real thing:**
 
