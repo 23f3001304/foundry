@@ -167,7 +167,9 @@ class QueuedCardGate(CardGate):
     def _show(self, job: Job) -> None:
         approval = job.approval
         trigger = {State.BRIEF_PENDING: Trigger.BRIEF, State.BLOCKED: Trigger.STUCK}.get(job.state, Trigger.FINAL_WORK)
-        self.cards.submit(trigger, job.approver, job.bucket, job.approval_room, approval["title"], approval["detail"], job_id=job.id, request_id=approval["request_id"])
+        # Nothing comes round to ask again about a job's answers once it has moved on, so a card Switch refuses stays in the queue, which also keeps its long text from being posted twice.
+        keep = job.makes_nothing and job.state is State.SIGNOFF_PENDING
+        self.cards.submit(trigger, job.approver, job.bucket, job.approval_room, approval["title"], approval["detail"], job_id=job.id, request_id=approval["request_id"], keep_refused=keep)
 
     def _close(self, job: Job) -> None:
         super()._close(job)

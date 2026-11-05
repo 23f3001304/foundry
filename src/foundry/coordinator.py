@@ -23,6 +23,7 @@ from foundry.items import (
     AWAY_UNTIL,
     CANT_TODAY,
     IN,
+    MAKES_NOTHING,
     REMINDER_CHOICES,
     Item,
     ItemState,
@@ -30,7 +31,9 @@ from foundry.items import (
     Owed,
     desk_wrote,
     going_without,
+    owed_items,
     own_words,
+    parse_makes,
     parse_owes,
     quoted,
     status_line,
@@ -40,7 +43,7 @@ from foundry.log import Entry, Log, Writer
 from foundry.reading import Reading, asks_for_status, is_short_ask, might_be_status, read_message
 from foundry.switch_client import DESK_NAME, Outcome, SwitchClient
 from foundry.tables import TABLE_KINDS, is_file_answer, job_folder, read_file, safe_name
-from foundry.text import CUT_SHORT, headline, quiet, shown_name
+from foundry.text import CUT_SHORT, headline, no_controls, quiet, shown_name
 from foundry.tools.layout import MakerError
 
 if TYPE_CHECKING:
@@ -95,6 +98,8 @@ DUE_DETAIL = (
     "Ask again sends one more message and gives them {hours} more hours. Ask someone else asks another person. "
     "Go without leaves out what has not come in and uses an answer nobody has confirmed as it was heard, marked as not confirmed. The work starts once nothing else is open."
 )
+# The same card on a job that makes nothing, where there is no work to start.
+DUE_DETAIL_ANSWERS = DUE_DETAIL.replace("The work starts once nothing else is open.", "The answers come back once nothing else is open.")
 # Said when the due card runs out: the job is on hold, and what the asker can do. Writing here, or asking where it stands, makes a new card, however long it has been.
 DUE_RAN_OUT = (
     "The card for {title} ran out, so this job is on hold. Write anything here, or ask where it stands, and Foundry opens it again. "
@@ -118,6 +123,7 @@ WHO_INSTEAD = "Who should I ask instead of {owner} for {what}? Write their name 
 WITHOUT_NOTED = "Going without {what}."
 USING_AS_HEARD = "Using {what} as it was heard, marked as not confirmed."
 FINAL_SAYS_SO = "The final card will say so."
+ANSWERS_SAY_SO = "The answers will say so."
 # Lines on a job's attention list. None may start "No source found for " or "Could not read ", which the final card drops each round as its own.
 MISSING_INPUT = "{input} from {owner} was not received, so the work went ahead without it."
 HEARD_BY_VOICE = "{owner}'s answer for {input} was heard by voice and not confirmed: {value}"
@@ -132,6 +138,13 @@ SAY_NOT_RECEIVED = "Not everything people were asked for came in. Say so in the 
 SAID_WHY = ", who said {reason}"
 KNOWN_WHY = ", who is {known}"
 MEASURES_HEADING = "This business names these measures. When an input is one of them, write its measure exactly as listed: {measures}."
+# What goes back to the asker of a job that makes nothing. People wrote the values, so they are quieted where they are filled in.
+ANSWER_BACK = "- {input}, from {owner}: {value}{how}"
+FILE_BACK = "sent the file {name}, attached"
+AS_HEARD = ", as heard by voice and not confirmed"
+NOT_RECEIVED_BACK = "- {input}, from {owner}{why}: not received"
+NOTHING_CAME_BACK = "Nothing came back for this."
+NOTE_BACK = "Note from {approver}: {note}"
 # What Foundry says back to someone whose reply it took. Names, answers and reasons come from people, so each is quieted where it is filled in.
 ANSWER_NOTED = "Got it. {input}: {value}."
 PASSED_ON_NOTED = "Got it. {input}: {value}, as passed on by {asker}."
@@ -151,6 +164,8 @@ JUMPED = "{owner}'s answer for {input} is {value}, more than {share} away from t
 DISAGREE = "{owner} and {other} gave different answers for {input}: {value} and {other_value}."
 UNSEEN_NUMBER = "Foundry read {value} from {owner}'s answer for {input}, but that number is not in what they wrote."
 CHANGED_AFTER_START = "{owner} changed {input} from {old} to {new} after the makers started."
+# On a job that makes nothing no maker ever starts, and the card shows the new answer.
+CHANGED_BEFORE_SIGN_OFF = "{owner} changed {input} from {old} to {new}."
 FAR_FROM_PEERS = "{owner}'s answer for {input} is {value}, far from the others given for this measure."
 # Those lines with their blanks left open, so a later answer can tell which attention lines this check wrote, and take back the ones that no longer hold.
 PEER_LINE = re.compile(".+".join(map(re.escape, re.split(r"\{\w+\}", FAR_FROM_PEERS))))
@@ -398,6 +413,8 @@ class Coordinator:
         llm: Callable[[str], str],
         clock: Callable[[], datetime],
         on_ready: Callable[[Job], None],
+        on_answers_in: Callable[[Job], None],
+        on_answers_changed: Callable[[str], None],
     ) -> None:
         self.client = client
         self.store = store
@@ -408,6 +425,8 @@ class Coordinator:
         self.llm = llm
         self.clock = clock
         self.on_ready = on_ready
+        self.on_answers_in = on_answers_in
+        self.on_answers_changed = on_answers_changed
         # Who was asked which one, when, and what they had said. Lost on a restart, which costs them one more question.
         self._asked_which: dict[tuple[str, str], tuple[datetime, str]] = {}
         # Due cards Switch refused because the asker's room is gone, so each tick doesn't try them again. Lost on a restart, which costs one more try.
@@ -429,16 +448,25 @@ class Coordinator:
     def draft_for(self, job: Job) -> str:
         # The list as OWES lines, so the brief agent can change it when the approver asks for changes.
         zone = self._zone()
-        return "\n".join(
+        lines = [
             f"OWES: {quiet(_one_line(item.owner_name))} | {quiet(item.input)} | {quiet(item.measure)} | {item.due_at.astimezone(zone).isoformat()}"
             for item in self.items.for_job(job.id)
-        )
+        ]
+        return "\n".join([*lines, *([MAKES_NOTHING] if job.makes_nothing else [])])
 
     def take_brief(self, job: Job, brief: str) -> tuple[str, str]:
+        brief, nothing = parse_makes(brief)
         # An agency room keeps today's loop, because clients must never see internal names.
         if not self.settings.is_internal(job.room_id):
+            job.makes_nothing = False
+            if nothing:
+                logger.warning("Ignored the %s line on job %s, because its room has no who-owes list.", MAKES_NOTHING, job.id)
             return brief, ""
         text, owed = parse_owes(brief, self._zone())
+        # With nobody owing anything there is nothing to follow up, so the job goes on as any other.
+        job.makes_nothing = nothing and bool(owed)
+        if nothing and not owed:
+            logger.warning("Ignored the %s line on job %s, because the brief has no OWES line that can be read.", MAKES_NOTHING, job.id)
         self.items.drop_unasked(job.id)
         writers, now = self._writers(job.bucket), self.clock()
         lines = []
@@ -592,6 +620,10 @@ class Coordinator:
         self._close_due_cards(job)
         if any(item.state is ItemState.OPEN for item in self.items.for_job(job.id)):
             return False
+        if job.makes_nothing:
+            # However the last item closed, this is the one place that notices. The desk saves it and sees it through.
+            self.on_answers_in(job)
+            return True
         advance(job, "inputs_closed")
         # The desk asks the makers with the brief as it stands now, so any correction made while collecting reaches them. It doesn't save the job.
         self.on_ready(job)
@@ -677,8 +709,9 @@ class Coordinator:
         lines = "\n".join(self._due_line(item, now) for item in due)
         hours = self.settings.pack_for(job.room_id).ask_again_hours
         try:
+            detail = DUE_DETAIL_ANSWERS if job.makes_nothing else DUE_DETAIL
             self.cards.submit(
-                Trigger.DUE, job.requester, job.bucket, job.room_id, DUE_TITLE.format(job=self._title(job)), DUE_DETAIL.format(job=self._title(job), lines=lines, hours=hours), DUE_CHOICES,
+                Trigger.DUE, job.requester, job.bucket, job.room_id, DUE_TITLE.format(job=self._title(job)), detail.format(job=self._title(job), lines=lines, hours=hours), DUE_CHOICES,
                 job_id=job.id, data={LISTED: [item.id for item in due], DUE_FOR: for_time},
             )
         except httpx.HTTPError as error:
@@ -770,6 +803,44 @@ class Coordinator:
             lines.append(missing)
         # What the desk itself asks goes above the heading, because everything under it is data, and that includes the words of someone who sent nothing.
         return "\n".join([*([SAY_NOT_RECEIVED] if missing else []), INPUTS_HEADING, *lines]) if lines else ""
+
+    def answers_back(self, job: Job) -> tuple[str, list[str]]:
+        # What goes back to the asker of a job that makes nothing, built by code from the list, and the files that go with it. An input handed to someone else is said under them.
+        items = owed_items(self.items.for_job(job.id))
+        got = [item for item in items if item.state in IN and item.answer is not None]
+        lines, files = [self._title(job), *([] if got else [NOTHING_CAME_BACK])], []
+        for item in items:
+            owner = quiet(_one_line(self._owner_name(item))) or NOBODY
+            what = quiet(_one_line(item.input))
+            if item not in got:
+                lines.append(NOT_RECEIVED_BACK.format(input=what, owner=owner, why=_said_why(item)))
+                continue
+            sent = self._is_file(item.answer, item)
+            if sent:
+                files.append(item.answer)
+            value = FILE_BACK.format(name=quiet(Path(item.answer).name)) if sent else quiet(_one_line(item.answer))
+            how = (PASSED_ON_HOW if item.state is ItemState.PASSED_ON else "") + ("" if item.confirmed else AS_HEARD)
+            lines.append(ANSWER_BACK.format(input=what, owner=owner, value=value, how=how))
+        approver = quiet(_one_line(self._shown_name_of(job.approver, job.bucket)))
+        lines += [NOTE_BACK.format(approver=approver, note=quiet(_one_line(entry.text))) for entry in self.log.for_job(job.bucket, job.id) if self._said_on_final_card(entry)]
+        return no_controls("\n".join(lines)), files
+
+    def _said_on_final_card(self, entry: Entry) -> bool:
+        # Changes asked for on the card that shows the answers. Those asked for on the brief were about the brief, and went into its next draft.
+        card = self.cards.get(entry.ref or "") if entry.kind == "revision_notes" else None
+        return card is not None and card.trigger is Trigger.FINAL_WORK
+
+    def checks_beside(self, job: Job) -> list[str]:
+        # What the checks on the answers found, for whoever reads them, because no other card will say it. That a value was only heard is already said beside it.
+        items = self.items.for_job(job.id)
+        said = {HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=item.answer) for item in items if item.answer is not None}
+        return [quiet(line) for line in job.attention if line not in said]
+
+    def owes_follow_up(self, sender: str, room_id: str) -> bool:
+        # Someone asked for a yes or a no on a job that only brings the answers back. Nothing but their word can close it.
+        if not self.settings.is_internal(room_id):
+            return False
+        return any((job := self._job_of(item)) is not None and job.makes_nothing for item in self.items.open_for(sender, self.settings.bucket_for(room_id)))
 
     def not_received(self, job: Job) -> str:
         # What a job is going without, and why if that is known. The makers and the reviewer each read it in their own ask, and it holds what people wrote, quieted.
@@ -922,14 +993,14 @@ class Coordinator:
         # Going without means no more waiting. What has not come in is left out. An answer waiting for its Right or Wrong goes in as it was heard, marked unconfirmed and needing attention (design section 5).
         heard, left_out = [item for item in items if _unconfirmed(item)], [item for item in items if not _unconfirmed(item)]
         now = self.clock()
-        # Said before anything closes, because closing the last item starts the makers.
-        self._flag(job.id, [MISSING_INPUT.format(input=item.input, owner=self._owner_name(item) or NOBODY) for item in left_out])
+        # Said before anything closes, because closing the last item starts the makers. With no makers, the answers themselves say what did not come.
+        self._flag(job.id, [] if job.makes_nothing else [MISSING_INPUT.format(input=item.input, owner=self._owner_name(item) or NOBODY) for item in left_out])
         said = []
         if left_out:
             said.append(WITHOUT_NOTED.format(what=_join(list(dict.fromkeys(quiet(_one_line(item.input)) for item in left_out)), "and")))
         if heard:
             said.append(USING_AS_HEARD.format(what=_join(list(dict.fromkeys(quiet(_one_line(item.input)) for item in heard)), "and")))
-        self.client.post_message(card.room_id, " ".join([*said, FINAL_SAYS_SO]))
+        self.client.post_message(card.room_id, " ".join([*said, ANSWERS_SAY_SO if job.makes_nothing else FINAL_SAYS_SO]))
         for item in heard:
             self._close_voice_cards(item)
             self._keep_if_nobody_can_confirm(item, now)
@@ -1363,8 +1434,11 @@ class Coordinator:
                 lines.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=value))
             if replaced is not None and self._changed(item, replaced, value) and job.state in STARTED:
                 old, new = self._said_as(item, replaced), self._said_as(item, value)
-                lines.append(CHANGED_AFTER_START.format(owner=self._owner_name(item), input=item.input, old=old, new=new))
-                self._tell_asker(job, item, old, new)
+                if job.makes_nothing:
+                    lines.append(CHANGED_BEFORE_SIGN_OFF.format(owner=self._owner_name(item), input=item.input, old=old, new=new))
+                else:
+                    lines.append(CHANGED_AFTER_START.format(owner=self._owner_name(item), input=item.input, old=old, new=new))
+                    self._tell_asker(job, item, old, new)
             # Once it is confirmed, or replaced, the lines saying it was not no longer hold.
             stale = []
             if confirmed and replaced is not None:
@@ -1376,6 +1450,9 @@ class Coordinator:
         # Last, because it may start the makers, and asking them can fail. The answer and its checks are kept either way, and the next tick starts the makers, so the message is not run again for it.
         with _trying(f"close item {item.id}"):
             self._close(item)
+            # What is on the sign-off card is what goes out, so an answer that changes under it means a new card.
+            if job is not None and job.makes_nothing and job.state is State.SIGNOFF_PENDING:
+                self.on_answers_changed(job.id)
 
     def _tell(self, room_id: str, text: str) -> None:
         # Said after what the message caused is saved. A notice Switch refuses is logged and not tried again, because trying again would take the same message in a second time.

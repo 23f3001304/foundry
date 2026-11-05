@@ -587,6 +587,8 @@ STEP_OF = {
 }
 # A day's report is written and signed off, so it never goes through the stages between.
 NOT_FOR_REPORTS = ("collecting", "review")
+# A job that makes nothing never goes through these, and when the asker approves it themselves there is no sign-off either.
+NOT_WHEN_NOTHING_IS_MADE = ("made", "review")
 DAYS_SHOWN = 14
 TOOK_BANDS = (("Under 1 hour", 1), ("1 to 4 hours", 4), ("4 to 24 hours", 24), ("1 to 3 days", 72), ("Over 3 days", None))
 # How many points a job's charts have between the first thing logged on it and now. A job can last an hour or a month, so they are even steps of its own life and not days.
@@ -605,6 +607,8 @@ def steps_of(job: Job, has_items: bool) -> list[JobStep]:
     for place, key in enumerate(keys):
         state = "now" if place == here else "past" if place < here else "next"
         if key != current and ((job.kind != "work" and key in NOT_FOR_REPORTS) or (key == "collecting" and state == "past" and not has_items) or (job.state is State.DROPPED and key == "delivered")):
+            state = "skipped"
+        if key != current and job.makes_nothing and (key in NOT_WHEN_NOTHING_IS_MADE or (key == "signoff" and job.requester == job.approver)):
             state = "skipped"
         steps.append(JobStep(key, STEP_NAMES[key], state))
     return steps

@@ -71,6 +71,8 @@ final work, and nothing else, posted here
 
 A report skips the brief and the makers. The desk writes it from the note, asks the sender if something is unclear, and the approver signs off once.
 
+A follow-up skips the makers too. When a brief carries `MAKES: nothing` beside its `OWES` lines, Foundry asks each person and reminds them, and once the items close the answers go back to the asker and the job closes, straight in the job's room when the asker is also the approver and after one card to the approver when not.
+
 ## The team
 
 | Agent | Runs on | Job |

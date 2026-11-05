@@ -19,7 +19,7 @@ import httpx
 
 from foundry.buffer import Burst, MessageBuffer
 from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, IN_ROUTINE, ITEMS, ONE_BY_ONE, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
-from foundry.chain import CALCULATION, CODE_NAME, Link, flag, link_ref, name_of, names, plain, read_links, states_value, visible_entries, what_was_worked_out, without_times_in_source_lines, worked_out_from_file
+from foundry.chain import CALCULATION, CODE_NAME, NOBODY_SIGNED, Link, flag, link_ref, name_of, names, plain, read_links, states_value, visible_entries, what_was_worked_out, without_times_in_source_lines, worked_out_from_file
 from foundry.checks import calculations, entry_words, file_text, needs_attention, people_words, shown_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date
 from foundry.brand import HEX_COLOUR
@@ -72,10 +72,10 @@ from foundry.commands import (
 )
 from foundry.coordinator import DUE_RAN_OUT, Coordinator
 from foundry.daily import REPORT_FIX_TOO_LATE, VOICE_UNCONFIRMED, DailyReports, unmarked
-from foundry.delivery import DELIVERED, deliver, deliver_report
+from foundry.delivery import DELIVERED, deliver, deliver_answers, deliver_report, post_answer_file, will_never_pass
 from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, parse_reply, resolve_approver, revise_notes
 from foundry.intake import Kind, classify
-from foundry.items import OWES_FORMAT, ItemStore
+from foundry.items import MAKES_NOTHING, OWES_FORMAT, ItemStore
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
 from foundry.log import DESIGN_STYLE, NEVER_A_SOURCE, Entry, Log
 from foundry.pack import Pack, PackError, load_pack
@@ -178,9 +178,23 @@ OWES_ASK = (
     "If this work needs input from other people, add one line for each input after the brief, in exactly this form and with nothing else on the line:\n"
     f"{OWES_FORMAT}\n"
     "Write the person's name exactly as listed above, or leave it blank if nobody fits. Write the exact measure you need, such as the unit and whether it is a whole number. "
-    "Work the due time out from the local time above and write it as an ISO 8601 date and time with its UTC offset. If it needs nobody else's input, write no OWES lines."
+    "Work the due time out from the local time above and write it as an ISO 8601 date and time with its UTC offset. If it needs nobody else's input, write no OWES lines.\n"
+    "If this request only asks for these inputs to be collected and brought back, with nothing to design, write or build from them, add this one line after the OWES lines, in exactly this form and with nothing else on the line:\n"
+    f"{MAKES_NOTHING}\n"
+    "Then make the brief's first line name what is being collected and for whom, because that line becomes the job's title. If anything is to be made from the inputs, leave that line out."
 )
 LAST_LIST = "The list you wrote last time. Change what the approver asked about and keep the rest:"
+# A brief that asks for nothing to be made. The card says plainly what will happen, before anyone is asked.
+NOTHING_GETS_MADE = "Nothing gets made. Once these are in, the answers come back to you here and the job closes."
+NOTHING_GETS_MADE_SIGN_OFF = "Nothing gets made. Once these are in, you see the answers on a card, and when you approve they go to {asker} in their room and the job closes."
+ANSWERS_TITLE = "Answers: {title}"
+ANSWERS_SIGNOFF = "Approve to send these to {asker}, or ask for changes to add a note of your own. Nothing is made, so there is no work to change."
+ANSWERS_CHANGED = "An answer changed, so I closed the card for {title} and there is a new one."
+ANSWERS_ALOUD = "The answers you asked for are here."
+# A line on the job's attention list, which is also how the desk remembers across a restart that it has stopped trying.
+ANSWERS_NOT_POSTED = "The answers could not be posted in the job's room, which may be gone, so Foundry has stopped trying. They are on the job's page."
+# Inside Job.answers_sent, with the words and each file's path, which are delivery's.
+THE_APPROVED_STICKER, THE_REPLY_ALOUD, SHOWN_FOR_SIGN_OFF = "approved sticker", "aloud", "shown: {path}"
 # A question left this long is dropped, so tomorrow's note isn't read as its answer.
 QUESTION_WINDOW = timedelta(hours=24)
 # What a voice note has come to: the sender hasn't answered yet, said it was right, or typed what they meant. Typed notes have none of these.
@@ -514,7 +528,7 @@ class Desk:
         # The jobs whose work could not be sent to the reviewer, and how many times that has been tried again. A restart forgets them, and a job's timeout then raises its card.
         self._review_owed: dict[str, int] = {}
         # Asked for the model and the clock each time, so a test that swaps either one reaches the coordinator too.
-        self.coordinator = Coordinator(client, store, self.items, self.log, self.cards, settings, lambda prompt: self.llm(prompt), lambda: self.clock(), self._ask_makers)
+        self.coordinator = Coordinator(client, store, self.items, self.log, self.cards, settings, lambda prompt: self.llm(prompt), lambda: self.clock(), self._ask_makers, self._answers_in, self._answers_changed)
         # Combines the day's notes with the model that writes reports, and hands an approval to the desk like any other.
         self.daily = DailyReports(client, store, self.log, self.cards, settings, lambda prompt: (self.cleanup_llm or self.llm)(prompt), lambda: self.clock(), gate, self._apply)
 
@@ -548,6 +562,8 @@ class Desk:
             self._stop_quiet_jobs(now)
         with _isolated("look after the jobs waiting on inputs"):
             self.coordinator.tick(now)
+        with _isolated("see through the answers still owed"):
+            self._answers_still_owed()
         with _isolated("open the next cards"):
             self.cards.pump()
         # Before the set times, so a report built at one is on its card in that same run.
@@ -668,6 +684,8 @@ class Desk:
         advance(job, "brief_drafted")
         # Who owes what sits above the brief, on the same card, and what was heard sits below it when the sender is the one approving.
         detail = f"{owners}\n\n{brief}" if owners else brief
+        if job.makes_nothing:
+            detail = f"{self._what_will_happen(job)}\n\n{detail}"
         self.gate.ask(job, f"Brief: {headline(brief)}", self._with_what_was_heard(job, detail), self._approval_room(job))
         self._sticker(self._approval_room(job), "needs_input")
         self.store.save(job)
@@ -1019,6 +1037,124 @@ class Desk:
         # One sticker to end on, and the better one if nothing had to go back.
         self._sticker(job.room_id, "celebrate" if clean_run and self._sticker_path(job.room_id, "celebrate") else "shipped")
 
+    # A brief that asks for nothing to be made: once its items are closed, the answers go back to the asker and the job closes. No maker, no reviewer and no number check.
+    # Each step below is saved before the next, and the tick finishes whatever is left, so a restart or a refused post carries on where it stopped.
+
+    def _goes_straight(self, job: Job) -> bool:
+        # The asker approving their own, inside. Anyone else approving is the last gate, and so is a client's own room, where nothing goes out unseen.
+        return job.requester == job.approver and self.settings.is_internal(job.room_id)
+
+    def _asker_name(self, job: Job) -> str:
+        return quiet(names(self.log, job.bucket).get(job.requester) or job.requester)
+
+    def _what_will_happen(self, job: Job) -> str:
+        return NOTHING_GETS_MADE if self._goes_straight(job) else NOTHING_GETS_MADE_SIGN_OFF.format(asker=self._asker_name(job))
+
+    def _answers_in(self, job: Job) -> None:
+        job.report, job.artifacts = self.coordinator.answers_back(job)
+        advance(job, "answers_in")
+        if self._goes_straight(job):
+            # They approved this when they approved the brief, which said what would happen, and the checks have no other card to go on.
+            job.report = "\n\n".join(filter(None, (job.report, "\n".join(self.coordinator.checks_beside(job)))))
+            advance(job, "signoff_approved")
+        self.store.save(job)
+        self._answers_go_on(job)
+
+    def _answers_still_owed(self) -> None:
+        for job in self.store.all():
+            if job.makes_nothing and ANSWERS_NOT_POSTED not in job.attention:
+                with _isolated(f"see through the answers of job {job.id}"):
+                    self._answers_go_on(job)
+
+    def _answers_go_on(self, job: Job) -> None:
+        try:
+            if job.state is State.APPROVED:
+                self._send_answers(job)
+            elif job.state is State.SIGNOFF_PENDING and job.approval is None:
+                self._ask_about_answers(job)
+        except httpx.HTTPError as error:
+            if will_never_pass(error):
+                self._stop_trying_answers(job, error)
+            else:
+                logger.warning("Could not see through the answers of job %s, so it is tried again on the next tick: %s", job.id, error)
+
+    def _ask_about_answers(self, job: Job) -> None:
+        room = self._approval_room(job)
+        for path in job.artifacts:
+            post_answer_file(job, self.client, room, path, f"For your sign-off: {Path(path).name}", SHOWN_FOR_SIGN_OFF.format(path=path), self.store.save)
+        self.gate.ask(job, ANSWERS_TITLE.format(title=self._title(job)), self._answers_detail(job), room)
+        self._sticker(room, "needs_input")
+        self.store.save(job)
+
+    def _answers_detail(self, job: Job) -> str:
+        return "\n\n".join(filter(None, ("\n".join(self.coordinator.checks_beside(job)), job.report, ANSWERS_SIGNOFF.format(asker=self._asker_name(job)))))
+
+    def _answers_changed(self, job_id: str) -> None:
+        job = self.store.get(job_id)
+        if job.state is not State.SIGNOFF_PENDING:
+            return
+        job.report, job.artifacts = self.coordinator.answers_back(job)
+        if job.approval is not None and job.approval["detail"] == self._answers_detail(job):
+            return
+        if job.approval is not None:
+            self._close_answers_card(job)
+        self.store.save(job)
+        self._answers_go_on(job)
+
+    def _close_answers_card(self, job: Job) -> None:
+        request_id, title = job.approval["request_id"], job.approval["title"]
+        card = self.cards.get(request_id)
+        with _told_after_saving(f"the approver of job {job.id} that its card changed"):
+            if card is None or card.state == OPEN:
+                self.client.close_card(request_id)
+                self.client.post_message(job.approval_room, ANSWERS_CHANGED.format(title=quiet(title)))
+        if card is not None:
+            self.cards.finish(request_id, CLOSED)
+        job.approval = None
+
+    def _take_note_on_answers(self, job: Job) -> None:
+        # There is no maker to go to, so what they wrote goes out with the answers, and they see that on a new card. No round is counted, so nothing here can end up stuck.
+        self._sticker(self._approval_room(job), "revise")
+        job.report, job.artifacts = self.coordinator.answers_back(job)
+        job.revision_notes = None
+        self.store.save(job)
+        self._answers_go_on(job)
+
+    def _send_answers(self, job: Job) -> None:
+        def said_once(part: str, say: Callable[[], None]) -> None:
+            if part not in job.answers_sent:
+                say()
+                job.answers_sent.append(part)
+                self.store.save(job)
+
+        room = job.room_id
+        if not self._goes_straight(job):
+            said_once(THE_APPROVED_STICKER, lambda: self._sticker(room, "approved"))
+        deliver_answers(job, self.client, room, self.store.save)
+
+        def aloud() -> None:
+            with _told_after_saving(f"the asker of job {job.id} aloud that the answers are in"):
+                self._reply_aloud(job, ANSWERS_ALOUD)
+
+        said_once(THE_REPLY_ALOUD, aloud)
+        # A restart here must not put a second delivery in the log, because a day's count of them is read from it.
+        if not any(entry.kind == "delivered" for entry in self.log.for_job(job.bucket, job.id)):
+            what = ", ".join(["the answers", *(Path(path).name for path in job.artifacts)])
+            self.log.add(self.clock(), job.bucket, room, DESK, "delivered", what, job_id=job.id, ref=NOBODY_SIGNED if self._goes_straight(job) else None)
+        advance(job, "delivered")
+        self.store.save(job)
+        self._sticker(room, "celebrate" if self._sticker_path(room, "celebrate") else "shipped")
+
+    def _stop_trying_answers(self, job: Job, error: httpx.HTTPError) -> None:
+        # Switch will keep saying no. The answers are kept on the job and shown on its page, and the job stays where it got to, as any other in a room that has gone.
+        logger.warning("Gave up posting the answers of job %s: Switch refused it, so its room is probably gone: %s", job.id, error)
+        job.attention.append(ANSWERS_NOT_POSTED)
+        self.store.save(job)
+        room = self._approval_room(job)
+        if room != job.room_id:
+            with _told_after_saving(f"the approver of job {job.id} that the answers did not go"):
+                self.client.post_message(room, f"{quiet(self._title(job))}: {ANSWERS_NOT_POSTED}")
+
     def _deliver_report(self, job: Job) -> None:
         # Logged in the room the report went to, with the notes it was made from, which is what the chain follows. No stickers: nothing was delivered to the room its notes came from.
         rooms = self._report_rooms(job)
@@ -1287,8 +1423,8 @@ class Desk:
             self._note_fix_after_sign_off(job, fix, job.room_id)
         elif job.kind == "report":
             self._fix_report(job, fix, spoken)
-        elif job.state is State.COLLECTING:
-            # The makers haven't started, so there is nothing to re-make and no card to open. The fix goes in the brief they will get, and the people already asked are left alone.
+        elif job.state is State.COLLECTING or (job.makes_nothing and job.state is State.SIGNOFF_PENDING):
+            # The makers haven't started, or never will, so there is nothing to re-make and no card to open. The fix goes in the brief they will get, and the people already asked are left alone.
             # It is added, never swapped in, because this brief was approved and nothing drafts it again.
             job.brief = self._corrected_note(job, fix, spoken=False)
         elif job.state in (State.RECEIVED, State.BRIEF_PENDING):
@@ -1451,6 +1587,9 @@ class Desk:
             job = theirs[0] if theirs else waiting[-1]
             self._decide(job, event)
             self.cards.pump()
+        elif plain_word and self.coordinator.owes_follow_up(sender, room_id):
+            # Nothing here is waiting on this word, and they were asked for something on a job that only brings the answers back, so it may be their answer. The reader decides.
+            return False
         return True
 
     def _another_card_is_up(self, job: Job) -> bool:
@@ -1627,6 +1766,9 @@ class Desk:
 
     def _apply(self, job: Job, decision: Decision) -> None:
         event = DECISION_EVENTS.get((job.state, decision))
+        if event == "signoff_revised" and job.makes_nothing:
+            self._take_note_on_answers(job)
+            return
         if event:
             advance(job, event)
         if event == "brief_revised":
@@ -1643,6 +1785,10 @@ class Desk:
         elif event == "signoff_revised":
             self._sticker(self._approval_room(job), "revise")
             self._after_changes(job)
+        elif event == "signoff_approved" and job.makes_nothing:
+            # Saved first, so a post that fails is tried again on the tick, and the answer to this card has nothing left to do.
+            self.store.save(job)
+            self._answers_go_on(job)
         elif event == "signoff_approved":
             self._deliver(job)
         # After the work above, so an approval that has to come round again is only logged once.

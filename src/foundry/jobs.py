@@ -38,6 +38,8 @@ TRANSITIONS = {
     # An approved brief that needs other people's input waits here until every item is closed.
     (State.MAKING, "collect"): State.COLLECTING,
     (State.COLLECTING, "inputs_closed"): State.MAKING,
+    # A brief that asks for nothing to be made: its answers go to sign-off, and from there out, with no maker and no reviewer.
+    (State.COLLECTING, "answers_in"): State.SIGNOFF_PENDING,
     (State.MAKING, "work_ready"): State.REVIEWING,
     (State.MAKING, "stopped"): State.BLOCKED,
     (State.REVIEWING, "stopped"): State.BLOCKED,
@@ -86,6 +88,10 @@ class Job:
     pending_fix: str = ""
     # How many times the daily sweep has put this report before the approver again. It sets how long the sweep waits before the next.
     sweeps: int = 0
+    # The brief's MAKES: nothing line, kept here so it survives a restart. Nothing is made, and the answers go back to the asker.
+    makes_nothing: bool = False
+    # Which parts of those answers have gone out, so a try after a failure or a restart carries on from the first that has not.
+    answers_sent: list[str] = field(default_factory=list)
 
     @property
     def approval_room(self) -> str:
@@ -106,7 +112,9 @@ def advance(job: Job, event: str) -> Job:
     return job
 
 
-COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report", "language", "question", "bucket", "token", "heard", "attention", "pending_fix", "sweeps")
+COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report", "language", "question", "bucket", "token", "heard", "attention", "pending_fix", "sweeps", "makes_nothing", "answers_sent")
+# Columns added to a table that may already hold jobs. A job from before one of them has this value, which is the normal path.
+ADDED_COLUMNS = {"makes_nothing": "INTEGER NOT NULL DEFAULT 0", "answers_sent": "TEXT NOT NULL DEFAULT '[]'"}
 
 
 class JobStore:
@@ -119,8 +127,18 @@ class JobStore:
                     state TEXT NOT NULL, revision_rounds INTEGER NOT NULL, brief TEXT, artifacts TEXT NOT NULL,
                     approval TEXT, revision_notes TEXT, waiting_on TEXT NOT NULL, asked_at TEXT,
                     kind TEXT NOT NULL, sent_at TEXT, report TEXT, language TEXT, question TEXT,
-                    bucket TEXT NOT NULL, token TEXT NOT NULL, heard TEXT, attention TEXT NOT NULL, pending_fix TEXT NOT NULL, sweeps INTEGER NOT NULL)"""
+                    bucket TEXT NOT NULL, token TEXT NOT NULL, heard TEXT, attention TEXT NOT NULL, pending_fix TEXT NOT NULL, sweeps INTEGER NOT NULL,
+                    makes_nothing INTEGER NOT NULL DEFAULT 0, answers_sent TEXT NOT NULL DEFAULT '[]')"""
             )
+            have = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+            for name, kind in ADDED_COLUMNS.items():
+                if name not in have:
+                    try:
+                        db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {kind}")
+                    except sqlite3.OperationalError as error:
+                        # Every process that opens this file gets here, and another may have added it a moment ago.
+                        if "duplicate column" not in str(error):
+                            raise
 
     def create(self, room_id: str, requester: str, approver: str, bucket: str = "") -> Job:
         # A room with no client of its own is its own bucket.
@@ -157,7 +175,7 @@ class JobStore:
                     ON CONFLICT(id) DO UPDATE SET {", ".join(f"{name} = excluded.{name}" for name in COLUMNS[1:])}""",
                 (job.id, job.room_id, job.requester, job.approver, job.state.value,
                  job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes, json.dumps(job.waiting_on), job.asked_at, job.kind, job.sent_at, job.report, job.language, json.dumps(job.question),
-                 job.bucket, job.token, job.heard, json.dumps(job.attention), job.pending_fix, job.sweeps),
+                 job.bucket, job.token, job.heard, json.dumps(job.attention), job.pending_fix, job.sweeps, int(job.makes_nothing), json.dumps(job.answers_sent)),
             )
 
     def _select(self, clause: str, *values: str) -> list[Job]:
@@ -167,4 +185,4 @@ class JobStore:
 
 
 def _job(row: tuple) -> Job:
-    return Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16]), row[17], row[18], row[19], json.loads(row[20]), row[21], row[22])
+    return Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16]), row[17], row[18], row[19], json.loads(row[20]), row[21], row[22], bool(row[23]), json.loads(row[24]))

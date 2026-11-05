@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 OWES_FORMAT = "OWES: <person> | <input> | <measure> | <ISO 8601 due time>"
 OWES_LINE = re.compile(r"[ \t]*OWES:(.*)")
+# The one line that says a brief asks for nothing to be made, so the answers go back to the asker. Code reads it, and no model decides at the moment of closing.
+MAKES_NOTHING = "MAKES: nothing"
+MAKES_LINE = re.compile(r"[ \t]*MAKES:(.*)")
 # The buttons on the reminder card. Pressing one puts its words on the item as the reason.
 CANT_TODAY = "Can't today"
 ALREADY_TOLD = "Already told the asker"
@@ -102,6 +105,20 @@ def parse_owes(brief: str, zone: tzinfo = UTC) -> tuple[str, list[Owed]]:
     if not owed:
         return brief, []
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip(), owed
+
+
+def parse_makes(brief: str) -> tuple[str, bool]:
+    # Only the exact line counts. Any other MAKES line stays in the brief, so the approver sees it, and the job goes on as one that makes things.
+    kept, nothing = [], False
+    for line in brief.split("\n"):
+        match = MAKES_LINE.fullmatch(line)
+        if match and match.group(1).strip() == "nothing":
+            nothing = True
+            continue
+        if match:
+            logger.warning("Left a malformed MAKES line in the brief: %s", line.strip())
+        kept.append(line)
+    return (re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip(), True) if nothing else (brief, False)
 
 
 def _names(names: list[str]) -> str:

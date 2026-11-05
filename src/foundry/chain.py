@@ -85,6 +85,8 @@ SENT_BACK = "sent it back"
 SIGNED_OFF = "signed off"
 DELIVERED = "delivered"
 ROOM_SET_FOR_IT = "the room set for it"
+# The ref of a delivery that no card let go: the answers of a job that makes nothing, going straight back to the person who asked and approved it.
+NOBODY_SIGNED = "no sign-off"
 NO_SOURCE = "no source found"
 NO_SOURCE_DETAIL = "No entry for this job gives {needle}."
 NOT_FLAGGED = "Entry {entry_id} is not a flagged item."
@@ -547,7 +549,7 @@ class _Trail:
         last = sent[-1]
         # The answer that came just before the delivery is the sign-off that let it go.
         answers = [entry for entry in self.job if entry.kind == "card_answered" and entry.id < last.id]
-        if answers:
+        if answers and last.ref != NOBODY_SIGNED:
             self._add(answers[-1], SIGNED_OFF, self._how(answers[-1]), DIRECT)
         self._add(last, DELIVERED, f"{last.text or 'the report'} to {self._room_of(last.room_id)}", DIRECT)
 
