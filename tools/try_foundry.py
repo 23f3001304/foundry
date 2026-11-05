@@ -3,6 +3,7 @@
 Its login, its Switch and every business in it are made up. It keeps everything in .foundry/try and wipes that folder when it starts, unless another run of it is using the folder, in which case it says that one's address and leaves. It answers on this machine only, connects to nothing, and never looks at a .env.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -27,15 +28,18 @@ from foundry_setup import TRY_ALREADY_SAID, TRY_RECORD, TRY_RUNNING, TRY_UNSURE,
 
 import foundry.desk
 from foundry.cards import CardQueue, Trigger
+from foundry.chain import CALCULATION, REVIEW_PASS, ROWS, SENT_IN, flag, link_ref
 from foundry.commands import CommandStore
 from foundry.dashboard.app import create_app
 from foundry.desk import Settings, Workrooms
 from foundry.items import ItemState, ItemStore
 from foundry.jobs import JobStore, State
-from foundry.log import Log
+from foundry.log import Entry, Log
 from foundry.pack import load_pack
+from foundry.tables import job_folder
 from foundry.tools.deck_server import build_deck
 from foundry.tools.graphic_server import render_graphic
+from foundry.tools.pictures import LOOKS, PICTURE, STAMP
 
 HOST = "127.0.0.1"
 FIRST_PORT = 8190
@@ -46,6 +50,10 @@ PASSWORD = "try-it-out"
 NOWHERE = "http://switch.try-mode.invalid"
 BRIDGE = "try"
 OWN_FOLDER_MARK = ".try-mode-data"
+# Pictures of each made-up deck's slides, made once by tools/pictures.py from the deck try mode builds, so Work shows them slide by slide without PowerPoint or LibreOffice here.
+SLIDES = REPO / "scripts" / "scenes" / "try-slides"
+# The file Office Head C sent in the investment firm scene, whose rows add up to 4,730.
+OFFICE_C = REPO / "scripts" / "scenes" / "data" / "office-c-q2-fy27.csv"
 # Anything like these in this process's environment came from somewhere real, and nothing here may read it.
 REAL_SETTINGS = ("FOUNDRY_", "SWITCH_", "MATTERMOST_", "ANTHROPIC_", "SARVAM_", "SLACK_", "TELEGRAM_", "WHATSAPP_", "GOOGLE_", "OPENAI_", "CLAUDE_")
 # Each business, with who signs in as whom.
@@ -189,25 +197,40 @@ class World:
         self.say(job, opened_hours_ago - 0.01, "foundry-desk", "job_opened", title)
         return job
 
-    def say(self, job, hours_ago: float, who: str, kind: str, text: str, ref: str | None = None) -> None:
-        self.log.add_seeded(self.now - timedelta(hours=hours_ago), job.bucket, job.room_id, person(who) if not who.startswith("foundry-") else who, kind, text, sender_name=who, job_id=job.id, ref=ref)
+    def say(self, job, hours_ago: float, who: str, kind: str, text: str, ref: str | None = None) -> Entry:
+        return self.log.add_seeded(self.now - timedelta(hours=hours_ago), job.bucket, job.room_id, person(who) if not who.startswith("foundry-") else who, kind, text, sender_name=who, job_id=job.id, ref=ref)
 
-    def owes(self, job, who: str, room: str, what: str, measure: str, due_hours: float, answered: str = "", reason: str = "") -> None:
+    def owes(self, job, who: str, room: str, what: str, measure: str, due_hours: float, answered: str = "", reason: str = "") -> Entry | None:
         item = self.items.create(job.id, job.bucket, person(who), who, f"try-{room}", what, measure, self.now + timedelta(hours=due_hours))
         item.asked_at = self.now - timedelta(hours=abs(due_hours) + 3)
         self.say(job, abs(due_hours) + 3, "foundry-desk", "item_asked", f"{who}: {what}")
+        said = None
         if answered:
             item.state, item.answer = ItemState.ANSWERED, answered
-            self.say(job, abs(due_hours) + 1, who, "item_answer", answered)
+            said = self.say(job, abs(due_hours) + 1, who, "item_answer", answered)
         elif reason:
             item.reason = reason
             self.say(job, abs(due_hours) + 1, who, "item_reason", reason)
         self.items.save(item)
+        return said
 
-    def deck(self, job, name: str, title: str, slides: list[dict], maker: str = "foundry-deck", hours_ago: float = 1) -> None:
+    def deck(self, job, name: str, title: str, slides: list[dict], maker: str = "foundry-deck", hours_ago: float = 1) -> str:
         # The file's name and its first slide say what it is, because the banner stays behind when it is saved.
         path = build_deck(str(self.folder / "brands" / job.bucket), f"{title} (made up)", slides, str(self.made / f"made-up-{job.id[:6]}-{name}.pptx"))
+        self.slide_pictures(Path(path), name)
         self.say(job, hours_ago, maker, "file_made", Path(path).name, ref=path)
+        return path
+
+    def slide_pictures(self, deck: Path, name: str) -> None:
+        # Laid out the way the maker's tools keep them, stamped with this build of the deck, so the dashboard takes them as this version's pictures.
+        made = sorted((SLIDES / name).glob("slide-*.png"))
+        if not made:
+            return
+        folder = deck.parent / LOOKS / deck.stem
+        folder.mkdir(parents=True)
+        for number, picture in enumerate(made, 1):
+            shutil.copyfile(picture, folder / PICTURE.format(number=number))
+        (folder / STAMP).write_text(hashlib.sha256(deck.read_bytes()).hexdigest(), encoding="ascii")
 
     def picture(self, job, name: str, words: str, line: str, maker: str = "foundry-visual", hours_ago: float = 1) -> None:
         path = render_graphic(str(self.folder / "brands" / job.bucket), words, f"{line} (made up)", "1080x1080", str(self.made / f"made-up-{job.id[:6]}-{name}.png"), composition="statement")
@@ -262,6 +285,26 @@ def investment_firm(world: World) -> None:
     fees = world.job("demo-investment-firm", "analysts", "Fee summary for Office E", State.SIGNOFF_PENDING, 26, "Analyst Lead", "Please make the fee summary for Office E.")
     world.deck(fees, "fee-summary", "Fee summary", [{"layout": "big_number", "title": "Fees this quarter", "number": "142", "caption": "Crore rupees, made up"}])
     world.card(fees, Trigger.FINAL_WORK, "Final work: Fee summary for Office E", "The reviewer passed it. Approve to send it to the room. Internal summary of made-up numbers, not advice.")
+    office_c(world)
+
+
+def office_c(world: World) -> None:
+    # A delivered job and one flag on its figure, logged the way the desk, the data tool and the card queue log them in a live run, so the Action log has a chain to open.
+    job = world.job("demo-investment-firm", "analysts", "Office C assets summary for the partners", State.DELIVERED, 30, "Analyst Lead", "Please make a one-slide summary of Office C's assets under management at the end of Q2 FY27.")
+    folder = job_folder(world.settings.inputs_dir, job.bucket, job.id)
+    folder.mkdir(parents=True)
+    sent = folder / "office-head-c-office-c-q2-fy27.csv"
+    shutil.copyfile(OFFICE_C, sent)
+    answer = world.owes(job, "Office Head C", "office-c", "Office C assets under management at quarter end", "USD millions, a whole number", -26, answered=str(sent))
+    worked = world.say(job, 26.85, "foundry-data", CALCULATION, f"total of Assets under management at end of Q2 FY27 (USD millions) from {sent.name} = 4,730", ref=f"{ROWS} 2,3,4,5{SENT_IN}{answer.id}")
+    deck = world.deck(job, "office-c-assets", "Office C assets", [{"layout": "big_number", "title": "Office C assets under management", "number": "4,730", "caption": "USD millions at the end of Q2 FY27, made up"}], hours_ago=26.8)
+    world.say(job, 26.8, "foundry-deck", "file_made", "4,730", ref=link_ref(deck, worked.id))
+    world.say(job, 26.75, "foundry-reviewer", "review", "I opened the slide picture. 4,730 is the total of the four rows Office Head C sent, and the brand is right.", ref=REVIEW_PASS)
+    title = "Final work: Office C assets summary for the partners"
+    world.say(job, 26.7, "foundry-desk", "card_opened", title)
+    world.say(job, 26.6, "Analyst Lead", "card_answered", title)
+    world.say(job, 26.59, "foundry-desk", "delivered", Path(deck).name)
+    flag(world.log, job.bucket, job.approver, f"text:{deck}:4,730", job.id, job.room_id, world.now - timedelta(hours=2), world.settings.inputs_dir)
 
 
 def agency(world: World) -> None:
