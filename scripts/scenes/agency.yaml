@@ -36,16 +36,17 @@ steps:
     say: "where's the campaign set?"
     wait_for: {text: "being made", timeout: 180}
   # The makers made it and the reviewer passed it. The Account Director signs off each client's set, and only then does the client get it.
+  # The wait is for the card's title, which is all that stays on a long card, because its text goes above it as a message with no buttons. A maker's stuck card has an Approve button too, and a title of its own.
   - as: Account Director
     room: phatakha-studio
-    wait_for: {button: Approve, text: "Approve to deliver this work", timeout: 2700}
+    wait_for: {button: Approve, text: "Final work:", timeout: 2700}
   - as: Account Director
     room: phatakha-studio
     press: Approve
     wait_for: {room: phatakha, text: "Here is your final work", timeout: 180}
   - as: Account Director
     room: ambaryug-studio
-    wait_for: {button: Approve, text: "Approve to deliver this work", timeout: 2700}
+    wait_for: {button: Approve, text: "Final work:", timeout: 2700}
   - as: Account Director
     room: ambaryug-studio
     press: Approve

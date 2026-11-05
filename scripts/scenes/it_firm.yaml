@@ -56,7 +56,8 @@ steps:
   - as: Delivery Manager
     room: delivery
     press: "Go without"
-    wait_for: {button: Approve, timeout: 2700}
+    # The sign-off card by its title, because a maker's stuck card has an Approve button too.
+    wait_for: {button: Approve, text: "Final work:", timeout: 2700}
   # The makers made it and the reviewer passed it. The Delivery Manager signs off.
   - as: Delivery Manager
     room: delivery

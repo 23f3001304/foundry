@@ -106,8 +106,9 @@ MARKER = re.compile(rf"(?:@\S+\s+)*({BRIEF_READY}|{WORK_READY}|{WORK_BLOCKED}|{R
 FILE_KINDS = {".pptx", ".png", ".jpg", ".jpeg", ".pdf"}
 NOT_YOUR_FOLDER = "I can't use a file that isn't in your own folder. Give the absolute path of each file in your own folder, ending in {kinds}. Start your reply with {ready} #{tag}."
 SIGNOFF = "Approve to deliver this work, or ask for changes."
+FINAL_WORK_TITLE = "Final work: {title}"
 REVIEWER_SAID = "The reviewer passed it and said: {words}"
-# Short enough that the cut words and the sign-off line still fit on the card, because a longer card goes above it as a message.
+# Short enough that the cut words and the sign-off line still fit on the card, because a longer card goes above it as a message. An attention line beside them can still take it over.
 MOST_REVIEWER_CHARS = 500
 REVIEWER_CUT = " ... (cut short, the whole reply is in the review room)"
 NO_SOURCE = "No source found for {numbers} in {name}."
@@ -746,7 +747,7 @@ class Desk:
         job.attention = [line for line in job.attention if not WORK_CHECK_LINE.fullmatch(line)] + self._attention_for_work(job)
         lines = "\n".join(quiet(line) for line in job.attention)
         said = self._reviewer_said(job, room, reviewer_said)
-        self.gate.ask(job, f"Final work: {self._title(job)}", "\n\n".join(part for part in (lines, said, SIGNOFF) if part), room)
+        self.gate.ask(job, FINAL_WORK_TITLE.format(title=self._title(job)), "\n\n".join(part for part in (lines, said, SIGNOFF) if part), room)
         self._sticker(room, "needs_input")
 
     def _reviewer_said(self, job: Job, room: str, words: str) -> str:
