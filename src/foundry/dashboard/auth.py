@@ -88,11 +88,21 @@ def find_session(request: Request) -> tuple[str, Session] | None:
     return session_id, session
 
 
+def all_businesses(settings: "Settings", login: str) -> dict[str, str]:
+    # On a person's own machine they run every project, acting as the name its pack lists, or else its approver.
+    found: dict[str, str] = {}
+    for room, pack in settings.packs.items():
+        listed = [str(entry.get("acts_as") or "").strip() for entry in pack.dashboard if isinstance(entry, dict)]
+        found.setdefault(settings.bucket_for(room), next((name for name in listed if name), settings.approver or login))
+    return found
+
+
 def current_user(request: Request) -> User | None:
     found = find_session(request)
     if found is None:
         return None
-    return User(found[1].login, businesses_for(request.app.state.settings, found[1].login))
+    settings = request.app.state.settings
+    return User(found[1].login, all_businesses(settings, found[1].login) if request.app.state.own_login else businesses_for(settings, found[1].login))
 
 
 def csrf_ok(request: Request, sent: object) -> bool:

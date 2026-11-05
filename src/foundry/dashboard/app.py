@@ -30,6 +30,8 @@ from foundry.chain import SAID
 from foundry.commands import DUE_ACTIONS, KIT, CommandStore
 from foundry.dashboard import charts, gateway, shapes
 from foundry.dashboard import data as brand_data
+from foundry.dashboard.settings_page import changes_from, problem_with, read_env, save_env
+from foundry.dashboard.settings_page import view as settings_view
 from foundry.dashboard.auth import COOKIE, LIFETIME, REFUSED, User, csrf_ok, current_user, end_session, find_session, start_session, switch_login
 from foundry.dashboard.queries import MEDIA, PICTURES, STEP_FAMILIES, ConnectionRow, NavCounts, Reader, bucket_name, is_made_file
 from foundry.desk import Settings
@@ -138,6 +140,8 @@ def signed_in(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
     async def guarded(request: Request) -> Response:
         user = current_user(request)
         if user is None:
+            if request.app.state.own_login:
+                return await sign_in_here(request)
             return RedirectResponse("/login", 303)
         arguments: tuple = (request, user)
         if request.method == "POST":
@@ -198,6 +202,19 @@ def recent(request: Request, user: User):
 
 
 # Login
+
+
+async def sign_in_here(request: Request) -> Response:
+    # The dashboard only answers on this machine, so nobody is asked to sign in: it uses the login setup wrote in .env.
+    login, password = request.app.state.own_login
+    try:
+        cookies = await switch_login(request.app.state.switch_url, request.app.state.transport, login, password)
+    except httpx.HTTPError:
+        return render(request, "error.html", None, 503, title="Not done", message=gateway.SWITCH_DOWN)
+    signed, _ = start_session(request, login, cookies)
+    response = RedirectResponse(request.url.path if request.method == "GET" else "/", 303)
+    response.set_cookie(COOKIE, signed, max_age=int(LIFETIME.total_seconds()), httponly=True, samesite="lax", path="/")
+    return response
 
 
 async def login_page(request: Request) -> Response:
@@ -292,6 +309,32 @@ async def connections(request: Request, user: User) -> Response:
         except gateway.SwitchProblem as trouble:
             problem, status = trouble.message, trouble.status
     return render(request, "connections.html", user, status, title="Connections", page="connections", rows=rows, problem=problem, notice=NOTICES.get(request.query_params.get("done", "")), gateway_link=connections_link(request))
+
+
+@signed_in
+async def settings_page(request: Request, user: User, problem: str = "", status: int = 200) -> Response:
+    rows, trouble = [], ""
+    if user.businesses:
+        try:
+            rows = await connection_rows(request, user, gateway.READ_TIMEOUT)
+        except gateway.SwitchProblem as found:
+            trouble = found.message
+    notice = "Saved. Restart Foundry for it to take effect." if request.query_params.get("saved") else ""
+    return render(request, "settings.html", user, status, title="Settings", page="settings", rows=rows, trouble=trouble, problem=problem, notice=notice, **settings_view(request.app.state.env_path, request.app.state.settings))
+
+
+@signed_in
+async def settings_save(request: Request, user: User, form: FormData) -> Response:
+    path = request.app.state.env_path
+    if path is None:
+        raise HTTPException(403)
+    problem = problem_with(form)
+    if problem:
+        return render(request, "settings.html", user, 400, title="Settings", page="settings", rows=[], trouble="", problem=problem, notice="", **settings_view(path, request.app.state.settings))
+    changes = changes_from(form, read_env(path))
+    if changes:
+        await run_in_threadpool(save_env, path, changes)
+    return RedirectResponse("/settings?saved=1", 303)
 
 
 def add_page(request: Request, user: User, kinds: list[gateway.BridgeType], chosen: gateway.BridgeType | None, problem: str = "", status: int = 200, unsure: bool = False) -> Response:
@@ -640,12 +683,14 @@ async def no_data(request: Request, error: sqlite3.OperationalError) -> Response
     return render(request, "error.html", current_user(request), 503, title="No data", message=NO_DATA)
 
 
-def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTransport | None = None, secret: str | None = None) -> Starlette:
+def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTransport | None = None, secret: str | None = None, own_login: tuple[str, str] | None = None, env_path: Path | None = None) -> Starlette:
     routes = [
         Route("/login", login_page),
         Route("/login", login_submit, methods=["POST"]),
         Route("/logout", logout, methods=["POST"]),
         Route("/", overview),
+        Route("/settings", settings_page),
+        Route("/settings", settings_save, methods=["POST"]),
         Route("/connections", connections),
         Route("/connections/add", connection_add_page),
         Route("/connections/add", connection_add, methods=["POST"]),
@@ -689,4 +734,6 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
     # Without a secret from the environment each run has its own, so a restart signs everyone out.
     app.state.secret = secret or os.environ.get("FOUNDRY_DASHBOARD_SECRET") or secrets.token_hex(32)
     app.state.sessions, app.state.switch_url, app.state.transport = {}, switch_url, transport
+    app.state.own_login, app.state.env_path = own_login, env_path
+    environment.globals["local"] = own_login is not None
     return app

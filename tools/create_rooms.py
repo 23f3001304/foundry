@@ -52,6 +52,9 @@ def reviewer_inputs() -> dict[str, str]:
     # The template's model only exists on OpenCode, so another provider starts on its own default.
     provider, model = os.environ.get("FOUNDRY_REVIEWER_PROVIDER"), os.environ.get("FOUNDRY_REVIEWER_MODEL")
     inputs = {"reviewer_provider": provider, "reviewer_model": ""} if provider else {}
+    for maker in ("brief", "deck", "visual"):
+        if chosen := os.environ.get(f"FOUNDRY_{maker.upper()}_PROVIDER"):
+            inputs[f"{maker}_provider"] = chosen
     return inputs | {"reviewer_model": model} if model else inputs
 
 

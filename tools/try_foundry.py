@@ -300,7 +300,7 @@ def build_app(folder: Path) -> Starlette:
     investment_firm(world)
     agency(world)
     coffee_shop(world)
-    app = create_app(settings, NOWHERE, httpx.MockTransport(answer), secrets.token_hex(32))
+    app = create_app(settings, NOWHERE, httpx.MockTransport(answer), secrets.token_hex(32), own_login=(LOGIN, PASSWORD))
     # Only here, and base.html shows the banner only when it is set.
     app.state.templates.env.globals["try_mode"] = BANNER_WORDS
     return app
@@ -362,9 +362,6 @@ def main(home: Path | None = None) -> int:
         print(flush=True)
         print("  TRY MODE. Everything in it is made up, no agents are running and nothing is sent anywhere.", flush=True)
         print(f"  Open      http://{HOST}:{port}", flush=True)
-        print(f"  Login     {LOGIN}", flush=True)
-        print(f"  Password  {PASSWORD}", flush=True)
-        print("  Both work only in try mode. The real setup generates its own and never prints them.", flush=True)
         print("  Press Ctrl+C to stop.", flush=True)
         uvicorn.run(app, host=HOST, port=port, log_level="warning")
         return 0

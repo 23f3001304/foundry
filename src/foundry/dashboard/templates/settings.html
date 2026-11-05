@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "_ui.html" import saved %}
+{% macro field_box(field) %}
+<div class="field">
+  <label for="{{ field.name }}">{{ field.label }}</label>
+  {% if field.secret %}
+  <input id="{{ field.name }}" name="{{ field.name }}" type="password" autocomplete="off" placeholder="{{ 'Set. Leave empty to keep it' if values.get(field.name) else 'Not set' }}"{% if not editable %} disabled{% endif %}>
+  {% if values.get(field.name) %}<label class="check" for="clear-{{ field.name }}"><input id="clear-{{ field.name }}" name="clear.{{ field.name }}" type="checkbox"> Remove this key</label>{% endif %}
+  {% elif field.choices %}
+  <select id="{{ field.name }}" name="{{ field.name }}"{% if not editable %} disabled{% endif %}>
+    {% for choice in field.choices %}<option value="{{ choice }}"{% if values.get(field.name, '') == choice %} selected{% endif %}>{{ choice or 'Template default' }}</option>{% endfor %}
+  </select>
+  {% else %}
+  <input id="{{ field.name }}" name="{{ field.name }}" type="text" autocomplete="off" value="{{ values.get(field.name, '') }}"{% if not editable %} disabled{% endif %}>
+  {% endif %}
+  {% if field.hint %}<span class="small">{{ field.hint }}</span>{% endif %}
+</div>
+{% endmacro %}
+{% block main %}
+<header class="page-head">
+  <h1 class="title">Settings</h1>
+  <p class="lead">Foundry runs on this machine. Connect your chat apps, choose your models, and keep one project for each company.</p>
+</header>
+{% if notice %}{{ saved(notice) }}{% endif %}
+{% if problem %}<p class="alert" role="alert">{{ problem }}</p>{% endif %}
+
+<section>
+  <h2>Status</h2>
+  <table class="list">
+    <thead><tr><th>What</th><th>State</th></tr></thead>
+    <tbody>
+      <tr><td>Chat apps</td><td>{% if trouble %}<span class="stage trouble">{{ trouble }}</span>{% elif rows %}{% for row in rows %}<span class="stage {{ 'done' if row.healthy else 'trouble' }}">{{ row.name }}: {{ row.state }}</span> {% endfor %}{% else %}<span class="stage trouble">None connected yet</span>{% endif %}</td></tr>
+      <tr><td>Projects</td><td>{{ projects|length }}</td></tr>
+      {% for name, found in clis %}<tr><td>{{ name }} CLI</td><td><span class="stage {{ 'done' if found else 'trouble' }}">{{ 'Found on this machine' if found else 'Not found' }}</span></td></tr>{% endfor %}
+    </tbody>
+  </table>
+  <p class="small section-foot">Found means the program is installed. Whether it's signed in shows in Switch Console, under its machine.</p>
+</section>
+
+<section>
+  <h2>Connect a chat app</h2>
+  {% for guide in guides %}
+  <details class="fold guide">
+    <summary><h2>{{ guide.name }}</h2></summary>
+    {% if guide.video %}<video controls preload="none" src="/static/guides/{{ guide.key }}.mp4"></video>{% endif %}
+    <ol>{% for step in guide.steps %}<li>{{ step }}</li>{% endfor %}</ol>
+  </details>
+  {% endfor %}
+  <p><a class="button" href="/connections/add">Add a connection</a></p>
+</section>
+
+<section>
+  <h2>Projects</h2>
+  <p class="small">A project holds one company: its rooms, brand folder, jobs and log.</p>
+  {% if projects %}
+  <table class="list">
+    <thead><tr><th>Project</th><th>Outside rooms</th></tr></thead>
+    <tbody>{% for name, rooms in projects.items() %}<tr><td class="strong">{{ name }}</td><td>{{ rooms|length }}</td></tr>{% endfor %}</tbody>
+  </table>
+  {% else %}<p class="note">No project yet.</p>{% endif %}
+  <p class="small section-foot">To make one, put its brand folder in place and run <code>uv run --env-file .env python tools/create_rooms.py agency NAME BRAND_FOLDER</code>, then restart Foundry.</p>
+</section>
+
+<section>
+  <h2>Models and keys</h2>
+  {% if not editable %}<p class="note">This is the try-out, so nothing here can be changed.</p>{% endif %}
+  <form class="stack panel" method="post" action="/settings" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <h3>Keys</h3>
+    {% for field in keys %}{{ field_box(field) }}{% endfor %}
+    <h3>Models</h3>
+    {% for field in models %}{{ field_box(field) }}{% endfor %}
+    <h3>Which program runs each agent</h3>
+    <p class="small">Switch fixes an agent's program when the agent is made, so this reaches projects made after you change it. Existing projects keep theirs.</p>
+    {% for field in agents %}{{ field_box(field) }}{% endfor %}
+    {% if editable %}<button class="primary" type="submit">Save</button>{% endif %}
+  </form>
+  <p class="small section-foot">Saved keys are never shown again. Changes take effect after a restart: <code>./setup.sh --stop</code> then <code>./setup.sh</code>. On Windows use <code>.\setup.ps1</code> the same way.</p>
+</section>
+{% endblock %}

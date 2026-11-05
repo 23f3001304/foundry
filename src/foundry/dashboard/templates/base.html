@@ -28,7 +28,7 @@
   <input type="hidden" name="csrf" value="{{ csrf }}">
   {{ avatar(user.login.replace("-", " ")) }}
   <span title="{{ user.login }}">{{ user.login }}</span>
-  <button class="quiet" type="submit">Sign out</button>
+  {% if not local %}<button class="quiet" type="submit">Sign out</button>{% endif %}
 </form>
 {% endmacro %}
 <body class="{{ 'viewer-body' if focus else 'shell' if user else 'bare' }}{% if page %} page-{{ page }}{% endif %}">
@@ -57,6 +57,7 @@
       {{ nav_item("log", "/log", "Action log", "sun") }}
     {% endcall %}
     {% call nav_group("setup", "Setup") %}
+      {{ nav_item("settings", "/settings", "Settings", "azure") }}
       {{ nav_item("connections", "/connections", "Connections", "azure") }}
       {{ nav_item("data", "/data", "Data", "azure") }}
     {% endcall %}
@@ -75,11 +76,12 @@
   {{ tab("jobs", link("/jobs", business=business), "Jobs", "", counts.stuck, "stuck") }}
   {{ tab("responses", "/responses", "Responses", "", counts.waiting) }}
   {{ tab("work", "/work", "Work", "Generated work") }}
-  <details class="more{% if page in ('log', 'connections', 'data') %} is-current{% endif %}">
+  <details class="more{% if page in ('log', 'settings', 'connections', 'data') %} is-current{% endif %}">
     <summary class="tab"><span class="icon icon-more" aria-hidden="true"></span>More</summary>
     <div class="more-panel">
       <ul class="nav-list">
         {{ nav_item("log", "/log", "Action log", "sun") }}
+        {{ nav_item("settings", "/settings", "Settings", "azure") }}
         {{ nav_item("connections", "/connections", "Connections", "azure") }}
         {{ nav_item("data", "/data", "Data", "azure") }}
       </ul>

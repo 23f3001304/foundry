@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pathlib import Path
 
 import uvicorn
 
@@ -20,7 +21,7 @@ def main() -> None:
         settings = Settings.from_env()
     except PackError as error:
         raise SystemExit(str(error)) from None
-    app = create_app(settings, os.environ.get("SWITCH_URL", "http://127.0.0.1:8000"))
+    app = create_app(settings, os.environ.get("SWITCH_URL", "http://127.0.0.1:8000"), own_login=(os.environ.get("SWITCH_EMAIL", ""), os.environ.get("SWITCH_PASSWORD", "")), env_path=Path(".env").resolve())
     uvicorn.run(app, host=HOST, port=int(os.environ.get("FOUNDRY_DASHBOARD_PORT", DEFAULT_PORT)))
 
 

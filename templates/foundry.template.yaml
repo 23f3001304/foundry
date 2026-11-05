@@ -72,6 +72,21 @@ params:
     type: string
     label: Your name on the team chat
     description: Your account's name on the team chat app. Switch has one name for you, the one on the outside chat, so it can't look you up on another app by it, and a stranger there could hold that name. tools/create_rooms.py fills this in.
+  brief_provider:
+    type: provider
+    label: Brief agent
+    default: [claude]
+    input: advanced
+  deck_provider:
+    type: provider
+    label: Deck agent
+    default: [claude]
+    input: advanced
+  visual_provider:
+    type: provider
+    label: Visual agent
+    default: [claude]
+    input: advanced
   reviewer_provider:
     type: provider
     label: Reviewer agent
@@ -95,7 +110,7 @@ resources:
     name: "foundry-brief{agent_suffix}"
     display_name: "Foundry Brief{agent_suffix}"
     description: Turns a request into a one-page brief
-    provider: claude
+    provider: "{brief_provider}"
     machine: "{machine}"
     directory: "{$agents_dir}/{brief.name}"
     addressing: owner-agents
@@ -133,7 +148,7 @@ resources:
     name: "foundry-deck{agent_suffix}"
     display_name: "Foundry Deck{agent_suffix}"
     description: Makes on-brand slide decks from an approved brief
-    provider: claude
+    provider: "{deck_provider}"
     machine: "{machine}"
     directory: "{$agents_dir}/{deck.name}"
     addressing: owner-agents
@@ -205,7 +220,7 @@ resources:
     name: "foundry-visual{agent_suffix}"
     display_name: "Foundry Visual{agent_suffix}"
     description: Makes on-brand graphics from an approved brief
-    provider: claude
+    provider: "{visual_provider}"
     machine: "{machine}"
     directory: "{$agents_dir}/{visual.name}"
     addressing: owner-agents

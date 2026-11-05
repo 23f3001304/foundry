@@ -104,6 +104,12 @@ Each agency client made from now on has its own set of these four, named with it
 
 ## Run it
 
+Foundry is open source and runs on Agent Switch, which has its own licence. It runs on your own machine: one person can run several companies, each as its own project with its own rooms, brand folder, jobs and log. The dashboard answers only on this machine, so it doesn't ask anyone to sign in, which means anyone using this computer can use it.
+
+Once it's running, **Settings** in the dashboard shows what's connected, gives the steps for connecting Telegram, Slack and Mattermost, and holds the keys and models. An agent can run on a signed-in `claude`, `codex` or `opencode` CLI, or the desk can use a Claude API key. Saved keys go in `.env` and are never shown again. An agent's program is fixed when its project is made, so a change there reaches only new projects. Everything else takes effect after a restart. Gemini and OpenRouter haven't been proved here, so they aren't offered.
+
+A hosted version, with sign-up and bots you just install, is what comes next. It isn't built.
+
 There are two commands. On Windows, use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` wherever this says `./setup.sh`, with the same flags. A default Windows machine refuses to run a script any other way. The Bypass applies only to that one run and changes no setting on your machine.
 
 **To look at it, with no agents and nothing else installed but [uv](https://docs.astral.sh/uv/):**
@@ -328,7 +334,7 @@ What this demo shows about clients:
 - **Each client has agents of its own.** `foundry-deck-phatakha` and `foundry-deck-ambaryug` are different agents in different folders. A client's tools write only in that maker's own folder, show a picture only from it or the client's own brand folder, and open only that client's jobs and brand folder. The desk takes a file only from that client's makers' folders. A maker, reviewer or brief agent from one client is ignored in the other's rooms.
 - **A client only learns the stage.** Asked where its work is, it is told "being made" or "being checked", with no name of anyone inside and no who-owes list. Who-owes-what runs in internal mode only.
 - **Each client is its own bucket.** The desk picks the bucket from the room, and nothing a model sends can name one. Two clients' files and log entries never mix in a lookup.
-- **Clients never sign in to the dashboard.** The packs list only the agency's own login, acting as the Account Director.
+- **Clients never reach the dashboard.** It answers only on the machine running it, acting as the Account Director for that agency's project.
 - **Pictures are off by default.** With `FOUNDRY_IMAGES` off, the set is still complete, and its written copy has a "Pictures" section that says no pictures were drawn. With `FOUNDRY_IMAGES=on`, the makers may draw at most two pictures with `generate_image`, which calls the same Vertex model as `tools/gen_assets.py`. **Those pictures are AI-generated, and the files say so.** Google's policy bars passing generated content off as made only by people.
 
 Before the seed in step 4 makes these two clients' rooms, set `FOUNDRY_REVIEWER_PROVIDER=claude` and leave `FOUNDRY_REVIEWER_MODEL` empty in `.env`. Each client gets a reviewer of its own, and a reviewer's provider can't be changed once it is made. Then make the scripted people and play the scene. In `.env`, set `FOUNDRY_QUIET_SECONDS=8` first, and restart the desk after the seed so it follows the new rooms.
@@ -378,3 +384,7 @@ The Kasauti Capital Partners logo is not generated. `tools/draw_kasauti_logo.py`
 Speech comes from [Sarvam](https://docs.sarvam.ai/api-reference-docs/speech-to-text/transcribe): [Saaras](https://docs.sarvam.ai/api/getting-started/models/saaras) to read and Bulbul to speak.
 
 The WhatsApp adapter is Prakhar Gupta's open pull request to Switch, [sandbox-quantum/switch#1166](https://github.com/sandbox-quantum/switch/pull/1166). We built on it and added reply buttons and lists for Switch's request cards. `integrations/whatsapp` holds their commits under their name, our commits on top, and Switch's licence and notice. It changes Switch's core code in a local deployment, and it needs a Meta app and a public address to run for real.
+
+## Licence
+
+Foundry's own code is under the Apache License 2.0, in `LICENSE`. It runs on Agent Switch, which has its own licence, and the WhatsApp adapter keeps its author's credit above.

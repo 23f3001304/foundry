@@ -649,6 +649,7 @@ main > .section-foot { margin-top: var(--gap); }
 .icon-responses { mask-image: url(icons/responses.svg); }
 .icon-work { mask-image: url(icons/work.svg); }
 .icon-log { mask-image: url(icons/log.svg); }
+.icon-settings { mask-image: url(icons/settings.svg); }
 .icon-connections { mask-image: url(icons/connections.svg); }
 .icon-data { mask-image: url(icons/data.svg); }
 .icon-more { mask-image: url(icons/more.svg); }
@@ -1355,3 +1356,9 @@ form.panel { gap: var(--space-16); margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+
+/* Settings: a guide's steps, and its video when one has been added */
+
+.guide ol { margin: var(--space-12) 0; padding-left: var(--space-24); }
+.guide li { margin-block: var(--space-4); }
+.guide video { display: block; width: 100%; max-width: 640px; margin-top: var(--space-12); }
