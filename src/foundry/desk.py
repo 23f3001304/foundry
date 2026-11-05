@@ -282,10 +282,11 @@ def _give_up_if_room_is_gone(what: str) -> Iterator[None]:
 
 @contextmanager
 def _told_after_saving(whom: str) -> Iterator[None]:
-    # A notice goes after what the message caused is saved. One Switch refuses is said in the log and not tried again, because trying again takes the whole message in a second time.
+    # A notice goes after what the message caused is saved. One that fails is said in the log and not tried again, because trying again takes the whole message in a second time.
+    # Not only Switch refusing it: a voice reply goes through the voice service first, which can answer with a page that is not JSON, or audio that cannot be read.
     try:
         yield
-    except httpx.HTTPError as error:
+    except Exception as error:
         logger.warning("Could not tell %s, so they are not told: %s", whom, error)
 
 
