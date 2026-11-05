@@ -206,14 +206,14 @@ def read_links(path: str | Path) -> list[Link]:
 
 
 def visible_entries(log: Log, job: Job, now: datetime) -> list[Entry]:
-    # What a job's makers may read and cite: its own entries, the bucket's approved reports and what its asker wrote in its room lately.
+    # What a job's makers may read and cite: its own entries, the bucket's approved reports and what its asker wrote in its room lately. Seeded history is for a demo's charts and never reaches them, because nobody really said it.
     since = now - MEMORY
     # A button pressed on a reminder is in the log as a reason, and on the dashboard as an action too, and it is the card's words, so it isn't there to be quoted.
     pressed = tuple(f" with {button} {VIA_DASHBOARD}" for button in REMINDER_CHOICES)
     own = [entry for entry in log.for_job(job.bucket, job.id) if not (entry.kind == "item_reason" and is_a_button(entry.text)) and not (entry.kind == "dashboard_action" and entry.text.endswith(pressed))]
     reports = log.between(job.bucket, since, now, kinds=["report_approved"])
-    asked = [entry for entry in log.between(job.bucket, since, now, kinds=["message"], room_id=job.room_id) if entry.sender == job.requester]
-    chosen = {entry.id: entry for entry in [*own, *reports, *asked[-MOST_MESSAGES:]]}
+    asked = [entry for entry in log.between(job.bucket, since, now, kinds=["message"], room_id=job.room_id) if entry.sender == job.requester and not entry.seeded]
+    chosen = {entry.id: entry for entry in [*own, *reports, *asked[-MOST_MESSAGES:]] if not entry.seeded}
     return sorted(chosen.values(), key=lambda entry: (entry.at, entry.id))
 
 
