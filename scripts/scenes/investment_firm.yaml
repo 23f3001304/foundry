@@ -6,24 +6,24 @@ name: investment_firm
 brand: demo-investment-firm
 people:
   # The approver works inside, so each room's cards for them come up in that room's projects room.
-  Analyst Lead: [analysts, analysts-projects, office-a-projects, office-b-projects, office-c-projects, office-d-projects, office-e-projects]
-  Office Head A: [office-a]
-  Office Head B: [office-b]
-  Office Head C: [office-c]
-  Office Head D: [office-d]
-  Office Head E: [office-e]
-watch: [analysts, office-a, office-b, office-c, office-d, office-e, analysts-projects]
+  Analyst Lead: [kasauti-analysts, kasauti-analysts-projects, kasauti-office-a-projects, kasauti-office-b-projects, kasauti-office-c-projects, kasauti-office-d-projects, kasauti-office-e-projects]
+  Office Head A: [kasauti-office-a]
+  Office Head B: [kasauti-office-b]
+  Office Head C: [kasauti-office-c]
+  Office Head D: [kasauti-office-d]
+  Office Head E: [kasauti-office-e]
+watch: [kasauti-analysts, kasauti-office-a, kasauti-office-b, kasauti-office-c, kasauti-office-d, kasauti-office-e, kasauti-analysts-projects]
 # What people said before the scene, so the brief's card can say when each last wrote. Written by scripts/seed_history.py and marked as seeded in the log.
 history:
-  - {as: Office Head A, room: office-a, days_ago: 1, say: "Office A has closed its books for the month."}
-  - {as: Office Head B, room: office-b, days_ago: 2, say: "Office B has filed its regional report."}
-  - {as: Office Head C, room: office-c, days_ago: 6, say: "Office C is waiting on custody statements."}
-  - {as: Office Head D, room: office-d, days_ago: 21, say: "Office D has moved to a new floor."}
-  - {as: Office Head E, room: office-e, days_ago: 3, say: "Office E has a client review this week."}
+  - {as: Office Head A, room: kasauti-office-a, days_ago: 1, say: "Office A has closed its books for the month."}
+  - {as: Office Head B, room: kasauti-office-b, days_ago: 2, say: "Office B has filed its regional report."}
+  - {as: Office Head C, room: kasauti-office-c, days_ago: 6, say: "Office C is waiting on custody statements."}
+  - {as: Office Head D, room: kasauti-office-d, days_ago: 21, say: "Office D has moved to a new floor."}
+  - {as: Office Head E, room: kasauti-office-e, days_ago: 3, say: "Office E has a client review this week."}
 # Work from the 28 days before the scene, so the overview's charts have something to draw. Written by scripts/seed_history.py and marked as seeded.
 earlier_work:
   as: Analyst Lead
-  room: analysts
+  room: kasauti-analysts
   # The log finds a person's name from what they wrote, so this is how a seeded answer says who gave it.
   say: "Office A has its monthly summary."
   jobs:
@@ -39,57 +39,57 @@ steps:
   # The request, and the brief's card with who owes what. Each Office Head is asked for that office's own figure, so the five inputs read differently and none is told it disagrees with another.
   # The deck is asked to chart each office and the year, so the makers have to use the data tools.
   - as: Analyst Lead
-    room: analysts
+    room: kasauti-analysts
     say: "I need the quarterly review deck for the partners' meeting by {in:60}. Office Head A owes Office A's assets under management at the end of Q2 FY27, Office Head B owes Office B's assets under management, Office Head C owes Office C's assets under management, Office Head D owes Office D's assets under management and Office Head E owes Office E's assets under management, each by {in:15}. I want a chart of the five offices, and a chart of how assets have moved over the past year."
     wait_for: {button: Approve, timeout: 300}
   - as: Analyst Lead
-    room: analysts
+    room: kasauti-analysts
     press: Approve
   # Each office is asked in its own room. A step waits for the ask before the answer, because an answer sent before it is in the room is only a message.
   - as: Office Head A
-    room: office-a
+    room: kasauti-office-a
     wait_for: {text: "Exact measure", timeout: 180}
   - as: Office Head A
-    room: office-a
+    room: kasauti-office-a
     say: "Office A ends the quarter with 6,420 in assets under management."
     wait_for: {text: "Got it", timeout: 180}
   - as: Office Head B
-    room: office-b
+    room: kasauti-office-b
     wait_for: {text: "Exact measure", timeout: 180}
   - as: Office Head B
-    room: office-b
+    room: kasauti-office-b
     say: "Office B ends the quarter with 5,180 in assets under management."
     wait_for: {text: "Got it", timeout: 180}
   - as: Office Head D
-    room: office-d
+    room: kasauti-office-d
     wait_for: {text: "Exact measure", timeout: 180}
   - as: Office Head D
-    room: office-d
+    room: kasauti-office-d
     say: "Office D ends the quarter with 7,050 in assets under management."
     wait_for: {text: "Got it", timeout: 180}
   # Office E's figure is more than three times what it gave last quarter and far from the other offices. Code judges that, and nothing else changes.
   - as: Office Head E
-    room: office-e
+    room: kasauti-office-e
     wait_for: {text: "Exact measure", timeout: 180}
   - as: Office Head E
-    room: office-e
+    room: kasauti-office-e
     say: "Office E ends the quarter with 19,800 in assets under management."
     wait_for: {text: "Got it", timeout: 180}
   # Office C sends a file last, with no words beside it, because a file answer has not been played live and the jump must not wait on it.
   # Its asset classes add up to its figure, and the makers' tools open the file by its name. Until it is in, the makers have not started.
   - as: Office Head C
-    room: office-c
+    room: kasauti-office-c
     wait_for: {text: "Exact measure", timeout: 180}
   - as: Office Head C
-    room: office-c
+    room: kasauti-office-c
     file: data/office-c-q2-fy27.csv
     wait_for: {text: "I saved", timeout: 180}
   # Every office has answered, so the makers start. The wait is for the whole of the check's wording, because the brief agent quotes the kit's "far from the others". The deck's charts are to be worked out by code, and the reviewer checks the deck. The final card is meant to name Office E's figure.
   - as: Analyst Lead
-    room: analysts
+    room: kasauti-analysts
     wait_for: {text: "far from the others given for this measure", timeout: 2700}
   - as: Analyst Lead
-    room: analysts
+    room: kasauti-analysts
     press: Approve
     timeout: 180
     wait_for: {text: "Here is your final work", timeout: 180}

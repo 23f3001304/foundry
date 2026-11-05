@@ -1083,7 +1083,11 @@ class Coordinator:
         caption = payload["body"].strip()
         caption = "" if caption in {attachment.get("filename") for attachment in files} else caption
         # A file with no words is an answer. With words, the table is an answer only when they read as one, because they may ask for something new and the table be what it is made from.
-        reading = self._answer_in(caption, own, sender, bucket) if caption and any(Path(a.get("filename") or "").suffix.lower() in TABLE_KINDS for a in files) else None
+        read = self._caption_reading(caption, own, sender, bucket) if caption and any(Path(a.get("filename") or "").suffix.lower() in TABLE_KINDS for a in files) else None
+        reading = read if read is not None and read.kind == "answer" and not _names_another(read, own) else None
+        # Words that say nothing the reader can use, such as "here it is", leave the table as a file with no words.
+        if read is not None and read.kind == "none":
+            caption = ""
         taken = False
         for attachment in files:
             name = attachment.get("filename") or "file"
@@ -1110,10 +1114,13 @@ class Coordinator:
                 own = [other for other in own if other.id != item.id]
         return taken
 
+    def _caption_reading(self, words: str, own: list[Item], sender: str, bucket: str) -> Reading:
+        listed = [*own, *(item for item in self.items.open_in(bucket) if item.id not in {mine.id for mine in own})][:MOST_ITEMS_LISTED]
+        return self._read(words, listed, bucket, sender)
+
     def _answer_in(self, words: str, own: list[Item], sender: str, bucket: str) -> Reading | None:
         # The reading of the words when the reader says they answer one of the sender's own items. Words that name someone else's item, or that the reader cannot place, do not.
-        listed = [*own, *(item for item in self.items.open_in(bucket) if item.id not in {mine.id for mine in own})][:MOST_ITEMS_LISTED]
-        reading = self._read(words, listed, bucket, sender)
+        reading = self._caption_reading(words, own, sender, bucket)
         return reading if reading.kind == "answer" and not _names_another(reading, own) else None
 
     def _read(self, text: str, listed: list[Item], bucket: str, sender: str) -> Reading:
