@@ -257,9 +257,12 @@ def investment_firm(world: World) -> None:
 
 def agency(world: World) -> None:
     mango = world.job("demo-agency-client-a", "phatakha", "Mango Masala campaign set: deck, poster and social posts", State.REVIEWING, 7, "Marketing Manager A", "We need the full campaign set for Mango Masala.")
+    # The dashboard learns a person's name from what they said, and the Account Director approves both clients' work.
+    world.say(mango, 6.9, "Account Director", "message", "Thanks. Send it to me when the reviewer has passed it.")
     world.deck(mango, "mango-masala", "Mango Masala", [{"layout": "statement", "text": "Loud, sweet and a little hot."}, {"layout": "content", "title": "Where it runs", "bullets": ["Shop posters", "Social posts", "Retailer deck"]}], maker="foundry-deck-phatakha")
     world.picture(mango, "mango-poster", "Mango Masala", "This summer", maker="foundry-visual-phatakha")
     tea = world.job("demo-agency-client-b", "ambaryug", "First Flush Reserve campaign set: deck, poster and social posts", State.SIGNOFF_PENDING, 22, "Marketing Manager B", "We need the campaign set for the First Flush Reserve.")
+    world.say(tea, 21.9, "Account Director", "message", "Thanks. Send it to me when the reviewer has passed it.")
     world.deck(tea, "first-flush", "First Flush Reserve", [{"layout": "statement", "text": "Picked in spring, in small lots."}], maker="foundry-deck-ambaryug")
     world.picture(tea, "first-flush-poster", "First Flush Reserve", "Small lots, this spring", maker="foundry-visual-ambaryug")
     world.card(tea, Trigger.FINAL_WORK, "Final work: First Flush Reserve campaign set", "The reviewer passed it. Approve to send it to the client's room.")
