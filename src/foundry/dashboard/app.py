@@ -30,7 +30,7 @@ from foundry.chain import SAID
 from foundry.commands import DUE_ACTIONS, KIT, CommandStore
 from foundry.dashboard import charts, gateway, shapes
 from foundry.dashboard import data as brand_data
-from foundry.dashboard.settings_page import changes_from, problem_with, read_env, save_env
+from foundry.dashboard.settings_page import changes_from, make_project, problem_with, read_env, save_env
 from foundry.dashboard.settings_page import view as settings_view
 from foundry.dashboard.auth import COOKIE, LIFETIME, REFUSED, User, csrf_ok, current_user, end_session, find_session, start_session, switch_login
 from foundry.dashboard.queries import MEDIA, PICTURES, STEP_FAMILIES, ConnectionRow, NavCounts, Reader, bucket_name, is_made_file
@@ -319,7 +319,7 @@ async def settings_page(request: Request, user: User, problem: str = "", status:
             rows = await connection_rows(request, user, gateway.READ_TIMEOUT)
         except gateway.SwitchProblem as found:
             trouble = found.message
-    notice = "Saved. Restart Foundry for it to take effect." if request.query_params.get("saved") else ""
+    notice = "Saved. Restart Foundry for it to take effect." if request.query_params.get("saved") else "Project made. Restart Foundry for it to start listening there." if request.query_params.get("made") else ""
     return render(request, "settings.html", user, status, title="Settings", page="settings", rows=rows, trouble=trouble, problem=problem, notice=notice, **settings_view(request.app.state.env_path, request.app.state.settings))
 
 
@@ -335,6 +335,17 @@ async def settings_save(request: Request, user: User, form: FormData) -> Respons
     if changes:
         await run_in_threadpool(save_env, path, changes)
     return RedirectResponse("/settings?saved=1", 303)
+
+
+@signed_in
+async def project_add(request: Request, user: User, form: FormData) -> Response:
+    path = request.app.state.env_path
+    if path is None:
+        raise HTTPException(403)
+    problem = await run_in_threadpool(make_project, path, str(form.get("kind") or ""), str(form.get("name") or "").strip(), str(form.get("brand") or ""))
+    if problem:
+        return render(request, "settings.html", user, 400, title="Settings", page="settings", rows=[], trouble="", problem=problem, notice="", **settings_view(path, request.app.state.settings))
+    return RedirectResponse("/settings?made=1", 303)
 
 
 def add_page(request: Request, user: User, kinds: list[gateway.BridgeType], chosen: gateway.BridgeType | None, problem: str = "", status: int = 200, unsure: bool = False) -> Response:
@@ -691,6 +702,7 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
         Route("/", overview),
         Route("/settings", settings_page),
         Route("/settings", settings_save, methods=["POST"]),
+        Route("/settings/project", project_add, methods=["POST"]),
         Route("/connections", connections),
         Route("/connections/add", connection_add_page),
         Route("/connections/add", connection_add, methods=["POST"]),

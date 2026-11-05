@@ -4,7 +4,10 @@ import logging
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -15,6 +18,18 @@ PLAIN = re.compile(r"[^\s\"'#=]*")
 NOT_PLAIN = "{label} can't hold spaces, quotes, # or =, so nothing was saved."
 NOT_A_CHOICE = "{label} isn't one of the choices, so nothing was saved."
 GUIDES_DIR = Path(__file__).parent / "static" / "guides"
+REPO = Path(__file__).resolve().parents[3]
+BRAND_FOLDERS = REPO / "brands"
+PROJECT_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+BAD_PROJECT_NAME = "A project's name is small letters, numbers and dashes, up to 40, so nothing was made."
+BAD_BRAND_FOLDER = "That brand folder isn't one of the choices, so nothing was made."
+BAD_KIND = "That kind of project isn't one of the choices, so nothing was made."
+ALREADY_MAKING = "Another project is being made. Wait for it to finish, then try again."
+TOOK_TOO_LONG = "Making the project took more than five minutes, so Foundry stopped waiting. Some rooms may exist. Run the same thing again to finish it."
+DID_NOT_WORK = "The project wasn't made. Run tools/create_rooms.py from a terminal to see why."
+MAKING_TIMEOUT = 300
+PROJECT_KINDS = (("agency", "A client, with agents of its own"), ("internal", "Your own company or department"))
+_making = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -131,6 +146,38 @@ def save_env(path: Path, changes: dict[str, str]) -> None:
     logger.info("Settings changed: %s.", ", ".join(sorted(changes)))
 
 
+def brand_folders() -> list[str]:
+    return sorted(folder.parent.name for folder in BRAND_FOLDERS.glob("*/kit.md"))
+
+
+def make_project(env_path: Path, mode: str, name: str, brand: str) -> str:
+    """Makes a project's rooms and agents with the same tool the command line uses. Says what went wrong, or nothing if it worked."""
+    if not PROJECT_NAME.fullmatch(name):
+        return BAD_PROJECT_NAME
+    if brand not in brand_folders():
+        return BAD_BRAND_FOLDER
+    if mode not in dict(PROJECT_KINDS):
+        return BAD_KIND
+    if not _making.acquire(blocking=False):
+        return ALREADY_MAKING
+    try:
+        # What's in .env now, since a key saved on this page isn't in this process until a restart.
+        answer = subprocess.run(
+            [sys.executable, str(REPO / "tools" / "create_rooms.py"), mode, name, brand],
+            cwd=env_path.parent, env={**os.environ, **read_env(env_path)}, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=MAKING_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return TOOK_TOO_LONG
+    finally:
+        _making.release()
+    if answer.returncode == 0:
+        logger.info("Project made: %s.", name)
+        return ""
+    # The tool's own sentence says what to do. A crash's trace could hold anything, so that stays off the page.
+    lines = answer.stderr.strip().splitlines()
+    return DID_NOT_WORK if not lines or "Traceback" in answer.stderr else lines[-1][:500]
+
+
 def view(env_path: Path | None, settings) -> dict:
     values = read_env(env_path) if env_path else {}
     projects: dict[str, list[str]] = {}
@@ -138,6 +185,6 @@ def view(env_path: Path | None, settings) -> dict:
         projects.setdefault(settings.bucket_for(room), []).append(room)
     return {
         "keys": KEYS, "models": MODELS, "agents": AGENTS, "values": values, "guides": guides(),
-        "editable": env_path is not None, "projects": projects,
+        "editable": env_path is not None, "projects": projects, "brand_folders": brand_folders(), "project_kinds": PROJECT_KINDS,
         "clis": [(name, shutil.which(name) is not None) for name in PROVIDERS],
     }

@@ -58,7 +58,30 @@
     <tbody>{% for name, rooms in projects.items() %}<tr><td class="strong">{{ name }}</td><td>{{ rooms|length }}</td></tr>{% endfor %}</tbody>
   </table>
   {% else %}<p class="note">No project yet.</p>{% endif %}
-  <p class="small section-foot">To make one, put its brand folder in place and run <code>uv run --env-file .env python tools/create_rooms.py agency NAME BRAND_FOLDER</code>, then restart Foundry.</p>
+  <h3>New project</h3>
+  {% if not editable %}<p class="note">This is the try-out, so no project can be made here.</p>
+  {% elif not brand_folders %}<p class="note">A project needs a brand folder first: add one under <code>brands/</code> with a <code>kit.md</code> in it.</p>
+  {% else %}
+  <form class="stack panel" method="post" action="/settings/project" autocomplete="off">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="field">
+      <label for="project-name">Name</label>
+      <input id="project-name" name="name" type="text" required pattern="[a-z0-9][a-z0-9\-]{0,39}">
+      <span class="small">Small letters, numbers and dashes. It starts the name of each room.</span>
+    </div>
+    <div class="field">
+      <label for="project-kind">Kind</label>
+      <select id="project-kind" name="kind">{% for value, words in project_kinds %}<option value="{{ value }}">{{ words }}</option>{% endfor %}</select>
+    </div>
+    <div class="field">
+      <label for="project-brand">Brand folder</label>
+      <select id="project-brand" name="brand">{% for folder in brand_folders %}<option value="{{ folder }}">{{ folder }}</option>{% endfor %}</select>
+      <span class="small">For a new company, first add a folder under <code>brands/</code> with a <code>kit.md</code> in it.</span>
+    </div>
+    <button class="primary" type="submit">Make project</button>
+    <p class="small">This makes its rooms and agents in Switch, and can take a few minutes. Keep this page open.</p>
+  </form>
+  {% endif %}
 </section>
 
 <section>

@@ -106,7 +106,7 @@ Each agency client made from now on has its own set of these four, named with it
 
 Foundry is open source and runs on Agent Switch, which has its own licence. It runs on your own machine: one person can run several companies, each as its own project with its own rooms, brand folder, jobs and log. The dashboard answers only on this machine, so it doesn't ask anyone to sign in, which means anyone using this computer can use it.
 
-Once it's running, **Settings** in the dashboard shows what's connected, gives the steps for connecting Telegram, Slack and Mattermost, and holds the keys and models. An agent can run on a signed-in `claude`, `codex` or `opencode` CLI, or the desk can use a Claude API key. Saved keys go in `.env` and are never shown again. An agent's program is fixed when its project is made, so a change there reaches only new projects. Everything else takes effect after a restart. Gemini and OpenRouter haven't been proved here, so they aren't offered.
+Once it's running, **Settings** in the dashboard shows what's connected, gives the steps for connecting Telegram, Slack and Mattermost, holds the keys and models, and makes a new project from a brand folder under `brands/`. An agent can run on a signed-in `claude`, `codex` or `opencode` CLI, or the desk can use a Claude API key. Saved keys go in `.env` and are never shown again. An agent's program is fixed when its project is made, so a change there reaches only new projects. Everything else takes effect after a restart. Gemini and OpenRouter haven't been proved here, so they aren't offered.
 
 A hosted version, with sign-up and bots you just install, is what comes next. It isn't built.
 
