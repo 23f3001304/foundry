@@ -67,6 +67,8 @@ BRIDGE = "{bridge}"
 RETRY_AFTER = timedelta(minutes=1)
 # A report with no card up or waiting gets a new one no sooner than this after its first, and twice as long after each one since, so a card that is refused for good is not made again every tick.
 SWEEP_WAIT = timedelta(minutes=15)
+# It doubles this many times and no more, so the wait is never over 16 hours and the doubling can't overflow.
+SWEEP_DOUBLINGS = 6
 # How a note stands in the day's report.
 CLEAN, KEPT, NEEDS = "clean", "kept", "needs"
 
@@ -382,10 +384,12 @@ class DailyReports:
                 self._drop(report)
                 continue
             # A card Switch refuses for good, such as one for a room that is gone, is closed as soon as it is tried, so a new one waits a while rather than being made every tick, and twice as long each time, so it stops crowding Responses.
-            items = self._items_of(report)
-            newest = max((item.created_at for item in items), default=None)
-            if newest is None or self.clock() - newest >= SWEEP_WAIT * 2 ** (len(items) - 1):
+            # Only the sweep's own tries are counted. A card swapped for a changed note is no try, or a report with many kept notes would wait hours after a restart.
+            newest = max((item.created_at for item in self._items_of(report)), default=None)
+            if newest is None or self.clock() - newest >= SWEEP_WAIT * 2 ** min(report.sweeps, SWEEP_DOUBLINGS):
                 self._requeue(report)
+                report.sweeps += 1
+                self.store.save(report)
                 self.cards.pump()
 
     def _was_sent(self, report: Job) -> bool:
