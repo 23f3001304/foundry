@@ -15,7 +15,7 @@ from matplotlib.font_manager import FontProperties
 from mcp.server.mcpserver import MCPServer
 
 from foundry.brand import Brand, load_brand_dir
-from foundry.chain import CALCULATION, ENTRIES, ROWS, name_of, names
+from foundry.chain import CALCULATION, ENTRIES, ROWS, SENT_IN, name_of, names
 from foundry.checks import RESULT, cell_number, shown_words
 from foundry.items import IN, ItemState, ItemStore, owed_items
 from foundry.jobs import Job
@@ -188,15 +188,25 @@ def _standing_warning(standing: dict) -> str:
     return NOT_ALL_IN.format(count=standing["in"], owed=standing["owed"], names=names + (f" and {more} more" if more > 0 else ""))
 
 
-def _table(token: str, source: str) -> tuple[Job, Log, Table]:
+def _sent_in(job: Job, log: Log, path: Path) -> Entry | None:
+    # The newest answer of this job that is the file at this path, so a figure worked out from the file can name who sent it. A client's own document was sent by no one.
+    inputs = os.environ.get("FOUNDRY_INPUTS_DIR") or None
+    for entry in reversed(log.for_job(job.bucket, job.id)):
+        if entry.kind == "item_answer" and is_file_answer(entry.text, inputs, job.bucket, job.id) and _resolved(entry.text) == path:
+            return entry
+    return None
+
+
+def _table(token: str, source: str) -> tuple[Job, Log, Table, Entry | None]:
     # The job, and so the bucket, come from the token alone. A token that is no job's gives an error before anything is looked at.
     job = _job(token)
     log = Log(_path("FOUNDRY_LOG_DB"))
     if source.startswith(ANSWERS):
         if source.removeprefix(ANSWERS) != token:
             raise MakerError(NOT_YOURS.format(name=ANSWERS))
-        return job, log, _answers(job, log)
-    return job, log, read_file(_readable(job, log, source))
+        return job, log, _answers(job, log), None
+    path = _readable(job, log, source)
+    return job, log, read_file(path), _sent_in(job, log, path)
 
 
 def _name_of(source: str, table: Table) -> str:
@@ -230,7 +240,7 @@ def read_table(token: str, source: str) -> dict:
     Each row says which row of the file it is, counted as a spreadsheet counts it. Only the first 200 rows are shown, and calculate works on all of them.
     An XLSX is read from the results its program saved. A formula with no saved result is named in notes, never counted as zero.
     """
-    _, _, table = _table(token, source)
+    _, _, table, _ = _table(token, source)
     shown = table.rows[:MOST_ROWS_SHOWN]
     notes = [*table.notes, *(UNSAVED_NOTE.format(cell=address(*at)) for at in sorted(table.unsaved)[:MOST_LISTED])]
     if len(table.rows) > MOST_ROWS_SHOWN:
@@ -445,7 +455,7 @@ def calculate(token: str, source: str, operation: str, column: str, group_by: st
     For answers, owed, in and not_in say how many people were asked, how many answered and who has not, because a total covers only those in.
     source_rows lists the rows the result rests on, each with its row, cell and value, and for answers the entry's number.
     """
-    job, log, table = _table(token, source)
+    job, log, table, sent = _table(token, source)
     if operation not in OPERATIONS:
         raise MakerError(NO_OPERATION.format(operation=operation, operations=", ".join(OPERATIONS)))
     if not table.rows:
@@ -496,7 +506,7 @@ def calculate(token: str, source: str, operation: str, column: str, group_by: st
         warnings += [answer.pop("warning")] if "warning" in answer else []
     if warnings:
         answer["warning"] = " ".join(warnings)
-    _log_calculation(job, log, answer, _name_of(source, table), table, shown)
+    _log_calculation(job, log, answer, _name_of(source, table), table, shown, sent)
     return answer
 
 
@@ -516,7 +526,7 @@ def _no_mark(text: str) -> str:
     return text.replace("=", "-")
 
 
-def _log_calculation(job: Job, log: Log, answer: dict, source_name: str, table: Table, shown: list[Used]) -> None:
+def _log_calculation(job: Job, log: Log, answer: dict, source_name: str, table: Table, shown: list[Used], sent: Entry | None = None) -> None:
     # The result is kept on the job as a log entry, so the number check counts it and the chain can show how it was worked out. Only a calculation that gave a result is kept.
     by = f" by {_no_mark(answer['group_by'])}" if "group_by" in answer else ""
     ordered = f" ordered by {_no_mark(answer['order_by'])}" if "order_by" in answer else ""
@@ -526,6 +536,8 @@ def _log_calculation(job: Job, log: Log, answer: dict, source_name: str, table: 
     else:
         numbers = [str(item.row.number) for item in shown]
         ref = f"{ROWS} " + ",".join(numbers[:MOST_ROWS_LOGGED]) + (f",+{len(numbers) - MOST_ROWS_LOGGED}" if len(numbers) > MOST_ROWS_LOGGED else "")
+        if sent is not None:
+            ref += f"{SENT_IN}{sent.id}"
     log.add(clock(), job.bucket, job.room_id, DATA_NAME, CALCULATION, text, sender_name=DATA_NAME, job_id=job.id, ref=ref)
 
 

@@ -35,6 +35,8 @@ SAID = ("message", "voice_corrected", "item_answer", "item_passed_on", "revision
 # What code worked out for a job, and the places it says it worked it out from: the rows of a file, or the log entries of a job's answers.
 CALCULATION = "calculation"
 ROWS, ENTRIES = "rows", "entries"
+# A calculation over a file someone sent as an answer names its rows, then the log entry of that answer: "rows 2,3,4 sent in 25".
+SENT_IN = " sent in "
 # The markers the desk logs for agents.
 BRIEF_READY = "BRIEF_READY"
 REVIEW_PASS = "REVIEW_PASS"
@@ -347,7 +349,13 @@ class _Trail:
                 if found is not None:
                     self._said(found, DIRECT)
         elif kind == ROWS and places:
-            self._add(entry, WORKED_FROM, f"{ROWS} {places}", DIRECT)
+            rows, _, sent = places.partition(SENT_IN)
+            self._add(entry, WORKED_FROM, f"{ROWS} {rows}", DIRECT)
+            # The file is what a person sent, so that person is behind the figure too.
+            for entry_id in _ids(sent):
+                found = self.log.get(self.bucket, entry_id)
+                if found is not None:
+                    self._said(found, DIRECT)
 
     def _said(self, entry: Entry, label: str) -> None:
         if entry.kind == CALCULATION:
