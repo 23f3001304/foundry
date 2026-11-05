@@ -268,6 +268,9 @@ def main(mode: str, name: str, slug: str, outside_bridge: str = "") -> None:
 
         group, earlier = unfinished_rooms().get(name, ("", {}))
         if name in unfinished_rooms():
+            # A room deleted since, or a stack wiped since, is made again, and its dead id is never saved.
+            there = {room["id"] for room in gateway.get("/rooms").json()}
+            earlier = {room: room_id for room, room_id in earlier.items() if room_id in there}
             made = _make_the_rest(gateway, run, template, mode, name, group, earlier)
         else:
             answer = run(template)

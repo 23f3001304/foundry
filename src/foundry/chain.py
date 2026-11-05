@@ -39,6 +39,8 @@ MARKS_BEFORE = re.compile(r"(?<!\w)(?P<first>[-+−–]?)(?:(?P<money>[₹$€£
 PERCENT_AFTER = re.compile(r"\s*(?:%|(?:per\s?cent|pct)\b)", re.IGNORECASE)
 # A column of percents, or a growth, which is a percent change whatever its column is called.
 PERCENT_NAMES = {"percent", "pct", "growth"}
+# A column can name its currency in letters, where a slide writes the mark.
+MONEY_CODES = {"\u20b9": "inr", "$": "usd", "\u20ac": "eur", "\u00a3": "gbp"}
 # A value can name several figures, each with its own group, as in "North 230, South 350".
 PARTS_OF_A_VALUE = re.compile(r"[,;]\s+|\s+and\s+", re.IGNORECASE)
 # What an agent may draw on besides its job's own entries: the asker's recent messages and the bucket's approved reports.
@@ -197,7 +199,8 @@ def _figures(line: str) -> list[_Figure]:
 
 
 def _words(text: str) -> list[str]:
-    return re.findall(r"[^\W\d_]+|\d+", text.casefold())
+    # With no plural, so a column of millions counts for 4,730 million. Short words keep theirs, because Rs is not R.
+    return [word.removesuffix("s") if len(word) > 3 else word for word in re.findall(r"[^\W\d_]+|\d+", text.casefold())]
 
 
 def _says(found: _Figure, wanted: _Figure, named: str) -> bool:
@@ -205,7 +208,7 @@ def _says(found: _Figure, wanted: _Figure, named: str) -> bool:
     named_words = _words(named)
     if found.number != wanted.number or (wanted.sign == MINUS and found.sign != MINUS) or (wanted.sign == "+" and found.sign == MINUS):
         return False
-    if wanted.money and wanted.money != found.money and wanted.money not in named:
+    if wanted.money and wanted.money != found.money and wanted.money not in named and MONEY_CODES[wanted.money] not in named_words:
         return False
     if wanted.percent and not found.percent and not (PERCENT_NAMES & set(named_words) or "%" in named):
         return False
