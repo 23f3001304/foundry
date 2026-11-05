@@ -140,6 +140,7 @@ RAN_OUT_OPENED_AGAIN = "More than one approval here ran out, so I've opened them
 ROUTINE_ONLY_THE_PERSON = "Only the person this card is for can answer it, so it comes back at the next set time."
 ROUTINE_STILL_WAITING = "Still waiting on you: {count}. They come back at the next set time."
 ROUTINE_NOTHING_NEEDS_YOU = "Nothing here needs you. These come back at the next set time."
+ROUTINE_OPEN_ELSEWHERE = "The next one is open in another room."
 CARD_RAN_OUT = "The card for {title} ran out, so this job is on hold."
 # Switch reads a typed card answer like "A1 2" itself, and the same text still arrives here as a message.
 CARD_ANSWER = re.compile(r"[Aa]\d+\s+\S+")
@@ -468,7 +469,7 @@ class Desk:
         self.buffer = MessageBuffer(settings.buffer_path, settings.quiet_seconds)
         self.log = Log(settings.log_path)
         # Asks for the desk's clock each time, so the queue never runs on a different one.
-        self.cards = CardQueue(settings.work_path, client, self.log, lambda: self.clock())
+        self.cards = CardQueue(settings.work_path, client, self.log, lambda: self.clock(), lambda: self.settings.inside_rooms())
         if isinstance(gate, QueuedCardGate):
             gate.cards = self.cards
         self.items = ItemStore(settings.work_path)
@@ -1409,8 +1410,12 @@ class Desk:
         left = len(card.data["items"]) - len(approved)
         if choice == APPROVE_CLEAN and left:
             self.client.post_message(card.room_id, ROUTINE_STILL_WAITING.format(count=left))
-        elif choice == SHOW_NEEDS and self.cards.open_for(card.person, card.bucket) is None and not self._shown_next(card):
-            self.client.post_message(card.room_id, ROUTINE_NOTHING_NEEDS_YOU)
+        elif choice == SHOW_NEEDS:
+            shown = self.cards.open_for(card.person, card.bucket)
+            if shown is None and not self._shown_next(card):
+                self.client.post_message(card.room_id, ROUTINE_NOTHING_NEEDS_YOU)
+            elif shown is not None and shown.room_id != card.room_id:
+                self.client.post_message(card.room_id, ROUTINE_OPEN_ELSEWHERE)
 
     def _shown_next(self, card: Card) -> bool:
         # Something was brought one by one, such as a report, and only hasn't opened yet. Saying that nothing needs the person would be untrue.

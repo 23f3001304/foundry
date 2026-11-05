@@ -71,6 +71,7 @@ VOICE_CARD_TITLE = "Check what I heard"
 ROUTINE_TITLE = "Routine items"
 NEEDS_YOU = " (needs you)"
 ROUTINE_CLOSED = "I closed your routine card because something needs a decision first. Its items come back at the next set time."
+ALONE_CLOSED = "I closed this card because something needs a decision first. It comes back once that is answered."
 CARD_LIMIT = 700
 READ_ABOVE = "The full text is just above this card."
 ROOM_GONE = (403, 404)
@@ -134,6 +135,11 @@ def _is_clean(card: Card) -> bool:
     return card.data.get("clean", False)
 
 
+def _shown_above(card: Card) -> bool:
+    # A clean item that must be seen to be answered is clean because it was shown in full in its own room.
+    return _is_clean(card) and bool(card.data.get(ALWAYS_SHOW))
+
+
 def _waiting_since(card: Card) -> datetime:
     since = card.data.get(WAITING_SINCE)
     return datetime.fromisoformat(since) if since else card.created_at
@@ -163,11 +169,12 @@ def _card(row: tuple) -> Card:
 
 
 class CardQueue:
-    def __init__(self, path: Path | str, client: SwitchClient, log: Log, clock: Callable[[], datetime]) -> None:
+    def __init__(self, path: Path | str, client: SwitchClient, log: Log, clock: Callable[[], datetime], inside_rooms: Callable[[], set[str]] = set) -> None:
         self.path = str(path)
         self.client = client
         self.log = log
         self.clock = clock
+        self.inside_rooms = inside_rooms
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute(
                 """CREATE TABLE IF NOT EXISTS cards (
@@ -344,7 +351,7 @@ class CardQueue:
         # Switch marks a closed card "Cancelled", so say why.
         try:
             self.client.close_card(card.request_id)
-            self.client.post_message(card.room_id, ROUTINE_CLOSED)
+            self.client.post_message(card.room_id, ROUTINE_CLOSED if card.is_merged else ALONE_CLOSED)
         except httpx.HTTPError as error:
             logger.warning("Could not close routine card %s: %s", card.request_id, error)
         self.finish(card.request_id, CLOSED)
@@ -380,9 +387,15 @@ class CardQueue:
             self._try_again_later(card, error)
 
     def _give_up(self, card: Card) -> None:
-        for item_id in card.data.get(ITEMS, ()):
-            self.finish(item_id, CLOSED)
+        # Only what was said in the room that has gone goes with it. The rest of the business's items get a card of their own.
+        items = [self.get(item_id) for item_id in card.data.get(ITEMS, ())]
+        for item in items:
+            if item.room_id == card.room_id:
+                self.finish(item.request_id, CLOSED)
         self.finish(card.request_id, CLOSED)
+        others = [self.get(item.request_id) for item in items if item.room_id != card.room_id]
+        if others:
+            self._open_routine(card.person, card.bucket, others)
 
     def _try_again_later(self, card: Card, error: httpx.HTTPError) -> None:
         logger.warning("Could not open card %s for job %s, so it stays queued for the next try: %s", card.request_id, card.job_id, error)
@@ -418,21 +431,33 @@ class CardQueue:
             self._log(self.get(item_id), "card_opened", DESK_NAME)
 
     def _open_routine(self, person: str, bucket: str, items: list[Card]) -> None:
-        # One room to a card, so nothing said in an inside room shows in a client's. The rest wait for their own card.
-        # The room that has waited longest goes first. An item that comes back is stamped afresh, so it can't keep another room waiting for good.
-        first = min(items, key=_waiting_since)
-        same_room = [item for item in items if item.room_id == first.room_id]
-        for item in same_room:
+        # Every room of the business on one card, because a room left for a card of its own could wait until tomorrow. A bucket is one business, so clients never mix.
+        for item in items:
             self._stop_being_clean_if_stale(item)
-        lines = [f"- {item.title}{'' if _is_clean(item) else NEEDS_YOU}" for item in same_room]
+        room = self._room_for(items)
+        for item in items:
+            self._stop_being_clean_if_shown_elsewhere(item, room)
+        lines = [f"- {item.title}{'' if _is_clean(item) else NEEDS_YOU}" for item in items]
         # A merged card takes its first item's trigger, so it still comes from the list and still reads as routine.
-        card = Card(_new_id(), first.trigger, person, bucket, first.room_id, ROUTINE_TITLE, "\n".join(lines), [APPROVE_CLEAN, SHOW_NEEDS], None, None, QUEUED, self.clock(), None, {ITEMS: [item.request_id for item in same_room]})
+        card = Card(_new_id(), items[0].trigger, person, bucket, room, ROUTINE_TITLE, "\n".join(lines), [APPROVE_CLEAN, SHOW_NEEDS], None, None, QUEUED, self.clock(), None, {ITEMS: [item.request_id for item in items]})
         # Saved before the first try, so a retry keeps this id and Switch can say it already has the card.
         self._save(card)
-        for item in same_room:
+        for item in items:
             item.state = IN_ROUTINE
             self._save(item)
         self._try_to_open(card)
+
+    def _room_for(self, items: list[Card]) -> str:
+        # Inside if anything on it is inside, so nothing said there shows in a client's room. Then where a clean report's draft is, so the one press has it just above. Then whoever has waited longest.
+        inside = self.inside_rooms()
+        allowed = [item for item in items if item.room_id in inside] or items
+        return min([item for item in allowed if _shown_above(item)] or allowed, key=_waiting_since).room_id
+
+    def _stop_being_clean_if_shown_elsewhere(self, item: Card, room: str) -> None:
+        # This card lists titles only, so one press must not count as having read a report shown in another room.
+        if _shown_above(item) and item.room_id != room:
+            item.data["clean"] = False
+            self._save(item)
 
     def _stop_being_clean_if_stale(self, item: Card) -> None:
         until = item.data.get(CLEAN_UNTIL)
