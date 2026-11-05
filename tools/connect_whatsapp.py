@@ -6,6 +6,7 @@ uv run --env-file .env python tools/connect_whatsapp.py
 import os
 
 import httpx
+from register_desk import local_url
 
 CONFIG = {
     "access_token": "WHATSAPP_ACCESS_TOKEN",
@@ -26,8 +27,8 @@ def main() -> None:
     missing = [name for name in CONFIG.values() if not os.environ.get(name)]
     if missing:
         raise SystemExit(f"Set these in .env first: {', '.join(missing)}")
-    url = os.environ.get("SWITCH_URL", "http://127.0.0.1:8000")
-    with httpx.Client(base_url=f"{url}/gateway", timeout=60) as gateway:
+    url = local_url("SWITCH_URL", "http://127.0.0.1:8000")
+    with httpx.Client(base_url=f"{url}/gateway", timeout=60, trust_env=False) as gateway:
         gateway.post("/auth/login", json={"email": os.environ["SWITCH_EMAIL"], "password": os.environ["SWITCH_PASSWORD"]}).raise_for_status()
         bridge = next((listed for listed in gateway.get("/collaborations").json() if listed["bridge_type"] == "whatsapp"), None)
         if bridge is None:

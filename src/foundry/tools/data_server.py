@@ -171,7 +171,7 @@ def _standing(job: Job) -> dict:
     owed = owed_items(ItemStore(_path("FOUNDRY_WORK_DB")).for_job(job.id))
     out = []
     for item in (item for item in owed if item.state not in IN):
-        line = {"owner": _clean(_one_line(item.owner_name)) or "nobody named", "input": _clean(_one_line(item.input)), "state": "going without" if item.state is ItemState.SKIPPED else "open"}
+        line = {"owner": _clean(_one_line(item.shown_owner)) or "nobody named", "input": _clean(_one_line(item.input)), "state": "going without" if item.state is ItemState.SKIPPED else "open"}
         words, known = own_words(item), desk_wrote(item)
         out.append(line | ({"reason": _clean(_one_line(words))} if words else {}) | ({"known": _clean(_one_line(known))} if known else {}))
     return {"owed": len(owed), "in": len(owed) - len(out), "not_in": out}

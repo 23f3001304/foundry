@@ -10,7 +10,7 @@ from datetime import UTC, datetime, tzinfo
 from enum import Enum
 from pathlib import Path
 
-from foundry.text import quiet
+from foundry.text import quiet, shown_name
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,10 @@ class Item:
     confirmed: bool
     # The item that took this one's place when the asker, or the owner, said to ask someone else.
     handed_to: str | None = None
+
+    @property
+    def shown_owner(self) -> str:
+        return shown_name(self.owner_name, self.owner)
 
 
 @dataclass(frozen=True)
@@ -138,7 +142,7 @@ def owed_items(items: list[Item]) -> list[Item]:
 
 
 def _why_open(item: Item, for_makers: bool) -> str:
-    name = quiet(item.owner_name)
+    name = quiet(item.shown_owner)
     if known := desk_wrote(item):
         return f"{name} is {quiet(known)}"
     # A maker can quote what they read, so they aren't given a button's words. The asker is, because that is how they know to go and ask.
@@ -152,7 +156,7 @@ def status_line(items: list[Item], for_makers: bool = False) -> str:
     items = [item for item in items if not _handed_over(item)]
     parts = [f"{sum(item.state in IN for item in items)} of {len(items)} in"]
     # An answer that came in by voice and was never confirmed is in, and the work used it, but nobody has said it is right.
-    unsure = [quiet(item.owner_name) for item in items if item.state in IN and not item.confirmed]
+    unsure = [quiet(item.shown_owner) for item in items if item.state in IN and not item.confirmed]
     if unsure:
         parts[0] += f" (not confirmed: {_names(list(dict.fromkeys(unsure)))})"
     open_items = [item for item in items if item.state is ItemState.OPEN]
@@ -160,8 +164,8 @@ def status_line(items: list[Item], for_makers: bool = False) -> str:
     heard = [item for item in open_items if item.answer is not None and not item.confirmed]
     parts += dict.fromkeys(_why_open(item, for_makers) for item in open_items if item.reason and item not in heard)
     if heard:
-        parts.append(f"waiting for {_names(list(dict.fromkeys(quiet(item.owner_name) for item in heard)))} to confirm what Foundry heard")
-    silent = [quiet(item.owner_name) if item.owner_name else f"whoever owes {quiet(item.input)}" for item in open_items if not item.reason and item not in heard]
+        parts.append(f"waiting for {_names(list(dict.fromkeys(quiet(item.shown_owner) for item in heard)))} to confirm what Foundry heard")
+    silent = [quiet(item.shown_owner) if item.owner_name else f"whoever owes {quiet(item.input)}" for item in open_items if not item.reason and item not in heard]
     if silent:
         parts.append(f"no reply to Foundry yet from {_names(list(dict.fromkeys(silent)))}")
     without = [quiet(item.input) for item in items if item.state is ItemState.SKIPPED]

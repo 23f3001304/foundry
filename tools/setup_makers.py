@@ -37,6 +37,9 @@ def _env(module: str, folder: Path, brand_dir: str) -> dict[str, str]:
     if module in SHARED:
         # Both read what the desk writes, and start from the repository folder, so a path relative to wherever this ran would point at nothing.
         env |= {name: str(Path(os.environ.get(name) or default).resolve()) for name, default in DATABASES.items()}
+        # The log tool prints times on the business's own clock, and it starts apart from the desk.
+        if os.environ.get("FOUNDRY_UTC_OFFSET_MINUTES"):
+            env["FOUNDRY_UTC_OFFSET_MINUTES"] = os.environ["FOUNDRY_UTC_OFFSET_MINUTES"]
     if module in (DOC_TOOL, IMAGE_TOOL) and images_on():
         # The copy says no pictures were drawn unless it is told they can be.
         env["FOUNDRY_IMAGES"] = "on"

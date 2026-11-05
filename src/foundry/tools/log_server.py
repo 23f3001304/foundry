@@ -2,7 +2,7 @@
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -25,6 +25,7 @@ NOTHING_YET = "Nothing has been logged for this job yet."
 NO_ITEMS = "This job has no items."
 NO_STEPS = "Nothing is behind that item."
 NOT_SET = "{name} is not set, so the log tool cannot find its database."
+ZONE_NAMES = {330: "IST", 0: "UTC"}
 
 
 def clock() -> datetime:
@@ -50,8 +51,15 @@ def _job(token: str) -> Job:
     return job
 
 
+def _zone_name(minutes: int) -> str:
+    hours, rest = divmod(abs(minutes), 60)
+    return ZONE_NAMES.get(minutes) or f"UTC{'+' if minutes > 0 else '-'}{hours}{f':{rest:02d}' if rest else ''}"
+
+
 def _when(at: datetime) -> str:
-    return f"{at:%Y-%m-%d %H:%M} UTC"
+    # In the business's own time, the way the desk tells it, and saying so. A source at 2 am in India was a slide saying the day before.
+    minutes = int(os.environ.get("FOUNDRY_UTC_OFFSET_MINUTES", "330"))
+    return f"{at.astimezone(timezone(timedelta(minutes=minutes))):%Y-%m-%d %H:%M} {_zone_name(minutes)}"
 
 
 def _one_line(text: str) -> str:
@@ -69,7 +77,7 @@ def _entry_line(entry: Entry, known: dict[str, str], inputs_dir: str | None = No
 
 
 def _item_line(item: Item) -> str:
-    owner = _text(item.owner_name) if item.owner_name else "nobody named"
+    owner = _text(item.shown_owner) if item.owner_name else "nobody named"
     words, known = own_words(item), desk_wrote(item)
     why = f" | said {_text(words)}" if words else f" | known {_text(known)}" if known else ""
     return f"- {_text(item.input)} | measure {_text(item.measure)} | owner {owner} | {item.state.value}{why}"

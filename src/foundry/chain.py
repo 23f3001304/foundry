@@ -14,7 +14,7 @@ from foundry.items import REMINDER_CHOICES, is_a_button
 from foundry.jobs import Job
 from foundry.log import Entry, Log
 from foundry.switch_client import DESK_NAME
-from foundry.text import ROOM_OF
+from foundry.text import ROOM_OF, shown_name
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +76,9 @@ MOST_FLAGGED_TEXT = 60
 NOT_A_TARGET = "Cannot flag {target!r}. It is not a file made for this job, a number or statement in one, or an entry in this log."
 SOURCE_LINE = "Source: {parts}"
 HOUR, MINUTE = r"(?:[01]?\d|2[0-3])", r"[0-5]\d"
-TIME = rf"\b{HOUR}(?::{MINUTE}(?::{MINUTE})?(?:\s*[ap]m\b)?|\s*[ap]m\b)(?:\s*UTC\b)?"
+TIME = rf"\b{HOUR}(?::{MINUTE}(?::{MINUTE})?(?:\s*[ap]m\b)?|\s*[ap]m\b)(?:\s*(?:UTC(?:[+-]\d{{1,2}}(?::{MINUTE})?)?|IST)\b)?"
 DATE = r"\b\d{4}-\d{2}-\d{2}\b"
-# A date, a time of day, or both, the way job_facts prints them and the ways a maker might write them: 2026-11-04 18:12 UTC, 18:12, 6:12 pm, 6 pm.
+# A date, a time of day, or both, the way job_facts prints them and the ways a maker might write them: 2026-11-04 18:12 IST, 18:12 UTC+1, 18:12, 6:12 pm, 6 pm.
 WHEN = re.compile(rf"{DATE}(?:\s+{TIME})?|{TIME}", re.IGNORECASE)
 MENTION_BREAK = "\u200b"
 
@@ -118,11 +118,11 @@ class Target:
 
 def names(log: Log, bucket: str) -> dict[str, str]:
     # The name each sender last wrote under in this bucket. Some entries, such as an answered card, are logged with the sender's id and no name.
-    return {writer.sender: writer.sender_name for writer in log.writers(bucket) if writer.sender_name}
+    return {writer.sender: shown_name(writer.sender_name, writer.sender) for writer in log.writers(bucket) if writer.sender_name}
 
 
 def name_of(entry: Entry, known: dict[str, str]) -> str:
-    return entry.sender_name or known.get(entry.sender) or entry.sender
+    return shown_name(entry.sender_name, entry.sender) or known.get(entry.sender) or entry.sender
 
 
 def plain(name: str) -> str:

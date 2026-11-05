@@ -41,7 +41,7 @@ DRAWING = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 SOURCE_BOX = (56, 500, 780, 28)
 NARROW_SOURCE_BOX = (56, 500, 580, 28)
 SOURCE_SIZES = (11, 7)
-SOURCE_SHAPE = 'Each source is {"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 UTC"}.'
+SOURCE_SHAPE = 'Each source is {"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 IST"}.'
 
 
 def _apply_theme(deck: Presentation, brand: Brand) -> None:
@@ -182,6 +182,16 @@ def _make_content(deck: Presentation, brand: Brand, spec: dict) -> None:
     _check_highlight(highlight, title, *points)
     slide, box = _titled_slide(deck, brand, title, highlight)
     _text_box(slide, brand, "body", "ink", box, points, 32, 13, BULLET_GAP, highlight)
+    _corner_logo(slide, brand, on_paper=True)
+
+
+def _one_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, bullets: list[str], highlight: str) -> None:
+    # A deck of one is a page someone reads, not a cover, so it is on the kit's paper like any slide that holds something.
+    body = [*([subtitle] if subtitle else []), *(f"• {point}" for point in bullets)]
+    _check_highlight(highlight, title, *body)
+    slide, box = _titled_slide(deck, brand, title, highlight)
+    if body:
+        _text_box(slide, brand, "body", "ink", box, body, 32, 13, BULLET_GAP, highlight)
     _corner_logo(slide, brand, on_paper=True)
 
 
@@ -383,9 +393,11 @@ def _print_sources(slide, brand: Brand, links: list[Link], layout: str) -> None:
 
 
 @mcp.tool()
-def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, highlight: str = "", sources: list[dict] | None = None, subtitle: str = "") -> str:
+def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, highlight: str = "", sources: list[dict] | None = None, subtitle: str = "", bullets: list[str] | None = None) -> str:
     """Build an on-brand .pptx and return its absolute path. The title slide comes first, from title, with subtitle as a smaller line under it when you give one,
     such as a line the brand kit wants on the first slide. Keep the title to its own words.
+
+    For a deck of one slide, give no slides and put its points in bullets. It is then one content slide on the brand's paper, with title, subtitle and bullets on it.
 
     Each slide is one of:
     {"layout": "content", "title": "...", "bullets": ["...", "..."]}
@@ -396,10 +408,10 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     Any slide can also have "highlight": words on that slide to put on the brand's accent colour, for the one thing that matters most.
     highlight does the same for the title slide. Text that cannot fit raises an error. Shorten it or split the slide.
 
-    Only when foundry-desk's message asks for sources, a slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 UTC"}],
+    Only when foundry-desk's message asks for sources, a slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 IST"}],
     one for each number or fact on that slide that came from a log entry. value is the words on the slide. entry is the number job_facts gave that entry.
     label is the name job_facts shows for that entry, a comma, and the date and time it shows, written as in the example. The slide prints them as a small line, and the links are saved beside the deck.
-    sources does the same for the title slide, which is all a one-slide deck has.
+    sources does the same for the first slide, which is all a one-slide deck has.
     """
     if Path(out_path).suffix.lower() != ".pptx":
         raise MakerError(f"A deck is saved as a .pptx, so out_path must end in .pptx, not {Path(out_path).suffix!r}.")
@@ -416,10 +428,15 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     deck.core_properties.author = deck.core_properties.last_modified_by = brand.name
     # A file property holds at most 255 characters, and a title too long for that is the deck's own problem to say, which the slide's check does, so it is cut here and not refused.
     deck.core_properties.title = "".join(character for character in " ".join(title.split()) if character.isprintable())[:MOST_PROPERTY_CHARS]
-    _title_slide(deck, brand, title, subtitle, highlight)
-    links = _sources_of({"title": title, "subtitle": subtitle, "sources": sources}, 1)
+    if slides and bullets:
+        raise MakerError("bullets are for a deck of one slide. Put these on a slide of their own in slides.")
+    if slides:
+        _title_slide(deck, brand, title, subtitle, highlight)
+    else:
+        _one_slide(deck, brand, title, subtitle, bullets or [], highlight)
+    links = _sources_of({"title": title, "subtitle": subtitle, "sources": sources} if slides else {"title": title, "subtitle": subtitle, "bullets": bullets or [], "sources": sources}, 1)
     if links:
-        _print_sources(deck.slides[-1], brand, links, "title")
+        _print_sources(deck.slides[-1], brand, links, "title" if slides else "content")
     for number, spec in enumerate(slides, start=2):
         layout = LAYOUTS.get(spec.get("layout"))
         if layout is None:

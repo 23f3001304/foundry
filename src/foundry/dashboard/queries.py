@@ -352,8 +352,10 @@ class DataView:
 
 
 def bucket_name(bucket: str) -> str:
-    # A brand's slug reads as its name. A room id with no brand is shown as it is.
-    return bucket.replace("-", " ").replace("_", " ").title() if bucket.replace("-", "").replace("_", "").isalnum() else bucket
+    # A brand goes by the name its kit gives it, and failing that its slug reads as its name. A room id with no brand is shown as it is.
+    if not bucket.replace("-", "").replace("_", "").isalnum():
+        return bucket
+    return brand_data.kit_name(bucket) or bucket.replace("-", " ").replace("_", " ").title()
 
 
 def title_of(job: Job) -> str:
@@ -512,7 +514,7 @@ class Reader:
             status = CANT_REACH
         else:
             status = NO_REPLY
-        return ItemRow(item.owner_name or NO_OWNER, item.input, item.measure, self.when(item.due_at), status)
+        return ItemRow(item.shown_owner or NO_OWNER, item.input, item.measure, self.when(item.due_at), status)
 
     def _files(self, entries: list[Entry]) -> list[FileRow]:
         newest = {entry.ref: entry for entry in sorted(entries, key=lambda entry: entry.id) if is_made_file(entry)}

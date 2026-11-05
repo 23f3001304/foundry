@@ -9,6 +9,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 
 import foundry.desk
@@ -96,6 +97,24 @@ def sources_folder(folder: Path) -> Path | None:
 
 def is_plain_file(path: Path) -> bool:
     return path.is_file() and not is_link(path)
+
+
+@lru_cache(maxsize=256)
+def _named_in(kit: Path, changed: int) -> str | None:
+    # Asked for on every row of a page, so a kit is only read again once it has changed.
+    try:
+        return load_brand(kit.read_text(encoding="utf-8"), kit.parent).name
+    except Exception:
+        return None
+
+
+def kit_name(slug: str) -> str | None:
+    # The name a business's own kit gives it. With no kit, or one that can't be read, there is none to give.
+    kit = brands_root() / slug / KIT
+    try:
+        return _named_in(kit, kit.stat().st_mtime_ns) if is_plain_file(kit) else None
+    except OSError:
+        return None
 
 
 def is_table(name: str) -> bool:

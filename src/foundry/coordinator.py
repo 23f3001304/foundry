@@ -40,7 +40,7 @@ from foundry.log import Entry, Log, Writer
 from foundry.reading import Reading, asks_for_status, is_short_ask, might_be_status, read_message
 from foundry.switch_client import DESK_NAME, Outcome, SwitchClient
 from foundry.tables import TABLE_KINDS, is_file_answer, job_folder, read_file, safe_name
-from foundry.text import CUT_SHORT, headline, quiet
+from foundry.text import CUT_SHORT, headline, quiet, shown_name
 from foundry.tools.layout import MakerError
 
 if TYPE_CHECKING:
@@ -267,6 +267,10 @@ def _name(writer: Writer) -> str:
     return writer.sender_name or writer.sender
 
 
+def _shown(writer: Writer) -> str:
+    return shown_name(writer.sender_name, writer.sender) or writer.sender
+
+
 def _one_line(text: str) -> str:
     # A name is one line, so nothing after a line break can read as an instruction.
     return " ".join(text.split())
@@ -279,7 +283,8 @@ def _key(text: str) -> str:
 
 def _writer_named(writers: list[Writer], ref: str | None) -> Writer | None:
     wanted = _key(ref or "")
-    return next((writer for writer in writers if wanted and wanted in (_key(writer.sender), _key(writer.sender_name))), None)
+    # Someone types a name the way a card shows it, so that finds them as well as what they are matched on.
+    return next((writer for writer in writers if wanted and wanted in (_key(writer.sender), _key(writer.sender_name), _key(_shown(writer)))), None)
 
 
 def _owned_by(item: Item, ref: str | None) -> bool:
@@ -504,20 +509,20 @@ class Coordinator:
     def _put(self, template: str, job: Job, item: Item) -> str:
         # The ask, the ask again and the reminder say the same things in different words, and everything people wrote in them is quieted.
         return template.format(
-            owner=quiet(_one_line(item.owner_name)), asker=quiet(_one_line(self._name_of(job.requester, job.bucket))), what=quiet(item.input), job=quiet(headline(job.brief or "this job")),
+            owner=quiet(_one_line(item.shown_owner)), asker=quiet(_one_line(self._shown_name_of(job.requester, job.bucket))), what=quiet(item.input), job=quiet(headline(job.brief or "this job")),
             measure=quiet(item.measure), due=self._when(item.due_at),
         )
 
     def _not_asked(self, item: Item, again: bool = False) -> str:
         if not item.owner_name:
             return NOBODY_NAMED.format(what=quiet(item.input))
-        return (NOT_ASKED_AGAIN if again else NOT_ASKED).format(owner=quiet(_one_line(item.owner_name)), what=quiet(item.input))
+        return (NOT_ASKED_AGAIN if again else NOT_ASKED).format(owner=quiet(_one_line(item.shown_owner)), what=quiet(item.input))
 
     def _owner_line(self, what: Owed, writer: Writer | None, now: datetime) -> str:
         owes = OWES.format(what=quiet(what.input), measure=quiet(what.measure), due=self._when(what.due))
         if writer is not None:
             stale = ", possibly stale" if now - writer.last_at > timedelta(days=POSSIBLY_STALE_DAYS) else ""
-            return f"- {quiet(_one_line(_name(writer)))}: {last_wrote(writer, now)}{stale}. {owes}"
+            return f"- {quiet(_one_line(_shown(writer)))}: {last_wrote(writer, now)}{stale}. {owes}"
         if what.owner_ref:
             return f"- {NOT_WRITTEN.format(owner=quiet(_one_line(what.owner_ref)))}{owes}"
         return f"- {NO_OWNER.format(owes=owes)}"
@@ -609,7 +614,7 @@ class Coordinator:
         return self._reminder_wanted(item) and item.reachable and not self.can_reach(item, now)
 
     def _cannot_remind(self, items: list[Item], now: datetime) -> str:
-        names = [quiet(_one_line(item.owner_name)) for item in items if item.state is ItemState.OPEN and self._reminder_blocked(item, now)]
+        names = [quiet(_one_line(item.shown_owner)) for item in items if item.state is ItemState.OPEN and self._reminder_blocked(item, now)]
         return STATUS_NO_REMINDER.format(names=_join(list(dict.fromkeys(names)), "and")) if names else ""
 
     def _remind(self, job: Job, item: Item, now: datetime) -> None:
@@ -714,7 +719,7 @@ class Coordinator:
             state = SAID.format(reason=quoted(item.reason))
         else:
             state = NO_REPLY
-        line = DUE_LINE.format(input=quiet(_one_line(item.input)), owner=quiet(_one_line(item.owner_name)) or NOBODY, state=state)
+        line = DUE_LINE.format(input=quiet(_one_line(item.input)), owner=quiet(_one_line(item.shown_owner)) or NOBODY, state=state)
         if not item.reachable:
             return f"{line} {CANT_REACH_THEM}"
         if self._reminder_blocked(item, now):
@@ -796,13 +801,13 @@ class Coordinator:
         if job is None:
             return
         # Not a card now: it goes on the asker's next routine card, where "Show what needs me" opens it alone.
-        owner, what = quiet(_one_line(item.owner_name)), quiet(_one_line(item.input))
+        owner, what = quiet(_one_line(item.shown_owner)), quiet(_one_line(item.input))
         if not self.cards.about_item(item.id, Trigger.ALREADY_TOLD, QUEUED, OPEN, IN_ROUTINE):
             self.cards.submit(
                 Trigger.ALREADY_TOLD, job.requester, job.bucket, job.room_id, TOLD_TITLE.format(owner=owner, what=what), TOLD_DETAIL.format(owner=owner), TOLD_CHOICES,
                 job_id=job.id, item_id=item.id,
             )
-        self.client.post_message(card.room_id, TOLD_NOTED.format(asker=quiet(_one_line(self._name_of(job.requester, job.bucket)))))
+        self.client.post_message(card.room_id, TOLD_NOTED.format(asker=quiet(_one_line(self._shown_name_of(job.requester, job.bucket)))))
 
     def _answer_told(self, card: Card, choice: str | None) -> None:
         item = self._item_of(card)
@@ -865,7 +870,7 @@ class Coordinator:
 
     def _ask_for_a_name(self, card: Card, items: list[Item], now: datetime) -> None:
         item = items[0]
-        owner = quiet(_one_line(item.owner_name)) or NOBODY
+        owner = quiet(_one_line(item.shown_owner)) or NOBODY
         if len(items) > 1:
             # Which one is meant can't be told from a name, so nothing waits for one. The typed way to hand one over names both people.
             self.cards.note(card.request_id, **{AWAITING_TYPED: now.isoformat()})
@@ -1010,7 +1015,7 @@ class Coordinator:
             named = next((other for other in own if reading is not None and other.id == reading.item_id), None)
             item = named or _file_item(pool, name, caption)
             if item is None:
-                self.client.post_message(room_id, WHICH_FILE.format(owner=quiet(self._name_of(sender, bucket)), name=quiet(name), options=_join(self._labels(pool))))
+                self.client.post_message(room_id, WHICH_FILE.format(owner=quiet(self._shown_name_of(sender, bucket)), name=quiet(name), options=_join(self._labels(pool))))
                 continue
             if self._save_file(item, attachment, name, room_id, at):
                 own = [other for other in own if other.id != item.id]
@@ -1044,7 +1049,7 @@ class Coordinator:
         if len(data) > MOST_FILE_BYTES:
             self.client.post_message(room_id, FILE_TOO_BIG.format(name=shown))
             return False
-        path = input_path(Path(self.settings.inputs_dir).resolve(), item.bucket, item.job_id, self._owner_name(item), name)
+        path = input_path(Path(self.settings.inputs_dir).resolve(), item.bucket, item.job_id, item.owner_name or item.owner, name)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
@@ -1219,7 +1224,7 @@ class Coordinator:
         now = self.clock()
         due = item.due_at if item.due_at > now else now + timedelta(hours=self.settings.pack_for(job.room_id).ask_again_hours)
         new = self._new_item(job, Owed(name, item.input, item.measure, due), writer)
-        item.state, item.reason, item.handed_to = ItemState.SKIPPED, OLD_ASKED_INSTEAD.format(new=new.owner_name), new.id
+        item.state, item.reason, item.handed_to = ItemState.SKIPPED, OLD_ASKED_INSTEAD.format(new=new.shown_owner), new.id
         # A note of theirs still waiting for Right or Wrong is about nothing now, and a person's next card waits until their open one ends.
         self._close_voice_cards(item)
         self._close(item)
@@ -1232,7 +1237,7 @@ class Coordinator:
             self.items.save(new)
             self._say_not_taken(job, new)
         if new.reachable:
-            self._tell(tell_room, ASKED_INSTEAD.format(new=quiet(new.owner_name), input=quiet(item.input), old=quiet(item.owner_name)))
+            self._tell(tell_room, ASKED_INSTEAD.format(new=quiet(new.shown_owner), input=quiet(item.input), old=quiet(item.shown_owner)))
         # If the asker was told how to hand one over and has now done it, the others don't wait out the rest of the wait.
         for card in self._due_cards(job, ANSWERED):
             if card.data.get(AWAITING_TYPED):
@@ -1241,7 +1246,7 @@ class Coordinator:
     def _say_not_taken(self, job: Job, item: Item) -> None:
         # The hand-over is saved by now and nothing tries it again, so not being able to say so must not undo it.
         try:
-            self.client.post_message(job.room_id, NOT_TAKEN.format(owner=quiet(_one_line(item.owner_name)), what=quiet(item.input)))
+            self.client.post_message(job.room_id, NOT_TAKEN.format(owner=quiet(_one_line(item.shown_owner)), what=quiet(item.input)))
         except httpx.HTTPError as error:
             logger.warning("Could not tell the asker of job %s that %s was not asked: %s", job.id, item.owner_name, error)
 
@@ -1288,7 +1293,7 @@ class Coordinator:
         if by is None:
             self._tell(burst.room_id, ANSWER_NOTED.format(input=quiet(item.input), value=quiet(value)))
         else:
-            self._tell(burst.room_id, PASSED_ON_NOTED.format(input=quiet(item.input), value=quiet(value), asker=quiet(self._name_of(by, item.bucket))))
+            self._tell(burst.room_id, PASSED_ON_NOTED.format(input=quiet(item.input), value=quiet(value), asker=quiet(self._shown_name_of(by, item.bucket))))
 
     def _hold(self, heard: _Heard, item: Item, value: str, by: str | None) -> None:
         # What speech-to-text heard may be wrong, so its sender approves the answer read from it. Until they do, a new item only carries it unconfirmed, and one already answered keeps its answer.
@@ -1446,7 +1451,7 @@ class Coordinator:
         return None if previous is not None and previous.job_id == item.job_id and previous.item_id != item.id else previous
 
     def _tell_asker(self, job: Job, item: Item, old: str, new: str) -> None:
-        asker = quiet(self._name_of(job.requester, job.bucket))
+        asker = quiet(self._shown_name_of(job.requester, job.bucket))
         text = ANSWER_CHANGED.format(asker=asker, owner=quiet(self._owner_name(item)), input=quiet(item.input), old=quiet(old), new=quiet(new))
         try:
             self.client.post_message(job.room_id, text)
@@ -1482,7 +1487,7 @@ class Coordinator:
         if not heard.again:
             burst = heard.burst
             self._asked_which[(burst.sender, heard.bucket)] = (burst.first_at, burst.text)
-            self.client.post_message(burst.room_id, template.format(owner=quiet(self._name_of(burst.sender, heard.bucket)), options=_join(options)))
+            self.client.post_message(burst.room_id, template.format(owner=quiet(self._shown_name_of(burst.sender, heard.bucket)), options=_join(options)))
         return True
 
     def _labels(self, options: list[Item]) -> list[str]:
@@ -1527,5 +1532,8 @@ class Coordinator:
     def _name_of(self, sender: str, bucket: str) -> str:
         return next((_name(writer) for writer in self.log.writers(bucket) if writer.sender == sender), sender)
 
+    def _shown_name_of(self, sender: str, bucket: str) -> str:
+        return shown_name(self._name_of(sender, bucket), sender)
+
     def _owner_name(self, item: Item) -> str:
-        return item.owner_name or item.owner
+        return item.shown_owner or item.owner

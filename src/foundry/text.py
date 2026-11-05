@@ -15,6 +15,17 @@ def on_the_network(text: str) -> bool:
 
 
 ROOM_OF = "the room of {people}"
+SWITCH_SENDER, AGENT_SENDER = "@switch-", "@switch-agent-"
+LOGIN_BREAKS = re.compile(r"[-_.]+")
+
+
+def shown_name(name: str | None, sender: str | None = "") -> str:
+    # Chat gives Switch a person's username as their name unless it knows better, so a card would say team-lead-b. A name that is only the login at the end of the sender's id reads as words.
+    # This is for showing only. What is matched on keeps the login.
+    name, person = name or "", (sender or "").partition(":")[0]
+    if not name or not person.startswith(SWITCH_SENDER) or person.startswith(AGENT_SENDER) or not person.endswith(f"-{name}"):
+        return name
+    return " ".join(word[:1].upper() + word[1:] for word in LOGIN_BREAKS.split(name) if word)
 
 
 def same_login(text: object) -> str:

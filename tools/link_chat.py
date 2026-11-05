@@ -7,7 +7,7 @@ import os
 import sys
 
 import httpx
-from register_desk import ENV_FILE, save
+from register_desk import ENV_FILE, local_url, save
 
 
 def find_room(listed: list[dict], wanted: str) -> dict:
@@ -32,8 +32,8 @@ def linked_settings(rooms: str, packs: str, chat: str, client: str) -> dict[str,
 
 
 def main(chat_name: str, client_name: str) -> None:
-    url = os.environ.get("SWITCH_URL", "http://127.0.0.1:8000")
-    with httpx.Client(base_url=f"{url}/gateway", timeout=30) as gateway:
+    url = local_url("SWITCH_URL", "http://127.0.0.1:8000")
+    with httpx.Client(base_url=f"{url}/gateway", timeout=30, trust_env=False) as gateway:
         gateway.post("/auth/login", json={"email": os.environ["SWITCH_EMAIL"], "password": os.environ["SWITCH_PASSWORD"]}).raise_for_status()
         listed = gateway.get("/rooms").json()
         chat, client = find_room(listed, chat_name), find_room(listed, client_name)

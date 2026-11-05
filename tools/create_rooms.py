@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import yaml
 from foundry.pack import load_pack
-from register_desk import ENV_FILE, save
+from register_desk import ENV_FILE, local_url, save
 from setup_makers import main as setup_makers
 
 REPO = Path(__file__).resolve().parent.parent
@@ -39,7 +39,7 @@ def agents_ending(mode: str, name: str) -> str:
 
 
 def main(mode: str, name: str, slug: str) -> None:
-    url = os.environ.get("SWITCH_URL", "http://127.0.0.1:8000")
+    url = local_url("SWITCH_URL", "http://127.0.0.1:8000")
     brand_dir = REPO / "brands" / slug
     ending = agents_ending(mode, name)
     kit = (brand_dir / "kit.md").read_text(encoding="utf-8")
