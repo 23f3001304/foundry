@@ -11,3 +11,12 @@ spike/
 assets/raw/
 foundry-concept-addendum.md
 .wrangler/
+
+# Kept on our machines only: the tests, the website, build notes and one-off art scripts.
+tests/
+site/
+wrangler.jsonc
+docs/
+tools/confidence_test.py
+tools/draw_*.py
+tools/make_sprites.py

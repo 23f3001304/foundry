@@ -74,12 +74,9 @@ class Unavailable(RuntimeError):
         self.why, self.stuck = why, stuck
 
 
-# Paths reach the script through its environment, so a file name is never read as a command.
-# It leaves at once if any PowerPoint is running, because that may be a person's. So the one it starts is its own, until a person opens a deck in it: PowerPoint is one process for the whole machine.
-# The one exception is the PowerPoint a render quit and did not see go, named by its process number and start time, alone and with no window. It only ever waits for that one, and starts its own only once nothing is running. So a wrong call costs a wait and touches nothing.
-# It closes only the temporary copy it opened, gives PowerPoint its prompts back, and quits only if nothing at all is left that a person could be using. If it can't tell, it leaves it running.
-# The pause is for whatever a person asked of PowerPoint while it was busy, which only happens once it is free: seen with real PowerPoint, a window asked for during the slides opened after them.
-# It notes which PowerPoint it is quitting, and doesn't wait: with real PowerPoint a wait in here ran its whole length with PowerPoint still there. Watching it go is the separate step below.
+# Paths come in through the environment, so a file name is never run as a command.
+# It never touches a PowerPoint a person may be using: it leaves if one is running (bar one an earlier render left behind),
+# closes only its own temporary copy, and quits only when nothing else is open. Watching it go is the separate step below.
 POWERPOINT_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 $running = @(Get-Process -Name POWERPNT -ErrorAction SilentlyContinue)

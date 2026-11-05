@@ -146,7 +146,7 @@ Every number comes from `queries.py`, scoped to what the login may see. No chart
 
 ## Characters
 
-Sheets are in `static/sprites`, built by `tools/make_sprites.py` from `assets/team` and `stickers/base`. Frame one of a sheet is the still, so a page at rest or with motion turned off shows the still. Moves are whole sprite pixels on hard steps.
+Sheets are in `static/sprites`, built in code from `assets/team` and `stickers/base`. Frame one of a sheet is the still, so a page at rest or with motion turned off shows the still. Moves are whole sprite pixels on hard steps.
 
 One character per context: on the overview's hero, at the stage a job is at in its rail, in an empty state and at sign-in. A figure, a table row and a chart carry none.
 

@@ -8,6 +8,16 @@ The same setup also turns a messy note from the field into a clean report, and s
 
 Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shilagate Homes, Morpankh Systems, Kasauti Capital Partners, Bhorvela Studio, Phatakha Pop and Ambaryug Teas are fictional, and so is everything in their folders, including every figure. The dashboard pages in the demo film come from those live runs, with part of the 14-day chart history seeded.
 
+## A five-minute tour for judges
+
+1. Run `./setup.sh --try` (on Windows, `powershell -ExecutionPolicy Bypass -File .\setup.ps1 --try`). It needs only uv, and opens the real dashboard on made-up data.
+2. **Overview**: what's stuck, what waits on you, and the last 14 days. Switch businesses at the top.
+3. **Jobs**: open one to see its stage, who owes what, and who approves.
+4. **Work**: the decks and graphics the agents made, slide by slide.
+5. **Action log**: open a flagged figure to see everyone behind it, from the file it came in to the person who signed off.
+6. **Settings**: what's connected, keys and models, and a project per company.
+7. Then read the code from "Where the code is" below.
+
 ## What sets it apart
 
 - **One setup across chat platforms.** A single Switch template creates the rooms, agents and documents, and names the chat platform as a setting. Foundry's code talks to Switch, not to a platform.
@@ -72,6 +82,18 @@ final work, and nothing else, posted here
 A report skips the brief and the makers. The desk writes it from the note, asks the sender if something is unclear, and the approver signs off once.
 
 A follow-up skips the makers too. When a brief carries `MAKES: nothing` beside its `OWES` lines, Foundry asks each person and reminds them, and once the items close the answers go back to the asker and the job closes, straight in the job's room when the asker is also the approver and after one card to the approver when not.
+
+## Where the code is
+
+Start with these. Most other files are pictures, fonts and the made-up businesses' brand kits.
+
+- `src/foundry/desk.py` reads every room message, acts on approvals and turns requests into jobs.
+- `src/foundry/coordinator.py` works out who owes what, asks each person, reads their answers and reminds them.
+- `src/foundry/jobs.py` and `gates.py` hold the job states and who may approve, in code rather than in prompts.
+- `src/foundry/cards.py`, `chain.py` and `daily.py` are the approval cards, the "who said that?" chain and the daily report.
+- `src/foundry/tools/` are the tools the maker agents call: decks, charts, graphics and the log.
+- `src/foundry/dashboard/` is the dashboard, and `switch_client.py` is the one place Foundry talks to Switch.
+- `setup.sh`, `setup.ps1` and `tools/` set it all up; `scripts/` hold the demo scenes.
 
 ## The team
 
@@ -308,8 +330,6 @@ uv run --env-file .env python scripts/demo_people.py play it_firm
 
 The inputs are due 8 minutes in. The scene needs a reviewer that can run, or it stops at the review. See "What has actually been run" for how far it got.
 
-To measure whether a model's confidence catches a garbled note once the desk has asked about it and had a reply, run `tools/confidence_test.py` with the same `uv run --env-file .env python`.
-
 #### 8. Play the investment firm demo
 
 Kasauti Capital Partners is a fictional global investment firm, and every figure in it is made up. An Analyst Lead asks for a quarterly review deck, and Office Heads A to E each owe their office's assets under management. Four answer by chat, and Office Head C sends a file last. Office Head E's figure is made to jump, to more than three times its last quarter's and far from the other offices, and the desk's check for a figure far from its peers names it on the final card. The makers are told to work the deck's charts out with the data tools, from the answers, the file and `brands/demo-investment-firm/sources/quarterly_aum.csv`, so each figure traces to its calculation and its file, and a figure from a sent file to whoever sent it. **The offices' messages and file are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models. Its reports are internal summaries of made-up numbers, never advice.**
@@ -369,21 +389,15 @@ Then open the files each client was given and read them. Phatakha Pop's set shou
 - **Agency clients have their own makers, and an internal business's rooms share one folder.** An internal company or department is one business, so its rooms share one set of agents with one working folder. Agency clients do not: each is given agents of its own, in a folder of its own, because in our live check, when the makers were shared, a maker told to open decks already made read another client's deck and left the fact out by its own choice. Nothing in the code stopped it reading. Now a client's own maker tools write only in that maker's folder, read a picture only from it or the client's brand folder, and open only that client's jobs, and the desk takes a file only from that client's makers' folders. That confines the tools and the desk. It does not confine an agent's own access to the machine's files, which still reach any folder, and its agents are only told that other clients' folders are not theirs. The desk goes by the name of the folder a file is in, so it cannot tell a real maker's folder from another folder of the same name. The tool and desk confinement was run live on Nov 5, 2026, as the first table above says, and the agent's own access was not tried, so don't put real clients' confidential work on this setup as it stands. Switch itself lets any agent list every room, in all clients' businesses, and an agent of the same owner can remove another agent from a room. Reading a room's messages needs membership by Switch's own rule, and that was not seen refused here, because the desk is a member of every room, so it was the desk, not a maker, that was run against these operations.
 - **Pictures of slides use PowerPoint only when none is open.** With one open, the makers carry on without pictures, and the reviewer judges from the words. Foundry itself never stops it, so if a PowerPoint with no window stays running, or a maker says it stopped answering, close PowerPoint in Task Manager and restart the makers.
 
-## Tests
-
-```bash
-uv run pytest
-```
-
 ## Art and credits
 
 Team sprites, stickers, the fictional businesses' logos and photos were generated with Gemini on Vertex AI and then cut to a pixel grid or to size in code, as `tools/gen_assets.py` shows. Foundry's own logo, wordmark and banner were drawn in code, with the wordmark's letters in Archivo Black under the SIL Open Font License, and the banner shows the generated team sprites. They are AI-generated, not hand-drawn, and show original characters and fictional businesses. Brand stickers are recoloured from those sprites in code, and the hard hat and cup are drawn in code. The fonts are open fonts, with their licences beside them in each brand's `fonts` folder.
 
-The characters that react on the dashboard's pages are those same generated team sprites and Smith's poses, plus a waving Smith generated the same way, so they are AI-generated too, and `tools/make_sprites.py` builds their sprite sheets from those pictures in code. The dashboard's abstract shapes, small icons and charts are not generated: `src/foundry/dashboard/shapes.py` and `charts.py` draw them as SVG on the server. The title font is Manrope, an open font with its licence beside it in `src/foundry/dashboard/static/fonts`.
+The characters that react on the dashboard's pages are those same generated team sprites and Smith's poses, plus a waving Smith generated the same way, so they are AI-generated too, and their sprite sheets are built from those pictures in code. The dashboard's abstract shapes, small icons and charts are not generated: `src/foundry/dashboard/shapes.py` and `charts.py` draw them as SVG on the server. The title font is Manrope, an open font with its licence beside it in `src/foundry/dashboard/static/fonts`.
 
-The Kasauti Capital Partners logo is not generated. `tools/draw_kasauti_logo.py` draws it in code, in the two colours of the firm's kit, and its fonts are copies of the open fonts the other brands use.
+The Kasauti Capital Partners logo is not generated. It is drawn in code, in the two colours of the firm's kit, and its fonts are copies of the open fonts the other brands use.
 
-`tools/draw_reversed_logos.py` draws each kit's `logo-on-dark.png` in code from its `logo.png`, so a reversed logo is AI-generated where the logo it comes from is. The marketing agency's three logos and the two clients' pictures are not AI-generated. They are original flat art drawn in code with Pillow, as `tools/draw_agency_art.py` shows, and drawing again gives the same files. Pictures that `generate_image` makes when `FOUNDRY_IMAGES=on` are AI-generated by the same Gemini model on Vertex AI, and each file and its record say so. The agency's fonts are DejaVu Sans Bold, Source Serif Pro, Source Sans Pro and Manrope, with their licences beside them.
+Each kit's `logo-on-dark.png` is drawn in code from its `logo.png`, so a reversed logo is AI-generated where the logo it comes from is. The marketing agency's three logos and the two clients' pictures are not AI-generated. They are original flat art drawn in code with Pillow. Pictures that `generate_image` makes when `FOUNDRY_IMAGES=on` are AI-generated by the same Gemini model on Vertex AI, and each file and its record say so. The agency's fonts are DejaVu Sans Bold, Source Serif Pro, Source Sans Pro and Manrope, with their licences beside them.
 
 Speech comes from [Sarvam](https://docs.sarvam.ai/api-reference-docs/speech-to-text/transcribe): [Saaras](https://docs.sarvam.ai/api/getting-started/models/saaras) to read and Bulbul to speak.
 

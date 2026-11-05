@@ -1,5 +1,5 @@
 /*
-  Foundry's dashboard. DESIGN.md says what is here and why, and tests/test_dashboard_design.py keeps it true.
+  Foundry's dashboard. DESIGN.md says what is here and why.
   Light by default, whatever the system says, and dark for a person who has chosen it. Five colour families, each with one job. Every size, colour and duration below is a token from :root.
 
   Tokens      :root

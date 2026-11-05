@@ -1,4 +1,4 @@
-"""Foundry's one door to Switch. Each method wraps a call confirmed in docs/spike-results.md."""
+"""Foundry's one door to Switch. Each method wraps one Switch call."""
 
 import asyncio
 import json

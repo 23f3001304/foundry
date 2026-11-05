@@ -1221,7 +1221,7 @@ class Coordinator:
         return True
 
     def _about_someone_else(self, heard: _Heard, pool: list[Item]) -> bool:
-        # "Team Lead C is blocked" says nothing about what the sender owes, however the name is written. It takes another person the reader could mean for that: "Team B", "my team" or "QA" is still the sender talking about themselves, and so is "I", "Team Lead C and me", or "a vendor", whose "a" isn't Team Lead A.
+        # "Team Lead C is blocked" says nothing about what the sender owes. Only another person counts: "my team", "QA", "I" or "a vendor" is still the sender.
         # A name and an id are each compared on their own, because someone on a bridge has an id with nothing of their name in it, and it can hold a word of someone else's name.
         sender = heard.burst.sender
         # The reader is shown everything open in this business and everyone who has written in it, so all of them can be meant, as well as these jobs' own lists.
