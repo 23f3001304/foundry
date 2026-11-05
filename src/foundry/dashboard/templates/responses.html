@@ -57,6 +57,7 @@
 </section>
 <section id="finished">
   <div class="section-head">{{ tile("brief", "none") }}<h2>Answered, closed or ran out</h2></div>
+  {% if past|selectattr("state", "equalto", "seeded")|list %}<p class="small section-note">Part of this history was seeded for a demo.</p>{% endif %}
   {% if past %}{{ heads() }}<ul class="rows response-rows">{% for card in past %}{{ row(card) }}{% endfor %}</ul>{% else %}<p class="note">No card has finished yet.</p>{% endif %}
   {% if hidden %}<p class="note">{{ hidden }} older finished cards are not shown here.</p>{% endif %}
 </section>

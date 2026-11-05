@@ -239,7 +239,8 @@ async def overview(request: Request, user: User) -> Response:
     if shown.businesses:
         # Nothing else on the page needs Switch, so Switch being down only changes this line.
         try:
-            health = request.app.state.reader.health(shown, await connection_rows(request, shown, gateway.READ_TIMEOUT))
+            # A room two businesses share counts as this login's when it has both, so the rows come from the whole login and only the line is for the business shown.
+            health = request.app.state.reader.health(shown, await connection_rows(request, user, gateway.READ_TIMEOUT))
         except gateway.SwitchProblem as trouble:
             health = dict.fromkeys(shown.businesses, trouble.message)
     boards = await run_in_threadpool(request.app.state.reader.boards, shown)

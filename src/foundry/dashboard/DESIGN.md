@@ -128,7 +128,7 @@ It recedes and belongs to the page. It sits on `--paper` with no panel colour an
 
 A count (`.nav-count`) is a plain small number in `--ink-faint`, never a pill. A stuck count adds one small ember dot beside it and nothing else, because that's the real news. Both `--ink-faint` and `--ink-quiet` hold AA on the page. The fold lasts until the next page, because keeping it would need a script or a cookie.
 
-From 1024px down the logo and the business stay along the top, and a bar along the bottom has Overview, Jobs, Responses, Generated work and More. Badges count across every business the login has: cards waiting on it, and stuck jobs. A login with several businesses sees one overview at a time, and the first one until it chooses.
+From 1024px down the logo and the business stay along the top, and a bar along the bottom has Overview, Jobs, Responses, Generated work and More. Badges count across every business the login has: cards waiting on it, and stuck jobs. A jobs list narrowed to one business says how many more are stuck in the others. A login with several businesses sees one overview at a time, and the first one until it chooses.
 
 The logo is `static/logo.svg` and the full word is `static/wordmark.svg`, so changing either is one file. The side bar uses the logo with the word Foundry in the normal type, and only the sign-in page uses the full word.
 

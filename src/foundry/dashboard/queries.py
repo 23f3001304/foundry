@@ -110,6 +110,8 @@ FILE_GONE = "The file is no longer on this machine."
 NOT_FOR_VOICE = "Only the person who sent the note can approve this, in chat."
 CONFIRMS_VOICE = "This card also confirms what Foundry heard in the voice note, so it is answered in chat. Asking for changes can be done here."
 STILL_WAITING = "Answered, but the job did not move on. Try again."
+SEEDED_CARD = "Seeded for a demo. Nobody answered it."
+SEEDED_ROW = "seeded"
 NOBODY_ASKED = "Nobody has been asked yet."
 WAITING_FOR = "Waiting for {name} to answer."
 QUEUED_BEHIND = " It is queued behind another card."
@@ -271,6 +273,11 @@ class Board:
     needs_more: int
     # Some of this history was written by the demo seeding script, not by Foundry at work.
     seeded: bool
+
+    @property
+    def open_stages(self) -> list[tuple[str, str, int]]:
+        # Every open job has one place here, as on the jobs page: at its stage, or stuck.
+        return self.stages[:-1] + ([(STUCK_STEP, "Stuck", self.stuck)] if self.stuck else [])
 
     @property
     def delivered_total(self) -> int:
@@ -769,7 +776,7 @@ class Reader:
             sum(item.state is ItemState.SKIPPED for item in items),
             bands, _took_words(_middle(took)) if took else "", len(took),
             needs[:MOST_NEEDS], max(len(needs) - MOST_NEEDS, 0),
-            any(entry.seeded for entry in entries),
+            any(entry.seeded for entry in [*entries, *before]) or any(card.is_seeded and card.created_at >= since for card in cards),
         )
 
     def _took(self, bucket: str, delivered: list[Entry]) -> list[float]:
@@ -783,10 +790,11 @@ class Reader:
 
     def _needs(self, person: str, cards: list[Card], jobs: list[Job]) -> list[Need]:
         stuck = [Need("stuck", title_of(job), _short(job.attention[0]) if job.attention else "Waiting for someone to restart it", f"/jobs/{job.id}#act") for job in jobs if job.state is State.BLOCKED]
+        listed = {job.id for job in jobs if job.state is State.BLOCKED}
         waiting = [
             Need("waiting", card.title, CARD_KINDS.get(card.trigger, "Card"), where_to_answer(card))
             for card in cards
-            if card.person == person and card.state in (OPEN, QUEUED)
+            if card.person == person and card.state in (OPEN, QUEUED) and card.job_id not in listed
         ]
         noted = [Need("working", title_of(job), _short(job.attention[0]), f"/jobs/{job.id}#attention") for job in jobs if job.attention and job.state not in (State.BLOCKED, State.DELIVERED, State.DROPPED)]
         return stuck + waiting + noted
@@ -924,6 +932,11 @@ class Reader:
         def kind(*names: str) -> list[Entry]:
             return [entry for entry in entries if entry.kind in names]
 
+        def each_item_once(wanted: list[Entry]) -> list[Entry]:
+            # An item can be asked again and answered again, and the newest answer wins, so it still counts as one input.
+            first = {}
+            return [first.setdefault(entry.item_id, entry) for entry in wanted if not entry.item_id or entry.item_id not in first]
+
         def chart(title: str, lines: list[tuple[str, str, list[Entry]]], moved: str, empty: str, stopped: bool = False) -> JobChart:
             lately = sum(entry.at > now - timedelta(days=1) for entry in lines[-1][2])
             change, tone = ("Stopped", "stuck") if stopped else (f"+{lately} {moved}", "good") if lately else (f"0 {moved}", "flat")
@@ -931,7 +944,7 @@ class Reader:
 
         stopped = job.state is State.BLOCKED
         return [
-            chart("Inputs", [("Asked for", "sun", kind("item_asked")), ("In", "lime", kind("item_answer"))], "in 24h", "No input has been asked for on this job."),
+            chart("Inputs", [("Asked for", "sun", each_item_once(kind("item_asked"))), ("In", "lime", each_item_once(kind("item_answer")))], "in 24h", "No input has been asked for on this job."),
             chart("Cards", [("Opened", "azure", kind("card_opened")), ("Answered", "orchid", kind("card_answered"))], "in 24h", "No card has opened for this job."),
             chart("Work made", [("Reviews", "orchid", kind("review")), ("Versions", "ember" if stopped else "azure", [entry for entry in entries if is_made_file(entry)])], "in 24h", "Nothing has been made yet.", stopped),
         ]
@@ -973,7 +986,9 @@ class Reader:
             who = known[card.bucket].get(card.person, card.person)
             job = jobs.get(card.job_id) if card.job_id else None
             waits = still_waits_on(job, card)
-            if waits:
+            if card.is_seeded:
+                status = SEEDED_CARD
+            elif waits:
                 status = STILL_WAITING
             elif card.state == ANSWERED:
                 answer = answered[card.bucket].get(card.request_id)
@@ -986,7 +1001,7 @@ class Reader:
             # What a card says matters while someone still has to answer it.
             detail = card.detail if waits or card.state in (OPEN, QUEUED) else ""
             # An answer that didn't go through is still waiting for one, so it sits with the open cards.
-            rows.append(CardRow(card.request_id, bucket_name(card.bucket), card.title, detail, CARD_KINDS[card.trigger], status, OPEN if waits else card.state, self.offer(user, card, known[card.bucket], job)))
+            rows.append(CardRow(card.request_id, bucket_name(card.bucket), card.title, detail, CARD_KINDS[card.trigger], status, SEEDED_ROW if card.is_seeded else OPEN if waits else card.state, self.offer(user, card, known[card.bucket], job)))
         live = [row for row in rows if row.state in (OPEN, QUEUED)]
         past = [row for row in rows if row.state not in (OPEN, QUEUED)]
         return live + past[:MOST_PAST_CARDS], max(0, len(past) - MOST_PAST_CARDS)
