@@ -147,7 +147,7 @@ def read_file(source: Path | str) -> Table:
 
 
 def read_upload(name: str, content: bytes) -> Table:
-    # A file that has just been sent, read as it is, without putting it on disk first. It is the same table read_file makes of it once it is saved.
+    # A file that has just been sent, read as it is, without Foundry putting it on disk first. (The web framework may keep one over 1 MB in a temporary file until the request ends.) It is the same table read_file makes of it once it is saved.
     kind = Path(name).suffix.lower()
     if kind not in TABLE_KINDS:
         raise MakerError(NOT_A_TABLE.format(kinds=" and ".join(TABLE_KINDS), name=name))

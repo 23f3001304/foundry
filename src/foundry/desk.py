@@ -164,6 +164,8 @@ LAST_LIST = "The list you wrote last time. Change what the approver asked about 
 QUESTION_WINDOW = timedelta(hours=24)
 # What a voice note has come to: the sender hasn't answered yet, said it was right, or typed what they meant. Typed notes have none of these.
 UNCONFIRMED, CONFIRMED, CORRECTED = "unconfirmed", "confirmed", "corrected"
+# Kept on the voice card whose Wrong asked for the fix: the burst of words whose log line and card are already made.
+FIX_TAKEN = "fix_taken"
 LATE_FIX_CHOICES = ("Re-make with the fix", "Carry on")
 VOICE_CARD_DETAIL = 'I heard: "{text}"\n\nIs that right?'
 # The brief or report card, when the sender is the one approving it, shows this and does both jobs.
@@ -275,6 +277,15 @@ def _give_up_if_room_is_gone(what: str) -> Iterator[None]:
         if error.response.status_code not in (403, 404):
             raise
         logger.warning("Gave up on %s: Switch refused it (%s), so its room is probably gone.", what, error.response.status_code)
+
+
+@contextmanager
+def _told_after_saving(whom: str) -> Iterator[None]:
+    # A notice goes after what the message caused is saved. One Switch refuses is said in the log and not tried again, because trying again takes the whole message in a second time.
+    try:
+        yield
+    except httpx.HTTPError as error:
+        logger.warning("Could not tell %s, so they are not told: %s", whom, error)
 
 
 class Team(NamedTuple):
@@ -521,9 +532,10 @@ class Desk:
                 logger.exception("Could not take a message in room %s, so it is kept and tried again on the next tick.", burst.room_id)
                 return
             logger.exception("Gave up on a message in room %s after %d tries, so it is let go.", burst.room_id, tries)
+        # Kept until the buffer lets go of the message, so a message that could not be deleted is not made into a second job.
+        self.buffer.finish(burst)
         self._burst_tries.pop(key, None)
         self._half_made.pop(key, None)
-        self.buffer.finish(burst)
 
     def _stop_quiet_jobs(self, now: datetime) -> None:
         limit = timedelta(minutes=self.settings.work_timeout_minutes)
@@ -942,11 +954,13 @@ class Desk:
         else:
             self._ask_voice_approval(job, words or burst.text, entries)
 
-    def _ask_voice_approval(self, job: Job, heard_text: str, entries: Iterable[int] = ()) -> None:
+    def _ask_voice_approval(self, job: Job, heard_text: str, entries: Iterable[int] = (), new_card: bool = True) -> None:
         # Work doesn't wait for the answer. Until it comes the note is unconfirmed, and the approver's final card says so.
         job.heard = UNCONFIRMED
         if VOICE_UNCONFIRMED not in job.attention:
             job.attention.append(VOICE_UNCONFIRMED)
+        if not new_card:
+            return
         try:
             self.cards.submit(
                 Trigger.VOICE, job.requester, job.bucket, job.room_id, VOICE_CARD_TITLE, VOICE_CARD_DETAIL.format(text=quiet(heard_text)), (RIGHT, WRONG),
@@ -1068,13 +1082,17 @@ class Desk:
     def _take_voice_fix(self, job: Job, card: Card, burst: Burst) -> None:
         # A note sent again is speech-to-text too, so its sender is asked about it. Words they typed are their own.
         spoken = bool(burst.language)
-        self.log.add(burst.first_at, job.bucket, burst.room_id, burst.sender, "voice_corrected", burst.text, job_id=job.id, ref=_ids(card.data.get("entries", [])))
+        # The log line and the card to approve what was heard are made once. If the step after them fails, the fix is tried again with neither.
+        taken = card.data.get(FIX_TAKEN) == burst.first_at.isoformat()
         if spoken:
             words, entries = self._voice_in(job.bucket, burst.entry_ids)
-            self._ask_voice_approval(job, words or burst.text, entries)
+            self._ask_voice_approval(job, words or burst.text, entries, new_card=not taken)
         else:
             job.heard = CORRECTED
             job.attention = [line for line in job.attention if line != VOICE_UNCONFIRMED]
+        if not taken:
+            self.log.add(burst.first_at, job.bucket, burst.room_id, burst.sender, "voice_corrected", burst.text, job_id=job.id, ref=_ids(card.data.get("entries", [])))
+            self.cards.note(card.request_id, **{FIX_TAKEN: burst.first_at.isoformat()})
         self._apply_voice_fix(job, burst.text, spoken)
         self.store.save(job)
         self.cards.note(card.request_id, awaiting_fix=None)
@@ -1199,6 +1217,8 @@ class Desk:
             return
         at = self._sent_at(payload)
         self.buffer.add(event["room_id"], payload["sender"], text, at, payload.get("spoken_language"), entry.id)
+        # A new message joins the burst and starts its tries again, so it does not inherit the few the rest had left.
+        self._burst_tries.pop((event["room_id"], payload["sender"]), None)
         if self.settings.quiet_seconds == 0:
             self.tick(at)
 
@@ -1443,11 +1463,7 @@ class Desk:
             return
         asked = self._open_question(burst.room_id, burst.sender, burst.first_at)
         if asked:
-            self._close_question(asked)
-            asked.brief += f"\nAnswered: {burst.text}"
-            asked.language = burst.language or asked.language
-            self._clean_report(asked)
-            self.store.save(asked)
+            self._take_answer(asked, burst)
             return
         # What people say back to the who-owes list, and a question about where the work is, before anything is sorted as a request.
         if self.coordinator.take(burst) or self.coordinator.tell_stage(burst):
@@ -1464,6 +1480,21 @@ class Desk:
             self.store.save(job)
         elif kind is Kind.UNSURE:
             self.client.post_message(burst.room_id, ASK_WHAT_THEY_NEED)
+
+    def _take_answer(self, job: Job, burst: Burst) -> None:
+        # The answer is on the job, and saved, before the sender is thanked or the note is read again. A try that failed later finds the question closed, and must not lose the answer or add it twice.
+        thank = bool(job.question)
+        if thank:
+            self._end_question(job)
+        answer = f"\nAnswered: {burst.text}"
+        if not job.brief.endswith(answer):
+            job.brief += answer
+        job.language = burst.language or job.language
+        self.store.save(job)
+        if thank:
+            self._thank_for_the_answer(job)
+        self._clean_report(job)
+        self.store.save(job)
 
     def _approver_for(self, burst: Burst) -> str:
         return resolve_approver(burst.sender, self.settings.pack_for(burst.room_id).approver or self.settings.approver)
@@ -1542,6 +1573,14 @@ class Desk:
     def _close_question(self, job: Job) -> None:
         if not job.question:
             return
+        self._end_question(job)
+        self._thank_for_the_answer(job)
+
+    def _thank_for_the_answer(self, job: Job) -> None:
+        with _told_after_saving(f"the writer of job {job.id} that the answer was heard"):
+            self.client.post_message(job.room_id, HEARD_THE_ANSWER)
+
+    def _end_question(self, job: Job) -> None:
         # Switch marks a closed card "Cancelled", so say the answer did arrive.
         try:
             self.client.close_card(job.question["request_id"])
@@ -1549,7 +1588,6 @@ class Desk:
             logger.warning("Could not close the question card for job %s: %s", job.id, error)
         self.cards.finish(job.question["request_id"], ANSWERED)
         job.question = None
-        self.client.post_message(job.room_id, HEARD_THE_ANSWER)
 
     def _clean_report(self, job: Job) -> None:
         pack = self.settings.pack_for(job.room_id)
@@ -1579,7 +1617,9 @@ class Desk:
         # Saved before anyone is told, so a message that can't be sent doesn't leave the note looking unfiled.
         self.store.save(job)
         if told:
-            self._reply(job, told)
+            # The note is filed. Running the message again to say so would file it again.
+            with _told_after_saving(f"the writer of job {job.id} that the note was filed"):
+                self._reply(job, told)
 
     def _ask_for_brief(self, job: Job) -> None:
         job.asked_at = self.clock().isoformat()
@@ -1793,7 +1833,7 @@ class Desk:
         what = changed_file(command.payload)
         if not self._is_listed(command, rooms):
             # The dashboard may have changed the file before the login came off the list, so the change is written down, as coming from the login and not as its doing.
-            text = LOG_NOT_LISTED.format(what=f"Changed {what}" if what else "Asked to read the pack again", login=quiet(command.login)[:MOST_LOGIN_SHOWN], via=VIA_DASHBOARD)
+            text = LOG_NOT_LISTED.format(what=f"Changed {what}" if what else "Asked to read the pack again", login=quiet(plain_name(command.login))[:MOST_LOGIN_SHOWN], via=VIA_DASHBOARD)
             self.log.add(self.clock(), bucket, self.settings.home_room(bucket), DASHBOARD_SESSION, "dashboard_action", text)
             raise Refused(NOT_LISTED)
         try:

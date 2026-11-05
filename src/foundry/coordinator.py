@@ -1062,7 +1062,7 @@ class Coordinator:
             return False
         self._record(item, str(path), at, room_id, said="", typed=False, file=True)
         self._close_voice_cards(item)
-        self.client.post_message(room_id, FILE_NOTED.format(input=quiet(item.input), name=shown))
+        self._tell(room_id, FILE_NOTED.format(input=quiet(item.input), name=shown))
         return True
 
     def confirm_voice(self, card: Card, at: datetime) -> None:
@@ -1116,7 +1116,7 @@ class Coordinator:
             self._give_reason(one, heard.reading.reason or "", burst.first_at, burst.room_id, burst.sender)
             # They have said something, so the reminder card is about nothing, and it would hold up their next card for hours.
             self._settle_cards(one, Trigger.REMINDER)
-        self.client.post_message(burst.room_id, REASON_NOTED)
+        self._tell(burst.room_id, REASON_NOTED)
         return True
 
     def _about_someone_else(self, heard: _Heard, pool: list[Item]) -> bool:
@@ -1187,7 +1187,7 @@ class Coordinator:
             self.items.save(item)
             self._settle_cards(item, Trigger.REMINDER)
         self.log.add(burst.first_at, heard.bucket, burst.room_id, who, "availability", away, sender_name=name, job_id=job_id, ref=reading.until.isoformat() if reading.until else None)
-        self.client.post_message(burst.room_id, AWAY_NOTED.format(name=quiet(name), away=away))
+        self._tell(burst.room_id, AWAY_NOTED.format(name=quiet(name), away=away))
         return True
 
     def _replace(self, heard: _Heard) -> bool:
@@ -1228,7 +1228,7 @@ class Coordinator:
             new.reachable, new.asked_at = False, self.clock()
             self.items.save(new)
         if new.reachable:
-            self.client.post_message(tell_room, ASKED_INSTEAD.format(new=quiet(new.owner_name), input=quiet(item.input), old=quiet(item.owner_name)))
+            self._tell(tell_room, ASKED_INSTEAD.format(new=quiet(new.owner_name), input=quiet(item.input), old=quiet(item.owner_name)))
         # If the asker was told how to hand one over and has now done it, the others don't wait out the rest of the wait.
         for card in self._due_cards(job, ANSWERED):
             if card.data.get(AWAITING_TYPED):
@@ -1275,9 +1275,9 @@ class Coordinator:
         self._record(item, value, burst.first_at, burst.room_id, said=heard.text, typed=True, by=by)
         self._close_voice_cards(item)
         if by is None:
-            self.client.post_message(burst.room_id, ANSWER_NOTED.format(input=quiet(item.input), value=quiet(value)))
+            self._tell(burst.room_id, ANSWER_NOTED.format(input=quiet(item.input), value=quiet(value)))
         else:
-            self.client.post_message(burst.room_id, PASSED_ON_NOTED.format(input=quiet(item.input), value=quiet(value), asker=quiet(self._name_of(by, item.bucket))))
+            self._tell(burst.room_id, PASSED_ON_NOTED.format(input=quiet(item.input), value=quiet(value), asker=quiet(self._name_of(by, item.bucket))))
 
     def _hold(self, heard: _Heard, item: Item, value: str, by: str | None) -> None:
         # What speech-to-text heard may be wrong, so its sender approves the answer read from it. Until they do, a new item only carries it unconfirmed, and one already answered keeps its answer.
@@ -1351,8 +1351,16 @@ class Coordinator:
                 stale.append(HEARD_BY_VOICE.format(owner=self._owner_name(item), input=item.input, value=replaced))
             # The far-from-peers lines are judged afresh each time, over every answer now in, so one that no longer holds is taken back.
             self._flag(item.job_id, lines + self._far_from_peers(job), stale, redo=PEER_LINE)
-        # Last, because it may start the makers, and asking them can fail. The answer and its checks are kept either way.
-        self._close(item)
+        # Last, because it may start the makers, and asking them can fail. The answer and its checks are kept either way, and the next tick starts the makers, so the message is not run again for it.
+        with _trying(f"close item {item.id}"):
+            self._close(item)
+
+    def _tell(self, room_id: str, text: str) -> None:
+        # Said after what the message caused is saved. A notice Switch refuses is logged and not tried again, because trying again would take the same message in a second time.
+        try:
+            self.client.post_message(room_id, text)
+        except httpx.HTTPError as error:
+            logger.warning("Could not post a notice to room %s, so it is not sent again: %s", room_id, error)
 
     def _is_file(self, text: str, item: Item) -> bool:
         return is_file_answer(text, self.settings.inputs_dir, item.bucket, item.job_id)
