@@ -37,10 +37,12 @@
 <input class="side-toggle" type="checkbox" id="side-toggle" aria-label="Fold the side bar">
 <aside class="side">
   <div class="side-top">
-    <a class="mark" href="{{ link('/', business=business) }}"><img class="logo" src="/static/logo.svg" alt="Foundry"><span class="mark-word" aria-hidden="true">Foundry</span></a>
+    <div class="brand">
+      <a class="mark" href="{{ link('/', business=business) }}"><img class="logo" src="/static/logo.svg" alt="Foundry"><span class="mark-word" aria-hidden="true">Foundry</span></a>
+      {{ switcher(user, business or (job.row.bucket if job else ""), "/jobs" if page == "jobs" else "/", stage if page == "jobs" else "", counts.stuck_in, page == "jobs") }}
+    </div>
     <label class="side-fold" for="side-toggle" title="Fold the side bar"><span class="icon icon-panel" aria-hidden="true"></span></label>
   </div>
-  {{ switcher(user, business or (job.row.bucket if job else ""), "/jobs" if page == "jobs" else "/", stage if page == "jobs" else "", counts.stuck_in, page == "jobs") }}
   <nav class="side-nav" aria-label="Pages">
     <ul class="nav-list">
       {{ nav_item("overview", link("/", business=business), "Overview", "lime") }}

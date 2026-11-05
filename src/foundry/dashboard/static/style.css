@@ -189,6 +189,7 @@
   --section: 40px;
   --sidebar: 240px;
   --side-folded: 56px;
+  --logo-nudge: -1.6px;
   --rail: 280px;
   --content: 1440px;
   --measure: 720px;
@@ -338,34 +339,34 @@ ul.plain li { margin: var(--space-4) 0; max-width: var(--measure); }
   top: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
   height: var(--screen);
   overflow-y: auto;
   padding: var(--space-20) var(--space-12) var(--space-12);
 }
-.side-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); min-height: var(--control-32); padding: var(--space-4) var(--space-4) 0; }
+/* One block: the mark in the icon column, the word and the business in the text column, and the fold, all on one centre line. It is 36 tall from 20, so that line is the page title's. */
+.side-top { position: relative; display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); min-height: var(--control-36); padding-inline: var(--space-8) var(--space-4); }
+.brand { display: flex; flex: 1 1 auto; flex-direction: column; justify-content: center; min-width: 0; padding-left: var(--size-24); }
 .mark { display: inline-flex; align-items: center; color: var(--ink-soft); text-decoration: none; }
-/* A strut in the title's own type, so the word below sits on the page title's baseline whatever the fonts turn out to be */
-.side .mark { align-items: baseline; }
-.side .mark::before { content: "\200b"; width: 0; font-family: var(--font-head); font-size: var(--text-20); line-height: var(--line-20); font-weight: 700; }
-.mark-word { margin-left: var(--space-4); font-size: var(--text-14); line-height: var(--line-14); font-weight: 500; }
+.mark-word { font-size: var(--text-14); line-height: var(--line-14); font-weight: 500; }
 .wordmark { display: block; width: auto; height: var(--size-24); }
-.logo { display: block; align-self: center; width: var(--size-24); height: var(--size-24); }
+/* The drawing has clear space around it, so a small nudge puts its ink, not its box, on the labels' edge. */
+.logo { position: absolute; top: var(--space-8); left: var(--space-8); display: block; width: var(--space-20); height: var(--space-20); translate: var(--logo-nudge) 0; }
 .side-fold { display: inline-flex; align-items: center; justify-content: center; flex: none; width: var(--size-24); height: var(--size-24); color: var(--ink-quiet); border-radius: var(--radius-4); cursor: pointer; transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out); }
 .side-fold:hover { color: var(--ink); background: var(--hover); }
 .side-toggle:focus-visible ~ .side .side-fold { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* Which business: a dropdown built with details, so it needs no script */
 
-.switcher { position: relative; }
-.switcher-head { display: flex; align-items: center; gap: var(--space-8); min-height: var(--control-28); padding-inline: var(--space-8); color: var(--ink-faint); font-size: var(--text-13); line-height: var(--line-13); list-style: none; border-radius: var(--radius-8); transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+.switcher { min-width: 0; }
+/* The block's second line. Its target is 24 tall, and takes no room from the line above. */
+.switcher-head { display: flex; align-items: center; gap: var(--space-4); min-height: var(--line-12); color: var(--ink-faint); font-size: var(--text-12); line-height: var(--line-12); list-style: none; transition: color var(--dur-fast) var(--ease-out); }
+.switcher-head .nav-name { flex: 0 1 auto; }
 .switcher-head::-webkit-details-marker { display: none; }
-summary.switcher-head { cursor: pointer; }
-summary.switcher-head:hover { color: var(--ink); background: var(--sunken); }
-.switcher[open] .switcher-head { color: var(--ink); background: var(--sunken); }
+summary.switcher-head { margin-block: calc(-1 * var(--space-4)); padding-block: var(--space-4); border-radius: var(--radius-4); cursor: pointer; }
+summary.switcher-head:hover { color: var(--ink); }
+.switcher[open] .switcher-head { color: var(--ink); }
 .switcher[open] .switcher-head .icon-chevron { rotate: 180deg; }
 .switcher-head .icon-chevron { color: var(--ink-quiet); transition: rotate var(--dur-fast) var(--ease-out); }
-.switcher-mark { display: inline-flex; align-items: center; justify-content: center; flex: none; width: var(--size-16); height: var(--size-16); color: var(--ink-quiet); }
 .switcher-menu { position: absolute; top: calc(100% + var(--space-4)); left: 0; right: 0; z-index: 3; display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4); background: var(--sunken); border: 1px solid var(--rule-strong); border-radius: var(--radius-8); animation: rise var(--dur-fast) var(--ease-out); }
 .switcher-item { display: flex; align-items: center; gap: var(--space-8); min-height: var(--control-32); padding-inline: var(--space-8); color: var(--ink-soft); font-size: var(--text-13); line-height: var(--line-13); text-decoration: none; border-radius: var(--radius-4); transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
 .switcher-item:hover { color: var(--ink); background: var(--current); }
@@ -373,14 +374,15 @@ summary.switcher-head:hover { color: var(--ink); background: var(--sunken); }
 
 /* Three levels. The two pages people come for, then a real gap, then quiet labels over the rest. Every page is the same row: an icon, then its name on one shared edge. */
 
-.side-nav { display: flex; flex-direction: column; gap: var(--space-24); margin-top: var(--space-16); }
+.side-nav { display: flex; flex-direction: column; gap: var(--space-24); margin-top: var(--space-24); }
 .nav-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
 .nav-label { display: flex; align-items: center; min-height: var(--control-24); margin: 0; padding-inline: var(--space-8); color: var(--ink-quiet); font-size: var(--text-12); line-height: var(--line-12); font-weight: 500; }
 
 /* A nav item: at rest, under the mouse, pressed, and marked as where you are */
 
-.nav-item { display: flex; align-items: center; gap: var(--space-8); min-height: var(--control-28); padding-inline: var(--space-8); color: var(--ink-faint); font-size: var(--text-13); line-height: var(--line-13); text-decoration: none; border-radius: var(--radius-8); transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
-.nav-item .icon { color: var(--ink-quiet); }
+.nav-item { display: flex; align-items: center; gap: var(--space-12); min-height: var(--control-28); padding-inline: var(--space-8); color: var(--ink-faint); font-size: var(--text-13); line-height: var(--line-13); text-decoration: none; border-radius: var(--radius-8); transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
+/* An icon is drawn with about 2 clear on each side of its 16, so this column of 12 puts the ink on the labels' edge, and 12 more reaches the text edge. */
+.nav-item .icon { width: var(--space-12); color: var(--ink-quiet); mask-position: center; mask-size: var(--size-16); }
 .nav-item:hover { color: var(--ink); background: var(--sunken); }
 .nav-item:active { background: var(--current); }
 .nav-item[aria-current="page"] { color: var(--ink); font-weight: 500; background: var(--hover); }
@@ -396,6 +398,8 @@ summary.switcher-head:hover { color: var(--ink); background: var(--sunken); }
 
 .shell:has(.side-toggle:checked) .side { align-items: stretch; padding-inline: var(--space-8); }
 .shell:has(.side-toggle:checked) .side-top { flex-direction: column; padding-inline: 0; }
+.shell:has(.side-toggle:checked) .brand { flex: none; align-items: center; padding-left: 0; }
+.shell:has(.side-toggle:checked) .logo { position: static; translate: none; }
 .shell:has(.side-toggle:checked) .mark-word, .shell:has(.side-toggle:checked) .switcher, .shell:has(.side-toggle:checked) .nav-name, .shell:has(.side-toggle:checked) .nav-count, .shell:has(.side-toggle:checked) .nav-label, .shell:has(.side-toggle:checked) .who { display: none; }
 .shell:has(.side-toggle:checked) .nav-item { justify-content: center; }
 
@@ -591,7 +595,6 @@ main > .section-foot { margin-top: var(--gap); }
 .icon-needs { mask-image: url(icons/needs.svg); }
 .icon-chevron { mask-image: url(icons/chevron.svg); }
 .icon-panel { mask-image: url(icons/panel.svg); }
-.icon-group-work { mask-image: url(icons/group-work.svg); }
 .icon-stuck { mask-image: url(icons/stuck.svg); }
 .icon-inputs { mask-image: url(icons/inputs.svg); }
 .icon-activity { mask-image: url(icons/activity.svg); }
@@ -1159,9 +1162,12 @@ form.panel { gap: var(--space-16); margin: 0; }
   .shell { display: block; }
   .side-toggle { display: none; }
   .side { position: static; flex-direction: row; align-items: center; gap: var(--space-12); height: auto; overflow: visible; padding: var(--space-8) var(--space-16); border-bottom: 1px solid var(--rule); }
-  .side-top { padding: 0; }
+  .side-top { flex: 1 1 auto; min-width: 0; padding: 0; }
+  .brand { flex-direction: row; align-items: center; justify-content: flex-start; gap: var(--space-8); padding-left: 0; }
+  .logo { position: static; }
   .mark-word { display: none; }
-  .switcher { flex: 1 1 auto; min-width: 0; }
+  .switcher { flex: 1 1 auto; }
+  summary.switcher-head { min-height: var(--control-32); margin-block: 0; padding-block: 0; }
   .side-fold, .side-nav, .side > .who { display: none; }
   main { padding-top: var(--space-16); padding-bottom: calc(var(--tabbar) + var(--space-32)); }
   .with-rail { margin: calc(-1 * var(--space-16)) calc(-1 * var(--gutter)) calc(-1 * (var(--tabbar) + var(--space-32))); }
