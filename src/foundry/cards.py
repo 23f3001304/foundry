@@ -206,6 +206,12 @@ class CardQueue:
             self._save(card)
         return card
 
+    def add_seeded(self, card: Card) -> None:
+        # Earlier history for a demo, and only scripts/seed_history.py may call this. It has already ended, so nothing opens, nothing is posted and it is in nobody's way.
+        if card.state not in ENDS:
+            raise ValueError(f"A seeded card has already ended, and {card.state} hasn't")
+        self._save(card)
+
     def pump(self) -> None:
         queued = self._select("WHERE state = ? ORDER BY rowid", QUEUED)
         for card in [c for c in queued if not c.is_routine] + [c for c in queued if c.is_merged or c.data.get(ONE_BY_ONE)]:

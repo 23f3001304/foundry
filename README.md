@@ -213,7 +213,7 @@ The contact sheet lists two electricians at Palm Court, so the desk asks which o
 
 Morpankh Systems is a fictional IT firm, and its client Harsingar Stores is made up too. A Delivery Manager asks for a release status deck, and three Team Leads each owe the figures for it. Team Lead A answers, Team Lead B says "blocked on QA", and Team Lead C says nothing. **The team's messages are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models.**
 
-Put Mattermost's admin sign-in and team name in `.env`. They are in Switch's own `.env`. Then make the scripted people and what they said before the scene. The history is marked as seeded in the log. These scripts sign in as the admin and reset the password of anyone with a scripted person's name, so they refuse any `MATTERMOST_URL` or `SWITCH_URL` that isn't on this machine.
+Put Mattermost's admin sign-in and team name in `.env`. They are in Switch's own `.env`. Then make the scripted people, what they said before the scene, and 28 days of earlier work for the dashboard's charts. The history is marked as seeded in the log, and the dashboard's Overview says so. These scripts sign in as the admin and reset the password of anyone with a scripted person's name, so they refuse any `MATTERMOST_URL` or `SWITCH_URL` that isn't on this machine.
 
 ```bash
 uv run --env-file .env python scripts/demo_people.py ensure it_firm

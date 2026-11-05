@@ -15,6 +15,21 @@ history:
   - {as: Team Lead A, room: team-a, days_ago: 1, say: "Team A has the customer portal build in QA."}
   - {as: Team Lead B, room: team-b, days_ago: 3, say: "Team B moved the payment fixes to QA."}
   - {as: Team Lead C, room: team-c, days_ago: 21, say: "Team C has the reporting module in UAT."}
+# Work from the 28 days before the scene, so the overview's charts have something to draw. Written by scripts/seed_history.py and marked as seeded.
+earlier_work:
+  as: Delivery Manager
+  room: delivery
+  jobs:
+    - Weekly status deck for Team A
+    - QA summary for the customer portal
+    - Release notes for the payment fixes
+    - UAT report for the reporting module
+    - Sprint review deck for Team B
+    - Defect summary for Team C
+  stuck:
+    - {days_ago: 4, title: "Stuck: Sprint review deck for Team B", detail: "The deck maker stopped on the velocity table."}
+    - {days_ago: 11, title: "Stuck: Defect summary for Team C", detail: "The writer stopped on a missing test run."}
+    - {days_ago: 19, title: "Stuck: Release notes for the payment fixes", detail: "The writer stopped on the list of fixes."}
 steps:
   # A Team Lead's daily note. It is a Hinglish voice note when there is a Sarvam key. Without one the same words are typed, and the timeline says so.
   - as: Team Lead A

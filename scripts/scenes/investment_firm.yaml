@@ -20,6 +20,19 @@ history:
   - {as: Office Head C, room: office-c, days_ago: 6, say: "Office C is waiting on custody statements."}
   - {as: Office Head D, room: office-d, days_ago: 21, say: "Office D has moved to a new floor."}
   - {as: Office Head E, room: office-e, days_ago: 3, say: "Office E has a client review this week."}
+# Work from the 28 days before the scene, so the overview's charts have something to draw. Written by scripts/seed_history.py and marked as seeded.
+earlier_work:
+  as: Analyst Lead
+  room: analysts
+  jobs:
+    - Monthly close summary for Office A
+    - Flows note for Office B
+    - Holdings review for Office C
+    - Quarterly growth table for Office D
+    - Fee summary for Office E
+  stuck:
+    - {days_ago: 6, title: "Stuck: Holdings review for Office C", detail: "The deck maker stopped on the holdings table."}
+    - {days_ago: 17, title: "Stuck: Fee summary for Office E", detail: "The writer stopped on a missing quarter."}
 steps:
   # The request, and the brief's card with who owes what. Each Office Head is asked for that office's own figure, so the five inputs read differently and none is told it disagrees with another.
   # The deck is asked to chart each office and the year, so the makers have to use the data tools.
