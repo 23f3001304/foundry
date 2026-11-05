@@ -39,6 +39,7 @@ NOT_LINKED_THERE = ("and your Switch account has no linked account there", "Link
 ROOMS_NOT_ALL_MADE = "Switch could not make every room for {name}. {why} What was made is saved in {env}, and the desk won't use {name} until the rest exist. Run this same command again to make only those."
 MADE_BUT = "Made {rooms} and saved their ids in {env}, but not everything went in. {why}"
 ROOM_FAILED = "{room} was not made: {error}."
+NOT_THERE = "It gave no reason, and these are missing: {rooms}."
 OWNER_LEFT_OUT = "You are not in {room}: Switch could not add {who}, because {error}. Add that account to the room in Switch Console."
 NOT_ATTACHED = "{room} has no {kind} {what}: {error}."
 LINK_FAILED = "{first} is not linked to {second}: {error}. The rooms work without it, and you can link them in Switch Console."
@@ -192,9 +193,10 @@ def _make_the_rest(gateway: httpx.Client, run: Callable[[str], httpx.Response], 
         one = what_was_made(answer.json()["room"])
         rooms |= one.rooms
         trouble += one.trouble
-        filed = gateway.put(f"/rooms/{one.rooms[room]}/group", json={"group_id": group})
-        if filed.is_error:
-            trouble.append(NOT_FILED.format(room=room, error=filed.text))
+        for made_id in one.rooms.values():
+            filed = gateway.put(f"/rooms/{made_id}/group", json={"group_id": group})
+            if filed.is_error:
+                trouble.append(NOT_FILED.format(room=room, error=filed.text))
     every = made | rooms
     for first, second, label in _links_of(template, mode, name):
         if first in every and second in every and (first in rooms or second in rooms):
@@ -273,7 +275,8 @@ def main(mode: str, name: str, slug: str, outside_bridge: str = "") -> None:
                 raise SystemExit(f"Switch refused the template: {answer.text}")
             made = what_was_made(answer.json()["room"])
     rooms = earlier | made.rooms
-    whole = all(room in rooms for room in rooms_of(template, mode, name))
+    missing = [room for room in rooms_of(template, mode, name) if room not in rooms]
+    whole = not missing
     # Saved before anything else can stop this, because .env is how a rerun knows these rooms are there.
     if whole:
         save_rooms(mode, name, slug, rooms)
@@ -282,7 +285,7 @@ def main(mode: str, name: str, slug: str, outside_bridge: str = "") -> None:
     # A client's own makers are pinned to its brand folder and told their own folder. Shared makers serve many businesses, so they are not.
     setup_makers(online["status"]["machine"]["workspaces_dir"], ending, str(brand_dir) if ending else "")
     if not whole:
-        raise SystemExit(ROOMS_NOT_ALL_MADE.format(name=name, why=" ".join(made.not_made), env=ENV_FILE))
+        raise SystemExit(ROOMS_NOT_ALL_MADE.format(name=name, why=" ".join(made.not_made) or NOT_THERE.format(rooms=", ".join(missing)), env=ENV_FILE))
     if made.trouble:
         raise SystemExit(MADE_BUT.format(rooms=", ".join(rooms), env=ENV_FILE, why=" ".join(made.trouble)))
     print(f"Created {', '.join(rooms)} and saved their ids in {ENV_FILE}")

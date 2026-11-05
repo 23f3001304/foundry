@@ -796,8 +796,9 @@ class Desk:
                 if tries + 1 < MOST_BURST_TRIES:
                     self._review_owed[job_id] = tries + 1
                     logger.warning("Could not send job %s to the reviewer, so it is tried again on the next tick: %s", job.id, error)
-                    continue
-                self._raise_not_sent(job, error)
+                else:
+                    self._raise_not_sent(job, error)
+                continue
             self.store.save(job)
 
     def _raise_not_sent(self, job: Job, error: Exception) -> None:
@@ -805,9 +806,10 @@ class Desk:
         try:
             with _give_up_if_room_is_gone(f"job {job.id}"):
                 self._stop(job, NOT_SENT_FOR_REVIEW)
+            self.store.save(job)
             del self._review_owed[job.id]
         except Exception:
-            # Kept, so the card is tried again on the next tick, and the other jobs still get their turn.
+            # Not saved and kept, so the card is tried again on the next tick, and the other jobs still get their turn.
             logger.exception("Could not raise a card for job %s, so it comes round again on the next tick.", job.id)
 
     def _ask_reviewer(self, job: Job) -> None:
