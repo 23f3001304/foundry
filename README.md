@@ -187,6 +187,8 @@ For a client of your own, add a folder under `brands/` and run:
 uv run --env-file .env python tools/create_rooms.py agency <room-name> <brand-folder>
 ```
 
+An agent that already exists keeps the instructions it was made with, because this only puts it back in its slot. So a stack made before the design guide does not get the guide by running this again: the new rooms hold it, and the old agents are never told to read it. To get it, run these steps again on a wiped Switch stack, or change those agents' instructions in Switch Console to the ones in `templates/foundry.template.yaml`. Restart the makers either way, because they pick up `foundry-design` and `state_style` when they start. The desk names any room with no guide in its start log. It can't read an agent's instructions, so it can't name an agent.
+
 ### 5. Start the desk
 
 Restart it whenever you add rooms, because it only follows the rooms named in `.env` when it starts.

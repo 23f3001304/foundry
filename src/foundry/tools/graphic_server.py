@@ -115,6 +115,8 @@ def render_graphic(brand_dir: str, headline: str, subline: str, size: str, out_p
     """
     if highlight and highlight not in headline:
         raise MakerError(f"The highlight must be words from the headline. {highlight!r} is not in {headline!r}.")
+    # Lines are worked out with plain spaces between the words, so that is how the highlight is found in them.
+    highlight = " ".join(highlight.split())
     if composition not in COMPOSITIONS:
         raise MakerError(UNKNOWN_COMPOSITION.format(name=composition, names=", ".join(COMPOSITIONS)))
     if picture and composition in (TYPE_LED, STATEMENT):

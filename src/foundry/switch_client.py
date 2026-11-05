@@ -82,6 +82,12 @@ class SwitchClient:
         entries = [entry for thread in timeline["threads"] for entry in [thread["root"], *thread["replies"]]]
         return "\n".join(f"{entry['sender_name']}: {entry['body']}" for entry in entries if entry["kind"] == "message" and entry["sender_name"] != DESK_NAME)
 
+    def room_documents(self, room_id: str) -> list[str]:
+        """The names of the documents a room gives its members."""
+        room = self._call("POST", f"/agents/{self.agent_id}/ops/connect_to_room", headers=self._session_headers(),
+                          json={"room_id": room_id, "include_general_instructions": False}).json()["result"]
+        return [document["name"] for document in room["documents"]]
+
     def _session_headers(self) -> dict[str, str]:
         return {"X-Switch-Connection-Id": self.connection_id, "X-Switch-Session-Id": self.session_id}
 
