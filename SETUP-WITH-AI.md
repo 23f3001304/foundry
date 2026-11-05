@@ -1,13 +1,16 @@
 # Set up Foundry with your AI agent
 
-For a person: open Claude Code, Codex, Gemini CLI or another agent that can run commands in this folder, and paste this:
+For a person: open Claude Code, Codex, Gemini CLI or another agent that can run commands, and paste this, with the repo's address in it:
 
-> Follow SETUP-WITH-AI.md to set up Foundry on my machine.
+> Clone <the repo's address> and follow SETUP-WITH-AI.md in it to set up Foundry on my machine.
+
+If you've already cloned it, open the agent in that folder and paste `Follow SETUP-WITH-AI.md to set up Foundry on my machine.` instead.
 
 The rest of this file is for the agent.
 
 ## Rules
 
+- If you were asked to clone the repo, clone it first and run everything from inside that folder.
 - Never ask the person for a token, key or password in chat, and never type one yourself. They enter those in the dashboard's Settings page, or in `.env`.
 - Never print `.env` or Switch's `.env`, and never read values out of them. Setup writes generated logins there, and nobody needs to see them.
 - Don't run `--reset` or `--yes` unless the person asks for it. Ask before using a port setup says is taken.

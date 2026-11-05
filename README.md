@@ -112,7 +112,7 @@ Once it's running, **Settings** in the dashboard shows what's connected, gives t
 
 A hosted version, with sign-up and bots you just install, is what comes next. It isn't built.
 
-To have your own AI agent do it, paste this into Claude Code, Codex, Gemini CLI or another agent that can run commands in this folder: `Follow SETUP-WITH-AI.md to set up Foundry on my machine.` It never asks for a token or key in chat, because you enter those in Settings yourself. This hasn't been tried on a clean machine yet.
+To have your own AI agent do it, paste this into Claude Code, Codex, Gemini CLI or another agent that can run commands: `Clone <the repo's address> and follow SETUP-WITH-AI.md in it to set up Foundry on my machine.` If you've already cloned it, `Follow SETUP-WITH-AI.md to set up Foundry on my machine.` in that folder does the same. It never asks for a token or key in chat, because you enter those in Settings yourself. This hasn't been tried on a clean machine yet.
 
 Otherwise there are two commands. On Windows, use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` wherever this says `./setup.sh`, with the same flags. A default Windows machine refuses to run a script any other way. The Bypass applies only to that one run and changes no setting on your machine.
 
