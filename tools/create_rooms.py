@@ -52,7 +52,7 @@ def main(mode: str, name: str, slug: str) -> None:
         existing = {agent["name"] for agent in gateway.get("/management/agents").json()}
         if REVIEWER + ending not in existing and not os.environ.get("FOUNDRY_REVIEWER_PROVIDER"):
             print(NEW_REVIEWER.format(name=REVIEWER + ending))
-        answer =gateway.post("/rooms/from-template-document", json={
+        answer = gateway.post("/rooms/from-template-document", json={
             "template": (REPO / "templates" / "foundry.template.yaml").read_text(encoding="utf-8"),
             "template_name": "foundry",
             "inputs": {
@@ -73,7 +73,7 @@ def main(mode: str, name: str, slug: str) -> None:
         })
         if answer.is_error:
             raise SystemExit(f"Switch refused the template: {answer.text}")
-    # A client's own makers are pinned to its brand folder. Shared makers serve many businesses, so they are not.
+    # A client's own makers are pinned to its brand folder and told their own folder. Shared makers serve many businesses, so they are not.
     setup_makers(online["status"]["machine"]["workspaces_dir"], ending, str(brand_dir) if ending else "")
     rooms = {room["room_name"]: room["room_id"] for room in answer.json()["room"]["rooms"]}
     inside = (rooms[f"{name}-studio"], rooms[f"{name}-review"]) if mode == "agency" else (rooms[f"{name}-projects"],) * 2

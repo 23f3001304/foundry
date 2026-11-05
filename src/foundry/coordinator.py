@@ -183,6 +183,14 @@ STAGES = {
     State.BLOCKED: "stopped, waiting for a decision",
     State.DROPPED: "nothing to send",
 }
+
+
+def stage_line(state: State) -> str:
+    # What a client is told where its work is: the stage, as a sentence.
+    stage = STAGES[state]
+    return f"{stage[:1].upper()}{stage[1:]}."
+
+
 # Once the makers have started, a changed input no longer reaches them by itself.
 STARTED = (State.MAKING, State.REVIEWING, State.SIGNOFF_PENDING, State.BLOCKED)
 SIGNED_OFF = (State.APPROVED, State.DELIVERED)
@@ -960,7 +968,8 @@ class Coordinator:
         job = ([job for job in jobs if job.state is not State.DELIVERED] or jobs or [None])[-1]
         if job is None:
             return False
-        self.client.post_message(burst.room_id, f"{self._title(job)}: {STAGES[job.state]}.")
+        # The stage and nothing else: not the job's title, which is words a model wrote, and not anyone's name.
+        self.client.post_message(burst.room_id, stage_line(job.state))
         return True
 
     def take_file(self, event: dict, at: datetime) -> bool:

@@ -81,7 +81,7 @@ A report skips the brief and the makers. The desk writes it from the note, asks 
 | `foundry-visual` | Claude, with the `render_graphic` tool | Makes on-brand graphics |
 | `foundry-reviewer` | Codex, or OpenCode if you change the setting | Checks the work against the brief and the brand kit |
 
-Each agency client has its own set of these four, named with its own ending, such as `foundry-deck-phatakha`, each in its own folder. An internal company or department shares one set across its rooms. When `FOUNDRY_IMAGES=on`, both makers also get a `generate_image` tool.
+Each agency client made from now on has its own set of these four, named with its own ending, such as `foundry-deck-phatakha`, each in its own folder. That includes Lalten Cafe's and Green Valley's rooms on a fresh stack, because the rule that one client's work stays out of another's is not only for the demos. **Rooms already in your `.env` have no ending, so they keep the shared agents until their rooms are made again,** and the desk says so in its log at start. An internal company or department shares one set across its rooms. When `FOUNDRY_IMAGES=on`, both makers also get a `generate_image` tool.
 
 ## Features and the Switch pieces behind them
 
@@ -173,7 +173,9 @@ uv run --env-file .env python tools/register_desk.py
 
 This makes rooms for both fictional clients, one internal department to show the other room tree, the four rooms of Morpankh Systems, the fictional IT firm, the six rooms of Kasauti Capital Partners, the fictional investment firm, and the rooms of the marketing agency's two clients, Phatakha Pop and Ambaryug Teas. Each agency client is given agents of its own. The seed also writes each maker's `.mcp.json` and saves the room ids in `.env`.
 
-Picture drawing is off by default. If you want it, set `FOUNDRY_IMAGES=on` and `GOOGLE_CLOUD_PROJECT` in `.env` and sign in with `gcloud auth application-default login` before this step. Everything in this README runs without it.
+Set the reviewer before this step, because a reviewer's provider is fixed when it is made and each agency client gets a new one. For now put `FOUNDRY_REVIEWER_PROVIDER=claude` in `.env` and leave `FOUNDRY_REVIEWER_MODEL` empty, because Codex's usage has run out until Dec 4. Without it a new reviewer starts on the template's default and the seed says so.
+
+Picture drawing is off by default. If you want it, set `FOUNDRY_IMAGES=on` and `GOOGLE_CLOUD_PROJECT` in `.env` and sign in with `gcloud auth application-default login` before this step. Everything in this README runs without it. To switch it on or off after the rooms exist, run `uv run --env-file .env python tools/setup_makers.py <agents folder> -<client> <brand folder>` once for each agency client, such as `-phatakha` with the full path of `brands/demo-agency-client-a`.
 
 ```bash
 uv run --env-file .env python scripts/demo_seed.py
@@ -253,13 +255,13 @@ Bhorvela Studio is a fictional marketing agency with two fictional clients. Phat
 
 What this demo shows about clients:
 
-- **Each client has agents of its own.** `foundry-deck-phatakha` and `foundry-deck-ambaryug` are different agents in different folders, and a client's tools are pinned to its own brand folder. A maker, reviewer or brief agent from one client is ignored in the other's rooms.
+- **Each client has agents of its own.** `foundry-deck-phatakha` and `foundry-deck-ambaryug` are different agents in different folders. A client's tools write only in that maker's own folder, show a picture only from it or the client's own brand folder, and open only that client's jobs and brand folder. The desk takes a file only from that client's makers' folders. A maker, reviewer or brief agent from one client is ignored in the other's rooms.
 - **A client only learns the stage.** Asked where its work is, it is told "being made" or "being checked", with no name of anyone inside and no who-owes list. Who-owes-what runs in internal mode only.
 - **Each client is its own bucket.** The desk picks the bucket from the room, and nothing a model sends can name one. Two clients' files and log entries never mix in a lookup.
 - **Clients never sign in to the dashboard.** The packs list only the agency's own login, acting as the Account Director.
 - **Pictures are off by default.** With `FOUNDRY_IMAGES` off, the set is still complete, and its written copy has a "Pictures" section that says no pictures were drawn. With `FOUNDRY_IMAGES=on`, the makers may draw at most two pictures with `generate_image`, which calls the same Vertex model as `tools/gen_assets.py`. **Those pictures are AI-generated, and the files say so.** Google's policy bars passing generated content off as made only by people.
 
-Make the scripted people, then play the scene. In `.env`, set `FOUNDRY_QUIET_SECONDS=8` first, and restart the desk after the seed so it follows the new rooms.
+Before the seed in step 4 makes these two clients' rooms, set `FOUNDRY_REVIEWER_PROVIDER=claude` and leave `FOUNDRY_REVIEWER_MODEL` empty in `.env`. Each client gets a reviewer of its own, and a reviewer's provider can't be changed once it is made. Then make the scripted people and play the scene. In `.env`, set `FOUNDRY_QUIET_SECONDS=8` first, and restart the desk after the seed so it follows the new rooms.
 
 ```bash
 uv run --env-file .env python scripts/demo_people.py ensure agency
@@ -280,7 +282,7 @@ Then open the files each client was given and read them. Phatakha Pop's set shou
 - **Old databases:** the job and buffer files aren't migrated between versions. Delete `foundry-*.db` after pulling changes.
 - **WhatsApp:** optional, and it changes Switch's code in your own deployment. See [integrations/whatsapp](integrations/whatsapp/README.md).
 - **A fresh Switch stack** gives clean channel names. Deleting a room leaves its Mattermost channel behind, and a new room with that name gets a suffix.
-- **Agency clients have their own makers, and an internal business's rooms share one folder.** An internal company or department is one business, so its rooms share one set of agents with one working folder. Agency clients do not: each is given agents of its own, in a folder of its own, because in our live check, when the makers were shared, a maker told to open decks already made read another client's deck and left the fact out by its own choice. Nothing in the code stopped it reading. Now a client's tools are also pinned to that client's brand folder, and its agents are told that other clients' folders are not theirs. That is tested in code and not yet run live, and the machine's own files are still open to an agent, so don't put real clients' confidential work on this setup as it stands.
+- **Agency clients have their own makers, and an internal business's rooms share one folder.** An internal company or department is one business, so its rooms share one set of agents with one working folder. Agency clients do not: each is given agents of its own, in a folder of its own, because in our live check, when the makers were shared, a maker told to open decks already made read another client's deck and left the fact out by its own choice. Nothing in the code stopped it reading. Now a client's own maker tools write only in that maker's folder, read a picture only from it or the client's brand folder, and open only that client's jobs, and the desk takes a file only from that client's makers' folders. That confines the tools and the desk. It does not confine an agent's own access to the machine's files, which still reach any folder, and its agents are only told that other clients' folders are not theirs. All of it is tested in code and not yet run live, so don't put real clients' confidential work on this setup as it stands.
 
 ## Tests
 

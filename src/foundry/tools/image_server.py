@@ -16,21 +16,24 @@ from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
 from foundry.brand import load_brand_dir
+from foundry.tools import confine
 
 REPO = Path(__file__).resolve().parents[3]
 # Parallel calls hit the service's rate limit, so one picture is drawn at a time, in this process.
 ONE_AT_A_TIME = threading.Lock()
 # A slide is wider than it is tall, and this is the shape a picture on one fits best.
 ASPECT = "16:9"
-PICTURE_KINDS = (".png", ".jpg", ".jpeg")
+# Only a .png, because a .png can carry the note that a model drew it, and every file this tool makes carries it.
+PICTURE_KIND = ".png"
 SWITCH_NAME = "FOUNDRY_IMAGES"
 
 SWITCHED_OFF = f"Picture drawing is switched off, so no picture can be made. Make the work without one, and never describe a picture that does not exist. It is switched on with {SWITCH_NAME}=on."
 NO_PROJECT = "GOOGLE_CLOUD_PROJECT is not set, so the picture service cannot be reached. Make the work without a picture."
 NO_SIGN_IN = "I could not sign in to Google to draw a picture, so none was made. Make the work without one."
 REFUSED = "The picture service refused the request (HTTP {code}), so no picture was made. Make the work without one."
-NO_PICTURE = "The picture model sent back no picture. Try different words, or make the work without one."
-NOT_A_PICTURE_FILE = "A picture is saved as a {kinds} file, so out_path must end in one of them, not {suffix!r}."
+NO_PICTURE = "The picture model sent back no picture, which can mean it declined those words. Try different words, or make the work without one."
+NO_SERVICE = "The picture service could not be reached, so no picture was made. Try again in a little while, or make the work without one."
+NOT_A_PICTURE_FILE = "A picture is saved as a .png, so out_path must end in .png, not {suffix!r}."
 NO_PROMPT = "Say what the picture shows in the prompt."
 # What the model is told besides the maker's words. The kit's colours and kind of business steer it, and nothing may be written in the picture.
 STYLE = (
@@ -72,8 +75,13 @@ def _draw(prompt: str) -> bytes:
         with ONE_AT_A_TIME, contextlib.redirect_stdout(sys.stderr):
             return gen.request_image("picture", spec, project, bearer)
     except urllib.error.HTTPError as error:
+        # A busy service was already waited for and asked again by the script's own loop, so this is one that stayed busy or said no.
         raise ToolError(REFUSED.format(code=error.code)) from None
-    except RuntimeError:
+    except OSError:
+        # No route, a timeout, a reset: the ways of not reaching it. What the system said is left out, because it may name an address.
+        raise ToolError(NO_SERVICE) from None
+    except (KeyError, IndexError, TypeError, AttributeError, ValueError, RuntimeError):
+        # A reply with no picture in it: one that declined the request, one that was not what was expected, or one that held no picture.
         raise ToolError(NO_PICTURE) from None
 
 
@@ -82,26 +90,28 @@ def generate_image(brand_dir: str, prompt: str, out_path: str) -> str:
 
     brand_dir is the brand folder named in the business pack. Its colours and kind of business steer the picture.
     prompt says what the picture shows. The picture never holds words, numbers or logos, so write none into it.
-    out_path ends in .png or .jpg. Make at most two pictures for a job, one after the other.
+    out_path ends in .png. Make at most two pictures for a job, one after the other.
     """
     if not images_on():
         raise ToolError(SWITCHED_OFF)
     if not prompt.strip():
         raise ToolError(NO_PROMPT)
-    path = Path(out_path).resolve()
-    if path.suffix.lower() not in PICTURE_KINDS:
-        raise ToolError(NOT_A_PICTURE_FILE.format(kinds=" or ".join(PICTURE_KINDS), suffix=path.suffix))
+    if Path(out_path).suffix.lower() != PICTURE_KIND:
+        raise ToolError(NOT_A_PICTURE_FILE.format(suffix=Path(out_path).suffix))
+    # A client's own makers write only in their own folder, and that is settled before the service is asked, so a refused place costs no picture.
+    path = confine.output(out_path)
     brand = load_brand_dir(brand_dir)
     colours = brand.colors
     words = STYLE.format(prompt=prompt.strip(), business=brand.business_type or "business", **{name: colours[name] for name in ("primary", "accent", "ink", "paper")})
-    picture = Image.open(io.BytesIO(_draw(words))).convert("RGB")
+    raw = _draw(words)
+    try:
+        picture = Image.open(io.BytesIO(raw)).convert("RGB")
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
+        raise ToolError(NO_PICTURE) from None
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.suffix.lower() == ".png":
-        note = PngInfo()
-        note.add_text("Description", EMBEDDED)
-        picture.save(path, pnginfo=note)
-    else:
-        picture.save(path)
+    note = PngInfo()
+    note.add_text("Description", EMBEDDED)
+    picture.save(path, pnginfo=note)
     # The desk cannot read a picture, so what it holds goes beside it for the number check, as a graphic's words do.
     Path(f"{path}.txt").write_text(MADE_BY_A_MODEL, encoding="utf-8")
     return str(path)

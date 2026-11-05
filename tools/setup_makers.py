@@ -26,7 +26,13 @@ DATABASES = {"FOUNDRY_LOG_DB": "foundry-log.db", "FOUNDRY_JOBS_DB": "foundry-job
 IMAGE_SETTINGS = ("GOOGLE_CLOUD_PROJECT", "FOUNDRY_IMAGE_MODEL")
 
 
-def _env(module: str, brand_dir: str) -> dict[str, str]:
+NEEDS_BOTH = (
+    "A client's makers need both its ending, such as -phatakha, and its brand folder, and shared makers need neither, so there is nothing to set up from one of them alone. "
+    "Run it as: setup_makers.py <agents folder> [-<client> <brand folder>]."
+)
+
+
+def _env(module: str, folder: Path, brand_dir: str) -> dict[str, str]:
     env = {}
     if module in SHARED:
         # Both read what the desk writes, and start from the repository folder, so a path relative to wherever this ran would point at nothing.
@@ -37,25 +43,29 @@ def _env(module: str, brand_dir: str) -> dict[str, str]:
     if module == IMAGE_TOOL:
         env |= {name: os.environ[name] for name in IMAGE_SETTINGS if os.environ.get(name)}
     if brand_dir:
-        # A client's own makers are pinned to its brand folder, so none of their tools open another client's kit, logo or picture.
+        # A client's own makers are told two folders: the client's brand folder, and their own. Their tools write only in their own and show a picture only from it or the brand folder,
+        # and the log and data tools open only that client's jobs. Their own file access outside these tools is not confined by this.
         env["FOUNDRY_BRAND_DIR"] = brand_dir
+        env["FOUNDRY_MAKER_DIR"] = str(folder)
     return env
 
 
-def _server(module: str, brand_dir: str) -> dict:
+def _server(module: str, folder: Path, brand_dir: str) -> dict:
     server = {"command": "uv", "args": ["--directory", str(REPO), "run", "python", "-m", module]}
-    if env := _env(module, brand_dir):
+    if env := _env(module, folder, brand_dir):
         server["env"] = env
     return server
 
 
 def main(agents_dir: str, ending: str = "", brand_dir: str = "") -> None:
-    """With an ending, such as -phatakha, writes the folders of that client's own makers, whose names carry it. With none, the shared makers' folders."""
+    """With an ending, such as -phatakha, and the client's brand folder, writes the folders of that client's own makers, whose names carry it. With neither, the shared makers' folders."""
+    if bool(ending) != bool(brand_dir):
+        raise SystemExit(NEEDS_BOTH)
     for agent, modules in SERVERS.items():
         folder = Path(agents_dir) / f"{agent}{ending}"
         folder.mkdir(parents=True, exist_ok=True)
         modules = [*modules, IMAGE_TOOL] if images_on() else modules
-        config = {"mcpServers": {NAMES.get(module, agent): _server(module, brand_dir) for module in modules}}
+        config = {"mcpServers": {NAMES.get(module, agent): _server(module, folder, brand_dir) for module in modules}}
         (folder / ".mcp.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
         print(f"{folder.name}: {folder / '.mcp.json'}")
 

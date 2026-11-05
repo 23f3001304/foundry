@@ -6,7 +6,7 @@ import os
 
 import httpx
 from foundry.daily import check_packs
-from foundry.desk import Desk, Settings, run
+from foundry.desk import SHARED_AGENTS, Desk, Settings, run
 from foundry.gates import QueuedCardGate
 from foundry.intake import default_llm
 from foundry.jobs import JobStore
@@ -25,6 +25,8 @@ def main() -> None:
         raise SystemExit("Set FOUNDRY_ROOMS first. tools/create_rooms.py writes it for you.")
     if problems := check_packs(settings):
         raise SystemExit("\n".join(problems))
+    for room in settings.shared_agency_rooms():
+        logging.warning(SHARED_AGENTS.format(room=room))
     client = SwitchClient(os.environ["SWITCH_URL"], os.environ["FOUNDRY_DESK_ID"], os.environ["FOUNDRY_DESK_KEY"])
     store = JobStore(settings.jobs_path)
     cleanup_llm = default_llm(os.environ.get("FOUNDRY_CLEANUP_MODEL", "claude-sonnet-5-5"))

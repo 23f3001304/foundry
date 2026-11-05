@@ -16,6 +16,7 @@ from pptx.util import Pt
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
 from foundry.checks import figure
+from foundry.tools import confine
 from foundry.tools.layout import LINE_SPACING, MakerError, fit_size, load_font, wrap
 
 mcp = MCPServer("foundry-deck")
@@ -24,6 +25,7 @@ WIDTH, HEIGHT = 960, 540
 TITLE_ONLY = 5
 BULLET_GAP = 16
 MOST_TABLE_COLUMNS = 8
+MOST_PROPERTY_CHARS = 255
 # A table's words are sized to the largest of these that lets the whole table fit, and a cell keeps this much room around its words.
 TABLE_SIZES = (20, 9)
 CELL_PAD = 6
@@ -284,15 +286,15 @@ def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
 
 
 def _chart_record(path: Path) -> str:
-    # What draw_chart wrote beside a chart: its title, labels and figures.
+    # What draw_chart wrote beside a chart: its title, labels and figures. Only beside a picture the tool may show, so the words of one that is another client's are never read.
     try:
-        return Path(f"{path}.txt").read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        return Path(f"{confine.picture(str(path))}.txt").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, MakerError):
         return ""
 
 
 def _picture(path_text: str) -> tuple[Path, tuple[int, int]]:
-    path = Path(path_text)
+    path = confine.picture(path_text)
     if not path.is_file():
         raise MakerError(f"There is no picture at {path_text}. Give the absolute path of a {' or '.join(PICTURE_KINDS)} file.")
     if path.suffix.lower() not in PICTURE_KINDS:
@@ -395,10 +397,21 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     label is the name job_facts shows for that entry, a comma, and the date and time it shows, written as in the example. The slide prints them as a small line, and the links are saved beside the deck.
     sources does the same for the title slide, which is all a one-slide deck has.
     """
+    if Path(out_path).suffix.lower() != ".pptx":
+        raise MakerError(f"A deck is saved as a .pptx, so out_path must end in .pptx, not {Path(out_path).suffix!r}.")
     brand = load_brand_dir(brand_dir)
+    # A client's own makers write only in their own folder, and show pictures only from it and the client's brand folder. Both are settled before any of the deck is built.
+    path = confine.output(out_path)
+    for spec in slides:
+        if isinstance(spec, dict) and spec.get("layout") == "picture" and isinstance(spec.get("path"), str):
+            confine.picture(spec["path"])
     deck = Presentation()
     deck.slide_width, deck.slide_height = Pt(WIDTH), Pt(HEIGHT)
     _apply_theme(deck, brand)
+    # The library's own author is a real person's name, which does not belong on a client's work. The file is the brand's.
+    deck.core_properties.author = deck.core_properties.last_modified_by = brand.name
+    # A file property holds at most 255 characters, and a title too long for that is the deck's own problem to say, which the slide's check does, so it is cut here and not refused.
+    deck.core_properties.title = "".join(character for character in " ".join(title.split()) if character.isprintable())[:MOST_PROPERTY_CHARS]
     _title_slide(deck, brand, title, subtitle, highlight)
     links = _sources_of({"title": title, "sources": sources}, 1)
     if links:
@@ -412,7 +425,6 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
         if given:
             _print_sources(deck.slides[-1], brand, given, spec["layout"])
             links += given
-    path = Path(out_path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     deck.save(str(path))
     write_links(path, links)

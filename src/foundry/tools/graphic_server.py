@@ -7,6 +7,7 @@ from mcp.server.mcpserver import MCPServer
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 from foundry.brand import Brand, load_brand_dir
+from foundry.tools import confine
 from foundry.tools.layout import LINE_SPACING, MakerError, check_font_can_draw, fit_size, load_font, rgb, wrap
 
 mcp = MCPServer("foundry-visual")
@@ -65,8 +66,9 @@ def render_graphic(brand_dir: str, headline: str, subline: str, size: str, out_p
         raise MakerError(f"The highlight must be words from the headline. {highlight!r} is not in {headline!r}.")
     width, height = _parse_size(size)
     brand = load_brand_dir(brand_dir)
+    # A client's own makers write only in their own folder, so this is settled before anything is drawn.
+    path = confine.output(out_path)
     canvas = _compose(brand, headline, subline, width, height, highlight)
-    path = Path(out_path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(path)
     # The desk cannot read an image, so the words it drew go beside it for the number check.

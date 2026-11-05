@@ -20,7 +20,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-MODEL = os.environ.get("FOUNDRY_IMAGE_MODEL", "gemini-nano-banana-2.1")
+# An empty setting, as .env.example writes it, is no setting.
+MODEL = os.environ.get("FOUNDRY_IMAGE_MODEL", "").strip() or "gemini-nano-banana-2.1"
 ROOT = Path(__file__).resolve().parent.parent
 RAW = ROOT / "assets" / "raw"
 GRID, COLOURS, CELL, CANVAS = 115, 30, 4, 512

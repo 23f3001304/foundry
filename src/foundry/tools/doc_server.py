@@ -13,6 +13,7 @@ from mcp.server.mcpserver import MCPServer
 from PIL import Image
 
 from foundry.brand import Brand, load_brand_dir
+from foundry.tools import confine
 from foundry.tools.image_server import images_on
 from foundry.tools.layout import LINE_SPACING, MakerError, check_font_can_draw, fit_size, load_font, wrap
 
@@ -184,9 +185,10 @@ def write_copy(brand_dir: str, title: str, sections: list[dict], out_path: str) 
     """
     if not isinstance(title, str) or not title.strip():
         raise MakerError(NO_TITLE)
-    path = Path(out_path).resolve()
-    if path.suffix.lower() != ".pdf":
-        raise MakerError(NOT_A_PDF.format(suffix=path.suffix))
+    if Path(out_path).suffix.lower() != ".pdf":
+        raise MakerError(NOT_A_PDF.format(suffix=Path(out_path).suffix))
+    # A client's own makers write only in their own folder.
+    path = confine.output(out_path)
     sections = _with_the_pictures_note(_checked(sections))
     brand = load_brand_dir(brand_dir)
     title = title.strip()

@@ -22,6 +22,7 @@ from foundry.jobs import Job
 from foundry.log import Entry, Log
 from foundry.tables import Row, Table, address, column_named, is_file_answer, is_under, job_folder, read_file, squash, words
 from foundry.text import quiet
+from foundry.tools import confine
 from foundry.tools.layout import MakerError, check_font_can_draw, load_font
 from foundry.tools.log_server import _job, _path
 
@@ -669,9 +670,10 @@ def draw_chart(brand_dir: str, title: str, labels: list[str], values: list[float
     brand = load_brand_dir(brand_dir)
     kind = kind.strip().lower()
     _check(brand, title, labels, values, kind)
-    path = Path(out_path).resolve()
-    if path.suffix.lower() != ".png":
-        raise MakerError(CHART_PNG.format(suffix=path.suffix))
+    if Path(out_path).suffix.lower() != ".png":
+        raise MakerError(CHART_PNG.format(suffix=Path(out_path).suffix))
+    # A client's own makers write only in their own folder.
+    path = confine.output(out_path)
     shown = [_text(value) for value in values]
     canvas = _draw(brand, title, labels, values, shown, kind)
     path.parent.mkdir(parents=True, exist_ok=True)

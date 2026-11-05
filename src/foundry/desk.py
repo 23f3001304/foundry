@@ -80,7 +80,7 @@ from foundry.log import Entry, Log
 from foundry.pack import Pack, PackError, load_pack
 from foundry.stickers import branded_sticker, sticker_for
 from foundry.switch_client import Outcome, SwitchClient
-from foundry.text import headline, quiet
+from foundry.text import headline, on_the_network, quiet
 from foundry.voice import Transcript, VoiceError, speak, transcribe, translate
 
 logger = logging.getLogger(__name__)
@@ -104,6 +104,7 @@ REVIEW_FAIL = "REVIEW_FAIL"
 # Agents sometimes address the desk before the marker, so a leading mention is allowed.
 MARKER = re.compile(rf"(?:@\S+\s+)*({BRIEF_READY}|{WORK_READY}|{WORK_BLOCKED}|{REVIEW_PASS}|{REVIEW_FAIL})(?:\s+#(\w+))?(?:\s+(.*))?", re.DOTALL)
 FILE_KINDS = {".pptx", ".png", ".jpg", ".jpeg", ".pdf"}
+NOT_YOUR_FOLDER = "I can't use a file that isn't in your own folder. Give the absolute path of each file in your own folder, ending in {kinds}. Start your reply with {ready} #{tag}."
 SIGNOFF = "Approve to deliver this work, or ask for changes."
 REVIEWER_SAID = "The reviewer passed it and said: {words}"
 # Short enough that the cut words and the sign-off line still fit on the card, because a longer card goes above it as a message.
@@ -230,8 +231,29 @@ class CheckedLink(NamedTuple):
 
 
 def deliverable(path: str) -> bool:
+    # A path on another machine is never asked about, because asking contacts it.
+    if on_the_network(path):
+        return False
     file = Path(path)
     return file.is_absolute() and file.suffix.lower() in FILE_KINDS and file.is_file()
+
+
+# What an agent's own working folder is called, whoever it is for.
+AGENT_FOLDER = re.compile(r"foundry-(?:brief|deck|visual|reviewer)(?:-.*)?", re.IGNORECASE)
+
+
+def in_own_folders(path: str, agents: tuple[str, ...]) -> bool:
+    """Whether a file is in the working folder of one of these agents, by where it really is. A link, a `..` or other letters on Windows lead where they lead on the disk.
+
+    Every agent's folder it is inside has to be one of these, so a folder of another client's agent, or the shared agents', inside this one's or around it, does not count.
+    """
+    if on_the_network(path):
+        return False
+    try:
+        inside = {part.casefold() for part in Path(os.path.realpath(path)).parts[:-1] if AGENT_FOLDER.fullmatch(part)}
+    except (OSError, ValueError):
+        return False
+    return bool(inside) and inside <= {agent.casefold() for agent in agents}
 
 
 def file_paths(text: str) -> list[str]:
@@ -317,6 +339,10 @@ class Settings:
         rooms = next((rooms for outside, rooms in self.workrooms.items() if room_id in (outside, rooms.studio, rooms.review)), None)
         return team_named(rooms.agents if rooms else "")
 
+    def shared_agency_rooms(self) -> list[str]:
+        # An agency client's room has its own studio and review rooms. With no ending it is asking the agents shared with other businesses, which a person may not mean.
+        return [outside for outside, rooms in self.workrooms.items() if rooms.studio != rooms.review and not rooms.agents]
+
     def inside_rooms(self) -> set[str]:
         return {room for rooms in self.workrooms.values() for room in (rooms.studio, rooms.review)}
 
@@ -361,10 +387,33 @@ class Settings:
         )
 
 
+class RoomsError(PackError):
+    """FOUNDRY_ROOMS has an entry the desk cannot use. It stops the desk at start, as a pack's mistake does, and says which entry."""
+
+
+# An agent's name may hold lowercase letters, digits, dots, hyphens and underscores. An ending is a hyphen and then a name made from the first three.
+ENDING = re.compile(r"-[a-z][a-z0-9-]*")
+ROOMS_ENTRY = (
+    "I can't read FOUNDRY_ROOMS entry {entry!r}. Write each as outside:studio:review, or as outside:studio:review:-ending for an agency client with agents of its own, "
+    "where the ending is a hyphen and then lowercase letters, digits or hyphens, like -phatakha."
+)
+SHARED_AGENTS = (
+    "The agency room {room} has no agent ending in FOUNDRY_ROOMS, so it uses the shared agents, as other businesses' rooms do. It keeps them until its rooms are made again with tools/create_rooms.py."
+)
+
+
 def _rooms_from(text: str) -> dict[str, Workrooms]:
     # outside:studio:review[:ending], comma-separated. Internal mode names its projects room twice. An agency client's agents carry its ending, such as -phatakha.
-    parts = [entry.strip().split(":") for entry in text.split(",") if entry.strip()]
-    return {outside: Workrooms(studio, review, *ending) for outside, studio, review, *ending in parts}
+    rooms = {}
+    for entry in (part.strip() for part in text.split(",")):
+        if not entry:
+            continue
+        parts = entry.split(":")
+        # A missing or extra part, an empty id, or an ending that would make no agent's name is refused here, because the desk would otherwise ask agents that do not exist.
+        if len(parts) not in (3, 4) or not all(parts[:3]) or (len(parts) == 4 and not ENDING.fullmatch(parts[3])):
+            raise RoomsError(ROOMS_ENTRY.format(entry=entry))
+        rooms[parts[0]] = Workrooms(*parts[1:])
+    return rooms
 
 
 def _named_brands(text: str) -> dict[str, str]:
@@ -578,6 +627,16 @@ class Desk:
             return
         paths = file_paths(text)
         refused = [path for path in paths if not deliverable(path)]
+        # A client with agents of its own takes a file only from those agents' folders, so another client's file, which a maker could name, is never taken, checked or delivered.
+        # A room with the shared agents takes a file from anywhere, as it always did. A refused file's path is not repeated, because it may name another client.
+        agents = self.settings.team_for(job.room_id).makers if self.settings.workrooms_for(job.room_id).agents else None
+        strangers = [path for path in paths if path not in refused and agents is not None and not in_own_folders(path, agents)]
+        if strangers and not refused:
+            self.client.post_message(
+                self.settings.workrooms_for(job.room_id).studio,
+                f"@{maker} {NOT_YOUR_FOLDER.format(kinds=', '.join(sorted(FILE_KINDS)), ready=WORK_READY, tag=job.id[:6])}",
+            )
+            return
         if refused:
             kinds = ", ".join(sorted(FILE_KINDS))
             self.client.post_message(

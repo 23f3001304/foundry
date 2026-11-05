@@ -8,6 +8,8 @@ from pathlib import Path
 import yaml
 from mcp.server.mcpserver.exceptions import ToolError
 
+from foundry.text import on_the_network
+
 # The opening is dashes and the end of the line, and nothing that can be matched more than one way. A pattern that could take the line breaks after the dashes in more than one way took longer for every one of them.
 FRONT_MATTER = re.compile(r"\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n(.*))?\Z", re.DOTALL)
 # What a deck, a prompt or a file name can't take inside a word: the controls, which XML refuses. A voice may run over several lines, so it may have those.
@@ -112,15 +114,38 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
     return Brand(name, colours, fonts, voice, logo_path, guidance.strip(), style, business_type)
 
 
+BRAND_PIN = "FOUNDRY_BRAND_DIR"
 PINNED = "This tool works only for the brand folder {pinned}, and {asked} is not it."
+# The same name in another place: the pin names where the folder was when the makers were set up.
+MOVED = "This tool was set up for {pinned}, and {asked} is not that folder. The brands folder has moved since the makers were set up, so run tools/setup_makers.py again for this client."
+ANOTHER_MACHINE = "a path on another machine"
+
+
+def pinned_folder() -> Path | None:
+    # A client's own makers are started with their client's brand folder named here. Blank is none, as for any business whose makers are shared.
+    text = os.environ.get(BRAND_PIN, "").strip()
+    return Path(text) if text else None
+
+
+def _the_pin_allows(asked: Path | str, pinned: Path) -> None:
+    # Whether it is the pinned folder is a matter of where it really is, so a spelling in other letters or through a link is the same folder and a copy of the same name elsewhere is not.
+    # A path on another machine is refused as it is written, because finding out where it is would contact that machine.
+    if on_the_network(str(asked)):
+        raise BrandError(PINNED.format(pinned=pinned.name, asked=ANOTHER_MACHINE))
+    if on_the_network(str(pinned)):
+        raise BrandError(PINNED.format(pinned=ANOTHER_MACHINE, asked=Path(asked).name))
+    if os.path.normcase(os.path.realpath(asked)) == os.path.normcase(os.path.realpath(pinned)):
+        return
+    if Path(asked).name.casefold() == pinned.name.casefold():
+        raise BrandError(MOVED.format(pinned=pinned, asked=asked))
+    raise BrandError(PINNED.format(pinned=pinned.name, asked=Path(asked).name))
 
 
 def load_brand_dir(brand_dir: Path | str) -> Brand:
     folder = Path(brand_dir)
-    # A client's own makers are started with their client's brand folder named here, so their tools open no other client's kit, logo or picture.
-    pinned = os.environ.get("FOUNDRY_BRAND_DIR")
-    if pinned and folder.resolve() != Path(pinned).resolve():
-        raise BrandError(PINNED.format(pinned=Path(pinned).name, asked=folder.name))
+    # So their tools open no other client's kit, logo or picture.
+    if (pinned := pinned_folder()) is not None:
+        _the_pin_allows(brand_dir, pinned)
     kit = folder / "kit.md"
     if not kit.exists():
         # The brand's name and not where it is kept, since this reaches pages and the makers.

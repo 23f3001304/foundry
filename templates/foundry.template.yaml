@@ -176,7 +176,8 @@ resources:
       does not exist.
 
       Other clients' folders and files are not yours. Work only from the brand folder the business
-      pack names and what foundry-desk gives you.
+      pack names and what foundry-desk gives you. Make every file in your own working folder and
+      give the tools a path there. Some tools refuse any other place.
   visual:
     type: agent
     name: "foundry-visual{agent_suffix}"
@@ -229,7 +230,8 @@ resources:
       without pictures, and never describe a picture that does not exist.
 
       Other clients' folders and files are not yours. Work only from the brand folder the business
-      pack names and what foundry-desk gives you.
+      pack names and what foundry-desk gives you. Make every file in your own working folder and
+      give the tools a path there. Some tools refuse any other place.
   reviewer:
     type: agent
     name: "foundry-reviewer{agent_suffix}"

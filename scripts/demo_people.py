@@ -3,7 +3,7 @@
 uv run --env-file .env python scripts/demo_people.py ensure it_firm
 uv run --env-file .env python scripts/demo_people.py play it_firm [first step]
 
-The scenes are it_firm and investment_firm. A step's file is found beside the scenes, such as data/office-c-q2-fy27.csv.
+The scenes are it_firm, investment_firm and agency. A step's file is found beside the scenes, such as data/office-c-q2-fy27.csv.
 """
 
 import os

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from foundry.brand import pinned_folder
 from foundry.chain import Step, chain_for, name_of, names, visible_entries
 from foundry.checks import shown_words
 from foundry.items import Item, ItemStore, desk_wrote, own_words, status_line
@@ -41,7 +42,9 @@ def _path(name: str) -> str:
 def _job(token: str) -> Job:
     # The bucket comes from the job this token was handed out for. Nothing an agent sends can name one.
     job = JobStore(_path("FOUNDRY_JOBS_DB")).by_token(token)
-    if job is None:
+    pinned = pinned_folder()
+    # A client's own makers are pinned to its brand folder, which is named for its bucket. A token for another client's job gets the words for a token that is nobody's.
+    if job is None or (pinned is not None and job.bucket != pinned.name):
         # A ToolError is shown to the agent as written. Any other error would reach it only as "Error executing tool".
         raise ToolError(UNKNOWN_TOKEN)
     return job

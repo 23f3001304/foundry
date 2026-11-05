@@ -8,6 +8,12 @@ def quiet(text: str | None) -> str:
     return (text or "").replace("@", "@\u200b")
 
 
+def on_the_network(text: str) -> bool:
+    # A path on another machine, written \\host\share, //host/share, /\host or \/host. Asking the system where one really is contacts the host it names, so a check that
+    # goes on to resolve a path asks this first. foundry.tables keeps the same test for the desk's own files.
+    return text.replace("\\", "/").startswith("//")
+
+
 ROOM_OF = "the room of {people}"
 
 
