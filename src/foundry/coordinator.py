@@ -78,6 +78,7 @@ NOT_WRITTEN = "{owner}: has not written in any room, so Foundry can't reach them
 NO_OWNER = "Nobody named yet. {owes} Ask for changes to name someone."
 NOT_ASKED = "{owner} has not been asked for {what}. " + CANT_REACH
 NOT_ASKED_AGAIN = "{owner} has not been asked again for {what}. " + CANT_REACH
+NOT_TAKEN = "{owner} has not been asked for {what}, because the message did not go through. It stays on the list, and you can ask someone else for it."
 NOBODY_NAMED = "Nobody is named for {what}, so Foundry has nobody to ask."
 ASK = "{owner}, {asker} needs {what}.\nFor: {job}\nExact measure: {measure}\nDue: {due}\nReply here with text, a voice note or a file."
 ASK_AGAIN_TEXT = "{owner}, {asker} is asking again for {what}.\nFor: {job}\nExact measure: {measure}\nDue: {due}\nReply here with text, a voice note or a file."
@@ -108,8 +109,9 @@ WAITING_TO_CONFIRM = "waiting for them to confirm what Foundry heard"
 NOBODY = "nobody named"
 CANT_REACH_THEM = "Foundry can't reach them."
 NO_REMINDER_SENT = "Foundry couldn't send a reminder, because their last message on WhatsApp was over 24 hours ago."
-NO_REMINDER_WENT = "Foundry sent no reminder, because they had another card open or its time fell outside working hours."
+NO_REMINDER_WENT = "Foundry sent no reminder."
 REMINDER_SKIPPED = "No reminder was sent to {owner} for {input} before the due time."
+NOBODY_TO_REMIND = "No reminder was sent for {input} before the due time, because nobody is named for it."
 STATUS_NO_REMINDER = "Foundry can't send {names} a reminder, because their last message on WhatsApp was over 24 hours ago"
 DUE_CLOSED = "Nothing the card for {title} listed is waiting on anyone now, so I closed it."
 WHO_INSTEAD = "Who should I ask instead of {owner} for {what}? Write their name here."
@@ -686,7 +688,8 @@ class Coordinator:
         said = {entry.item_id for entry in self.log.for_job(job.bucket, job.id) if entry.kind == "reminder_skipped"}
         for item in due:
             if self._reminder_wanted(item) and item.id not in said:
-                text = REMINDER_SKIPPED.format(owner=self._owner_name(item) or NOBODY, input=item.input)
+                owner = self._owner_name(item)
+                text = REMINDER_SKIPPED.format(owner=owner, input=item.input) if owner else NOBODY_TO_REMIND.format(input=item.input)
                 self.log.add(now, item.bucket, item.room_id, DESK_NAME, "reminder_skipped", text, sender_name=DESK_NAME, job_id=job.id, item_id=item.id)
 
     def _due_cards(self, job: Job, *states: str) -> list[Card]:
@@ -1227,12 +1230,20 @@ class Coordinator:
             logger.warning("Could not ask %s for item %s: %s", new.owner_name, new.id, error)
             new.reachable, new.asked_at = False, self.clock()
             self.items.save(new)
+            self._say_not_taken(job, new)
         if new.reachable:
             self._tell(tell_room, ASKED_INSTEAD.format(new=quiet(new.owner_name), input=quiet(item.input), old=quiet(item.owner_name)))
         # If the asker was told how to hand one over and has now done it, the others don't wait out the rest of the wait.
         for card in self._due_cards(job, ANSWERED):
             if card.data.get(AWAITING_TYPED):
                 self.cards.note(card.request_id, **{AWAITING_TYPED: None})
+
+    def _say_not_taken(self, job: Job, item: Item) -> None:
+        # The hand-over is saved by now and nothing tries it again, so not being able to say so must not undo it.
+        try:
+            self.client.post_message(job.room_id, NOT_TAKEN.format(owner=quiet(_one_line(item.owner_name)), what=quiet(item.input)))
+        except httpx.HTTPError as error:
+            logger.warning("Could not tell the asker of job %s that %s was not asked: %s", job.id, item.owner_name, error)
 
     def _status(self, heard: _Heard) -> bool:
         # Only a short question gets a status. A longer message may be a note with a question in it, and a note is never swallowed.

@@ -30,6 +30,13 @@ def _set_times(named: object = None) -> tuple[str, ...]:
     return override or _clock_times(named or ()) or DEFAULT_SET_TIMES
 
 
+def _working_hours(named: object = None) -> tuple[str, ...]:
+    # YAML reads a lone 09:00 as the number 540, and a quoted one would be read a character at a time.
+    if named is not None and not (isinstance(named, list) and len(named) in (0, 2)):
+        raise PackError(f"I can't read working_hours {named!r} in the pack. Write it as a list of a start and an end, like [09:00, 19:00].")
+    return _clock_times(named or Pack.working_hours)
+
+
 DASHBOARD_LINE = "{login: manager-a, acts_as: '@manager-a:localhost'}"
 
 
@@ -104,7 +111,7 @@ def load_pack(brand_dir: Path | str) -> Pack:
         approver=_approver(data.get("approver")),
         set_times=_set_times(data.get("set_times")),
         jump_share=float(data.get("jump_share", Pack.jump_share)),
-        working_hours=_clock_times(data.get("working_hours") or Pack.working_hours),
+        working_hours=_working_hours(data.get("working_hours")),
         ask_again_hours=int(data.get("ask_again_hours", Pack.ask_again_hours)),
         measures=tuple(data.get("measures") or ()),
         dashboard=_dashboard(data.get("dashboard")),
