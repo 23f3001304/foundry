@@ -2,6 +2,7 @@
 
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from lxml import etree
@@ -16,9 +17,9 @@ from pptx.util import Pt
 
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
-from foundry.checks import PERIOD, figure
+from foundry.checks import PERIOD, figure, outliers
 from foundry.tools import confine
-from foundry.tools.layout import LINE_SPACING, MakerError, contrast, fit_size, load_font, mix, wrap
+from foundry.tools.layout import LINE_SPACING, NOT_RECEIVED, MakerError, contrast, fit_size, load_font, mix, words_of, wrap
 
 mcp = MCPServer("foundry-deck")
 
@@ -30,6 +31,15 @@ MOST_PROPERTY_CHARS = 255
 # A table's words are sized to the largest of these that lets the whole table fit, and a cell keeps this much room around its words.
 TABLE_SIZES = (20, 9)
 CELL_PAD = 6
+# Figures are the point of a table, so they are this much larger than its words, and the lit one larger again. With more than two columns of them there is no room, and they stay the size of the words.
+FIGURE_SCALE, LIT_SCALE, MOST_FIGURE, MOST_LIT, MOST_LARGE_COLUMNS = 2.5, 1.3, 44, 56, 2
+HEADING_SMALLER = 4
+# Space between a figure and the words in the next column, because a figure lines up on its right.
+FIGURE_GAP = 14
+# Rows take up the room there is, to this height. A word this large or larger gets its whole line beside the title, or the table goes under the title where it is wider.
+TALLEST_FIGURE_ROW, TALLEST_WORD_ROW, ONE_LINE_FROM = 88, 44, 13
+SIDE_TITLE_WIDTH, SIDE_TITLE_HEIGHT, SIDE_GAP = 290, 300, 28
+NO_STYLE_NO_GRID = "{2D5ABB26-0587-4C30-8999-92F81FD0307C}"
 # A little more than the padding, because PowerPoint sets a word slightly wider than the measure here does.
 WORD_SLACK = 4
 RULE_WIDTH = 9525
@@ -44,6 +54,8 @@ NARROW_SOURCE_BOX = (56, 500, 580, 28)
 SOURCE_SIZES = (11, 7)
 SOURCE_SHAPE = 'Each source is {"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 IST"}.'
 SOLID, BAND = "solid", "band"
+# Said on the slide beside a figure far from the others, so the reader does not take it for a mistake and does not have to find it themselves. The figure stays as it was given.
+FAR_OFF = "{names}: far from the others. Shown as given."
 # The accent is deepened only as far as it takes to read at this contrast, the web's measure for large type.
 LIT_CONTRAST = 3
 READ_CONTRAST = 4.5
@@ -258,11 +270,13 @@ def _one_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, bull
 
 
 def _cell_text(cell: object) -> str:
+    # A null is a figure nobody sent. It is said in words, so there is never a number in its place and never an empty cell that could be read as nothing.
     if cell is None:
-        return ""
+        return NOT_RECEIVED
     if isinstance(cell, float) and cell.is_integer():
         return str(int(cell))
-    return str(cell).strip()
+    text = str(cell).strip()
+    return NOT_RECEIVED if text.casefold() == NOT_RECEIVED else text
 
 
 def _table_cells(spec: dict) -> list[list[str]]:
@@ -271,7 +285,7 @@ def _table_cells(spec: dict) -> list[list[str]]:
         raise MakerError(ROWS_SHAPE)
     if len(rows) < 2:
         raise MakerError("A table needs its headings and at least one row under them.")
-    cells = [[_cell_text(cell) for cell in row] for row in rows]
+    cells = [[_periods_together(_cell_text(cell)) for cell in row] for row in rows]
     columns = len(cells[0])
     if not columns:
         raise MakerError("A table needs at least one column.")
@@ -283,40 +297,109 @@ def _table_cells(spec: dict) -> list[list[str]]:
     return cells
 
 
-def _row_height(brand: Brand, row: list[str], widths: list[float], size: int, header: bool) -> float:
-    font = load_font(brand.font_file("heading" if header else "body"), size)
-    lines = max(len(wrap(text, font, max(width - 2 * CELL_PAD, 10))) for text, width in zip(row, widths))
-    return lines * size * LINE_SPACING + 2 * CELL_PAD
+def _column_of_figures(cells: list[list[str]], at: int) -> bool:
+    # Words saying a figure did not come, and a blank, say nothing about what the column holds.
+    given = [row[at] for row in cells[1:] if row[at] and row[at] != NOT_RECEIVED]
+    return bool(given) and all(figure(text) is not None for text in given)
 
 
-def _column_widths(brand: Brand, cells: list[list[str]], width: int, size: int) -> list[float] | None:
+def _lit_row(cells: list[list[str]], measure: int | None, highlight: str) -> int | None:
+    # The row a highlight names. With no highlight, the largest figure in the column that matters. A highlight that is only in the title has lit the title, and the accent is for one thing.
+    if highlight:
+        return next((number for number, row in enumerate(cells) if number and any(highlight in text for text in row)), None)
+    if measure is None:
+        return None
+    given = [(figure(row[measure]), number) for number, row in enumerate(cells) if number and figure(row[measure]) is not None]
+    return max(given, key=lambda pair: pair[0])[1] if given else None
+
+
+@dataclass(frozen=True)
+class TableFit:
+    size: int
+    widths: list[float]
+    heights: list[float]
+    # The font's role and size of each cell.
+    fonts: list[list[tuple[str, int]]]
+    one_line: bool
+
+
+@lru_cache(maxsize=256)
+def _measured(path: Path | None, size: int):
+    return load_font(path, size)
+
+
+def _cell_fonts(cells: list[list[str]], figures: list[bool], lit: int | None, measure: int | None, size: int) -> list[list[tuple[str, int]]]:
+    large = sum(figures[1:]) <= MOST_LARGE_COLUMNS
+    plain = min(MOST_FIGURE, round(size * FIGURE_SCALE)) if large else size
+    brightest = min(MOST_LIT, round(plain * LIT_SCALE)) if large else plain
+
+    def font(number: int, at: int) -> tuple[str, int]:
+        if number == 0:
+            return "heading", max(TABLE_SIZES[1], size - HEADING_SMALLER)
+        if figures[at] and at > 0 and figure(cells[number][at]) is not None:
+            return "heading", brightest if number == lit and at == measure else plain
+        return "body", size
+
+    return [[font(number, at) for at in range(len(row))] for number, row in enumerate(cells)]
+
+
+def _width_of(brand: Brand, font: tuple[str, int], text: str) -> float:
+    return _measured(brand.font_file(font[0]), font[1]).getlength(text)
+
+
+def _column_widths(brand: Brand, cells: list[list[str]], fonts: list[list[tuple[str, int]]], figures: list[bool], width: float) -> tuple[list[float], bool] | None:
     # Every column is at least as wide as its longest word, so no word is ever cut in two. A cell below the headings gets its whole line if the slide has room,
     # and a heading may wrap. None when the words alone are wider than the slide at this size.
-    fonts = [load_font(brand.font_file("heading"), size)] + [load_font(brand.font_file("body"), size)] * (len(cells) - 1)
-    pad = 2 * CELL_PAD + WORD_SLACK
-    narrowest = [max((font.getlength(word) for row, font in zip(cells, fonts) for word in row[at].split()), default=0) + pad for at in range(len(cells[0]))]
+    columns = range(len(cells[0]))
+    pads = [2 * CELL_PAD + WORD_SLACK + (FIGURE_GAP if figures[at] and at < len(figures) - 1 else 0) for at in columns]
+    narrowest = [max((_width_of(brand, fonts[number][at], word) for number, row in enumerate(cells) for word in words_of(row[at])), default=0) + pads[at] for at in columns]
     if sum(narrowest) > width:
         return None
-    widest = [max(least, max((fonts[1].getlength(row[at]) for row in cells[1:]), default=0) + pad) for at, least in enumerate(narrowest)]
+    widest = [max(narrowest[at], max((_width_of(brand, fonts[number][at], cells[number][at]) for number in range(1, len(cells))), default=0) + pads[at]) for at in columns]
     if sum(widest) <= width:
-        return [wide + (width - sum(widest)) * wide / sum(widest) for wide in widest]
+        return [wide + (width - sum(widest)) * wide / sum(widest) for wide in widest], True
     wanted = [wide - least for wide, least in zip(widest, narrowest)]
-    return [least + (width - sum(narrowest)) * extra / sum(wanted) for least, extra in zip(narrowest, wanted)]
+    return [least + (width - sum(narrowest)) * extra / sum(wanted) for least, extra in zip(narrowest, wanted)], False
 
 
-def _fit_table(brand: Brand, cells: list[list[str]], width: int, height: int) -> tuple[int, list[float], list[float]]:
-    # The words are as large as they can be with the whole table on the slide, and each column is wide enough for its words.
-    wide_enough = False
+def _row_height(brand: Brand, row: list[str], fonts: list[tuple[str, int]], widths: list[float]) -> float:
+    return max(len(wrap(text, _measured(brand.font_file(font[0]), font[1]), max(width - 2 * CELL_PAD, 10))) * font[1] * LINE_SPACING for text, font, width in zip(row, fonts, widths)) + 2 * CELL_PAD
+
+
+def _fit_table(brand: Brand, cells: list[list[str]], figures: list[bool], lit: int | None, measure: int | None, width: float, height: float) -> tuple[TableFit | None, bool]:
+    # The words are as large as they can be with the whole table in the room, and each column is wide enough for its words. A size that keeps every cell on one line is taken over a larger one that does not.
+    fits, wide_enough = [], False
     for size in range(TABLE_SIZES[0], TABLE_SIZES[1] - 1, -1):
-        widths = _column_widths(brand, cells, width, size)
-        if widths is None:
+        fonts = _cell_fonts(cells, figures, lit, measure, size)
+        columns = _column_widths(brand, cells, fonts, figures, width)
+        if columns is None:
             continue
         wide_enough = True
-        heights = [_row_height(brand, row, widths, size, header=number == 0) for number, row in enumerate(cells)]
+        widths, one_line = columns
+        heights = [_row_height(brand, row, row_fonts, widths) for row, row_fonts in zip(cells, fonts)]
         if sum(heights) <= height:
-            return size, widths, heights
-    # Too tall when the words fit across the slide at some size and the rows still do not fit down it, and too wide when no size lets the words sit side by side.
-    raise MakerError(TABLE_TOO_TALL if wide_enough else TABLE_TOO_WIDE)
+            fits.append(TableFit(size, widths, _with_room(heights, height, any(figures[1:])), fonts, one_line))
+    return next((fit for fit in fits if fit.one_line and fit.size >= ONE_LINE_FROM), fits[0] if fits else None), wide_enough
+
+
+def _with_room(heights: list[float], height: float, has_figures: bool) -> list[float]:
+    # The rows under the headings share the room left, each up to the tallest a row should be, so a short table is not squeezed into the top of the slide.
+    tallest, spare = (TALLEST_FIGURE_ROW if has_figures else TALLEST_WORD_ROW), height - sum(heights)
+    rows = len(heights) - 1
+    return heights[:1] + [max(high, min(tallest, high + spare / rows)) for high in heights[1:]]
+
+
+def _far_off(labels: list[str], values: list[object]) -> str:
+    # What a slide says about a figure far from the others, or nothing when none is. A figure nobody sent is not one of them.
+    known = ["" if value is None or value == NOT_RECEIVED else value for value in values]
+    names = [labels[place] for place in outliers(known)]
+    return FAR_OFF.format(names=" and ".join(dict.fromkeys(names))) if names else ""
+
+
+def _table_flag(cells: list[list[str]], figures: list[bool]) -> str:
+    labels = [row[0] for row in cells[1:]]
+    names = [labels[place] for at in range(1, len(figures)) if figures[at] for place in outliers([row[at] for row in cells[1:]])]
+    return FAR_OFF.format(names=" and ".join(dict.fromkeys(names))) if names else ""
 
 
 def _underline(cell, look: Look) -> None:
@@ -326,38 +409,74 @@ def _underline(cell, look: Look) -> None:
     cell._tc.get_or_add_tcPr().insert(0, line)
 
 
-def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
-    title = _required(spec, "title", "table")
-    cells = _table_cells(spec)
-    highlight = spec.get("highlight", "")
-    _check_highlight(highlight, title)
-    slide, look, (left, top, width, height) = _titled_slide(deck, brand, title, highlight)
-    size, widths, heights = _fit_table(brand, cells, width, height)
-    table = slide.shapes.add_table(len(cells), len(cells[0]), Pt(left), Pt(top), Pt(width), Pt(sum(heights))).table
-    table.horz_banding = False
-    for at, column_width in enumerate(widths):
+def _cell_colour(look: Look, text: str, number: int, at: int, large: bool, lit: bool) -> str:
+    if number == 0 or text == NOT_RECEIVED:
+        return look.soft
+    if lit:
+        return look.lit
+    return look.words if at == 0 or large else look.soft
+
+
+def _set_table(slide, brand: Brand, look: Look, cells: list[list[str]], figures: list[bool], fit: TableFit, left: int, top: int, lit: int | None, measure: int | None, highlight: str) -> None:
+    table = slide.shapes.add_table(len(cells), len(cells[0]), Pt(left), Pt(top), Pt(sum(fit.widths)), Pt(sum(fit.heights))).table
+    table.first_row = table.horz_banding = False
+    # So that every line and fill on the table is one chosen here, and a theme's own table style adds none.
+    table._tbl.tblPr.find(f"{DRAWING}tableStyleId").text = NO_STYLE_NO_GRID
+    for at, column_width in enumerate(fit.widths):
         table.columns[at].width = Pt(column_width)
-    # A column of figures is lined up on its right, and so is its heading.
-    figures = [any(row[at] for row in cells[1:]) and all(figure(row[at]) is not None for row in cells[1:] if row[at]) for at in range(len(widths))]
     for number, row in enumerate(cells):
-        header = number == 0
-        table.rows[number].height = Pt(heights[number])
+        table.rows[number].height = Pt(fit.heights[number])
         for at, text in enumerate(row):
             cell = table.cell(number, at)
-            cell.fill.solid()
-            cell.fill.fore_color.rgb = _rgb(look.title if header else look.ground)
-            cell.margin_left = cell.margin_right = cell.margin_top = cell.margin_bottom = Pt(CELL_PAD)
-            cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+            cell.fill.background()
+            cell.margin_top = cell.margin_bottom = Pt(CELL_PAD)
+            cell.margin_left = Pt(CELL_PAD if at else 0)
+            cell.margin_right = Pt(CELL_PAD + (FIGURE_GAP if figures[at] and at < len(row) - 1 else 0))
+            cell.vertical_anchor = MSO_ANCHOR.BOTTOM if number == 0 else MSO_ANCHOR.MIDDLE
             cell.text_frame.word_wrap = True
             paragraph = cell.text_frame.paragraphs[0]
+            # A column of figures is lined up on its right, and so is its heading and any figure that did not come.
             paragraph.alignment = PP_ALIGN.RIGHT if figures[at] else PP_ALIGN.LEFT
+            role, size = fit.fonts[number][at]
+            on = number == lit and (at == measure or bool(highlight and highlight in text))
             run = paragraph.add_run()
             run.text = text
             run.font.size = Pt(size)
-            run.font.name = brand.fonts["heading" if header else "body"]
-            run.font.color.rgb = _rgb(look.ground if header else look.words)
-            if not header:
-                _underline(cell, look)
+            run.font.name = brand.fonts[role]
+            run.font.color.rgb = _rgb(_cell_colour(look, text, number, at, role == "heading", on))
+            _underline(cell, look)
+
+
+def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
+    title = _required(spec, "title", "table")
+    cells = _table_cells(spec)
+    highlight = _periods_together(spec.get("highlight", ""))
+    _check_highlight(highlight, _periods_together(title), *(text for row in cells[1:] for text in row))
+    figures = [_column_of_figures(cells, at) for at in range(len(cells[0]))]
+    # The figure that matters is in the last column of figures, the newest in a table of periods, and never the first column, which names the rows.
+    measure = next((at for at in reversed(range(1, len(figures))) if figures[at]), None)
+    lit = _lit_row(cells, measure, highlight)
+    lit_title = "" if lit is not None else highlight
+    flag = _table_flag(cells, figures) if spec.get("sources") else ""
+    look = _look(brand, loud=False)
+    side_left = look.left + SIDE_TITLE_WIDTH + SIDE_GAP
+    beside, _ = _fit_table(brand, cells, figures, lit, measure, BODY_RIGHT - side_left, BODY_BOTTOM - TITLE_TOP)
+    if beside is not None and beside.one_line and beside.size >= ONE_LINE_FROM:
+        slide = _new_slide(deck, look)
+        _title(slide, brand, look, (look.left, TITLE_TOP, SIDE_TITLE_WIDTH, SIDE_TITLE_HEIGHT), title, 34, 16, highlight=lit_title)
+        if flag:
+            _text_box(slide, brand, look, "body", look.words, (look.left, TITLE_TOP + SIDE_TITLE_HEIGHT + 12, SIDE_TITLE_WIDTH, BODY_BOTTOM - TITLE_TOP - SIDE_TITLE_HEIGHT - 12), [flag], 15, 11)
+        _set_table(slide, brand, look, cells, figures, beside, side_left, TITLE_TOP, lit, measure, highlight)
+    else:
+        slide, look, (left, top, width, height) = _titled_slide(deck, brand, title, lit_title)
+        if flag:
+            _text_box(slide, brand, look, "body", look.words, (left, top - 14, width, 22), [flag], 15, 9)
+            top, height = top + 12, height - 12
+        under, wide_enough = _fit_table(brand, cells, figures, lit, measure, width, height)
+        if under is None:
+            # Too tall when the words fit across the slide at some size and the rows still do not fit down it, and too wide when no size lets the words sit side by side.
+            raise MakerError(TABLE_TOO_TALL if wide_enough else TABLE_TOO_WIDE)
+        _set_table(slide, brand, look, cells, figures, under, left, top, lit, measure, highlight)
     _corner_logo(slide, brand, look)
 
 

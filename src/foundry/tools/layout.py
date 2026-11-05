@@ -31,11 +31,15 @@ def check_font_can_draw(text: str, font: ImageFont.FreeTypeFont, role: str) -> N
         raise MakerError(f"The brand's {role} font cannot draw: {' '.join(missing[:10])}. Write this text in a script the font has.")
 
 
+def words_of(text: str) -> list[str]:
+    return list(filter(None, BREAKS.split(text)))
+
+
 def wrap(text: str, font: ImageFont.FreeTypeFont, width: float) -> list[str]:
     lines = []
     for paragraph in text.splitlines():
         line = ""
-        for word in filter(None, BREAKS.split(paragraph)):
+        for word in words_of(paragraph):
             candidate = f"{line} {word}" if line else word
             if font.getlength(candidate) <= width:
                 line = candidate
