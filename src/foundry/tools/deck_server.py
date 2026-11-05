@@ -669,7 +669,8 @@ def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
     _corner_logo(slide, brand, look)
 
 
-@dataclass(frozen=True)
+# Each point is itself, because two can have the same label: Q1 comes round again in a series over time.
+@dataclass(frozen=True, eq=False)
 class Point:
     label: str
     value: float | None
@@ -903,17 +904,17 @@ def _make_chart(deck: Presentation, brand: Brand, spec: dict) -> None:
         limits.append((head_room - _clear_of_stroke(size)) * most / lit.value)
     tallest = min(limits)
     scale = tallest / most
-    tops = {point.label: base - (point.value or 0) * scale for point in points}
-    baseline = min([tops[lit.label] - _clear_of_stroke(size), *(tops[point.label] - figure_high - 4 for point in under)])
+    tops = {point: base - (point.value or 0) * scale for point in points}
+    baseline = min([tops[lit] - _clear_of_stroke(size), *(tops[point] - figure_high - 4 for point in under)])
     _lit_figure(slide, brand, look, lit, hero_left, baseline, size)
     for at, point in enumerate(points):
         lit_one = point is lit and point.value is not None
         if point.value is not None:
-            _stroke(slide, brand, look, point.label, (place[at], tops[point.label], thick, (point.value or 0) * scale), lit_one, upright=True)
+            _stroke(slide, brand, look, point.label, (place[at], tops[point], thick, (point.value or 0) * scale), lit_one, upright=True)
         if point.value is None and point is not lit:
             _line(slide, brand, look, "heading", look.soft, (plot_left + at * pitch + 2, base - 44, pitch - 4, 44), point.written, 16, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.BOTTOM, name=f"{point.label} figure", wraps=True)
         elif point is not lit:
-            _line(slide, brand, look, "heading", look.soft, (plot_left + at * pitch + 2, tops[point.label] - figure_high, pitch - 4, figure_high), point.written, figure_size, point.unit, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.BOTTOM, name=f"{point.label} figure")
+            _line(slide, brand, look, "heading", look.soft, (plot_left + at * pitch + 2, tops[point] - figure_high, pitch - 4, figure_high), point.written, figure_size, point.unit, align=PP_ALIGN.CENTER, anchor=MSO_ANCHOR.BOTTOM, name=f"{point.label} figure")
         label_box = (plot_left + at * pitch + 1, base + 5, pitch - 2, BODY_BOTTOM - base - 5)
         shape = slide.shapes.add_textbox(*(Pt(value) for value in label_box))
         shape.name = f"{point.label} label"
