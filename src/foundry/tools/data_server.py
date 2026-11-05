@@ -94,7 +94,7 @@ MOST_POINTS, MOST_TITLE_CHARS, MOST_LABEL_CHARS = 24, 100, 30
 FIGURE_SIZE, DPI = (8, 4), 200
 NO_MATH = {"text.parse_math": False}
 # A title is wrapped here, and each line of it takes this share of the chart's height.
-TITLE_WIDTH, TITLE_LINE = 45, 0.085
+TITLE_WIDTH, TITLE_LINE, TITLE_SIZE = 45, 0.085, 20
 
 
 # --- reading ---
@@ -636,6 +636,15 @@ def _bars(axes, brand: Brand, labels: list[str], values: list[float | None], sho
     axes.spines["bottom"].set_color(ink)
 
 
+def _chart_title(brand: Brand, title: str) -> str:
+    # At most TITLE_WIDTH characters to a line, and fewer in a wide font, so the title never runs off the side of the chart.
+    font, room = load_font(brand.font_file("heading"), TITLE_SIZE), FIGURE_SIZE[0] * 72 * 0.92
+    width = TITLE_WIDTH
+    while width > 10 and any(font.getlength(line) > room for line in textwrap.wrap(title, width)):
+        width -= 1
+    return textwrap.fill(title, width)
+
+
 def _draw(brand: Brand, title: str, labels: list[str], values: list[float | None], shown: list[str], kind: str) -> Figure:
     paper = brand.colors["paper"]
     # Whatever is written on a chart is words. A $ in it must never start a formula that turns "($M) vs costs ($M)" into italics.
@@ -643,8 +652,8 @@ def _draw(brand: Brand, title: str, labels: list[str], values: list[float | None
         canvas = Figure(figsize=FIGURE_SIZE, dpi=DPI, facecolor=paper)
         axes = canvas.add_subplot()
         axes.set_facecolor(paper)
-        wrapped = textwrap.fill(title, TITLE_WIDTH)
-        canvas.text(0.04, 0.95, wrapped, fontproperties=_font(brand, "heading"), color=brand.colors["primary"], size=20, ha="left", va="top")
+        wrapped = _chart_title(brand, title)
+        canvas.text(0.04, 0.95, wrapped, fontproperties=_font(brand, "heading"), color=brand.colors["primary"], size=TITLE_SIZE, ha="left", va="top")
         # The chart starts below however many lines the title takes.
         top = 0.9 - TITLE_LINE * len(wrapped.splitlines())
         if kind == "pie":
