@@ -23,7 +23,7 @@ from foundry.log import Entry, Log
 from foundry.tables import Row, Table, address, column_named, is_file_answer, is_under, job_folder, read_file, squash, words
 from foundry.text import quiet
 from foundry.tools import confine
-from foundry.tools.layout import MakerError, check_font_can_draw, load_font
+from foundry.tools.layout import MakerError, check_font_can_draw, figure_text, load_font, mix
 from foundry.tools.log_server import _job, _path
 
 mcp = MCPServer("foundry-data")
@@ -520,10 +520,10 @@ def _result_text(result: object) -> str:
     # The figures the way they are written on a slide, each with the group it belongs to. A ranking is listed best first and its positions are not written,
     # because a position is not a figure anyone gave, and written down every number up to the length of the list would count as backed.
     if isinstance(result, dict):
-        return ", ".join(f"{name} {_text(value)}" for name, value in result.items())
+        return ", ".join(f"{name} {figure_text(value)}" for name, value in result.items())
     if isinstance(result, list):
-        return ", ".join(f"{entry['name']} {_text(entry['value'])}" for entry in result)
-    return _text(result)
+        return ", ".join(f"{entry['name']} {figure_text(entry['value'])}" for entry in result)
+    return figure_text(result)
 
 
 def _no_mark(text: str) -> str:
@@ -554,26 +554,15 @@ def clock() -> datetime:
 # --- charts ---
 
 
-def _text(value: float) -> str:
-    # Written so that numbers_in reads it back as the number it was given: digits, with commas between the thousands.
-    text = f"{Decimal(format(value, '.15g')):,f}"
-    return text.rstrip("0").rstrip(".") if "." in text else text
-
-
 def _font(brand: Brand, role: str) -> FontProperties:
     path = brand.font_file(role)
     return FontProperties(fname=str(path)) if path else FontProperties()
 
 
-def _mix(colour: str, other: str, share: float) -> str:
-    # A tint of one brand colour toward another, for a pie with more slices than the brand has colours.
-    mixed = [round(int(colour[at:at + 2], 16) * (1 - share) + int(other[at:at + 2], 16) * share) for at in (1, 3, 5)]
-    return "#" + "".join(f"{part:02X}" for part in mixed)
-
-
 def _slice_colours(brand: Brand, count: int) -> list[str]:
     palette = [brand.colors["primary"], brand.colors["accent"], brand.colors["ink"]]
-    tints = [_mix(colour, brand.colors["paper"], share) for share in (0.35, 0.6) for colour in palette[:2]]
+    # Tints of the brand's colours, for a pie with more slices than the brand has colours.
+    tints = [mix(colour, brand.colors["paper"], share) for share in (0.35, 0.6) for colour in palette[:2]]
     return [(palette + tints)[at % 7] for at in range(count)]
 
 
@@ -674,7 +663,7 @@ def draw_chart(brand_dir: str, title: str, labels: list[str], values: list[float
         raise MakerError(CHART_PNG.format(suffix=Path(out_path).suffix))
     # A client's own makers write only in their own folder.
     path = confine.output(out_path)
-    shown = [_text(value) for value in values]
+    shown = [figure_text(value) for value in values]
     canvas = _draw(brand, title, labels, values, shown, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
     with rc_context(NO_MATH):
