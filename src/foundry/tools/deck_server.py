@@ -348,12 +348,23 @@ def _required(spec: dict, field: str, layout: str) -> str | list:
 
 
 def _check_highlight(highlight: str, *texts: str) -> None:
-    if highlight and not any(highlight in text for text in texts):
+    lit = _periods_together(highlight)
+    if lit and not any(lit in _periods_together(text) for text in texts):
         raise MakerError(f"The highlight must be words on the slide. {highlight!r} is not on it.")
 
 
+def _words_of_field(spec: dict, field: str) -> str:
+    # A field a slide may leave out, as words. A null is the same as leaving it out.
+    given = spec.get(field)
+    if given is None:
+        return ""
+    if not isinstance(given, str):
+        raise MakerError(f"A slide's {field} must be words. {given!r} is not.")
+    return given
+
+
 def _make_title(deck: Presentation, brand: Brand, spec: dict) -> None:
-    _title_slide(deck, brand, _required(spec, "title", "title"), spec.get("subtitle", ""), spec.get("highlight", ""))
+    _title_slide(deck, brand, _required(spec, "title", "title"), spec.get("subtitle", ""), _words_of_field(spec, "highlight"))
 
 
 def _titled_slide(deck: Presentation, brand: Brand, title: str, highlight: str) -> tuple:
@@ -366,8 +377,8 @@ def _titled_slide(deck: Presentation, brand: Brand, title: str, highlight: str) 
 
 def _make_content(deck: Presentation, brand: Brand, spec: dict) -> None:
     title = _required(spec, "title", "content")
-    points = [f"• {point}" for point in _required(spec, "bullets", "content")]
-    highlight = spec.get("highlight", "")
+    points = [_periods_together(f"• {point}") for point in _required(spec, "bullets", "content")]
+    highlight = _words_of_field(spec, "highlight")
     _check_highlight(highlight, title, *points)
     slide, look, box = _titled_slide(deck, brand, title, highlight)
     _text_box(slide, brand, look, "body", look.words, box, points, 32, 13, BULLET_GAP, highlight)
@@ -376,7 +387,7 @@ def _make_content(deck: Presentation, brand: Brand, spec: dict) -> None:
 
 def _one_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, bullets: list[str], highlight: str) -> None:
     # A deck of one is a page someone reads, not a cover, so it is on the kit's paper like any slide that holds something.
-    body = [*([subtitle] if subtitle else []), *(f"• {point}" for point in bullets)]
+    body = [_periods_together(text) for text in (*([subtitle] if subtitle else []), *(f"• {point}" for point in bullets))]
     _check_highlight(highlight, title, *body)
     slide, look, box = _titled_slide(deck, brand, title, highlight)
     if body:
@@ -589,7 +600,7 @@ def _set_table(slide, brand: Brand, look: Look, cells: list[list[str]], figures:
 def _make_table(deck: Presentation, brand: Brand, spec: dict) -> None:
     title = _required(spec, "title", "table")
     cells = _table_cells(spec)
-    highlight = _periods_together(spec.get("highlight", ""))
+    highlight = _periods_together(_words_of_field(spec, "highlight"))
     _check_highlight(highlight, _periods_together(title), *(text for row in cells[1:] for text in row))
     figures = [_column_of_figures(cells, at) for at in range(len(cells[0]))]
     # The figure that matters is in the last column of figures, the newest in a table of periods, and never the first column, which names the rows.
@@ -644,7 +655,7 @@ def _picture(path_text: str) -> tuple[Path, tuple[int, int]]:
 def _make_picture(deck: Presentation, brand: Brand, spec: dict) -> None:
     title = _required(spec, "title", "picture")
     path, (pixels_wide, pixels_high) = _picture(_required(spec, "path", "picture"))
-    highlight = spec.get("highlight", "")
+    highlight = _words_of_field(spec, "highlight")
     _check_highlight(highlight, title)
     slide, look, (left, top, width, height) = _titled_slide(deck, brand, title, highlight)
     # The whole picture, as large as the room allows, in the middle of it.
@@ -660,7 +671,7 @@ def _make_picture(deck: Presentation, brand: Brand, spec: dict) -> None:
 
 def _make_statement(deck: Presentation, brand: Brand, spec: dict) -> None:
     text = _required(spec, "text", "statement")
-    highlight = spec.get("highlight", "")
+    highlight = _words_of_field(spec, "highlight")
     _check_highlight(highlight, text)
     look = _look(brand, loud=True)
     slide = _new_slide(deck, brand, look)
@@ -711,7 +722,7 @@ def _points(spec: dict) -> list[Point]:
 
 
 def _lit_point(points: list[Point], spec: dict) -> Point:
-    highlight = spec.get("highlight", "")
+    highlight = _words_of_field(spec, "highlight")
     if highlight:
         lit = next((point for point in points if point.label == highlight), None)
         if lit is None:
@@ -1026,6 +1037,7 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     label is the name job_facts shows for that entry, a comma, and the date and time it shows, written as in the example. The slide prints them as a small line, and the links are saved beside the deck.
     sources does the same for the first slide, which is all a one-slide deck has.
     """
+    highlight = highlight or ""
     if Path(out_path).suffix.lower() != ".pptx":
         raise MakerError(f"A deck is saved as a .pptx, so out_path must end in .pptx, not {Path(out_path).suffix!r}.")
     brand = load_brand_dir(brand_dir)
