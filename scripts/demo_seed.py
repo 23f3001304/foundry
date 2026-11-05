@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from create_rooms import main as create_rooms
-from create_rooms import names_people_on_mattermost, remember_rooms
+from create_rooms import names_people_on_mattermost, remember_rooms, unfinished_rooms
 from demo_people import find_bridge, switch_url
 from register_desk import save
 
@@ -81,7 +81,8 @@ def main(demo: str | None = None, outside_bridge: str = "") -> None:
         rooms = gateway.get("/rooms").json()
     # A run stopped between Switch making a room and .env being written would leave a room this script skips and the desk never follows.
     remember_rooms(seed, {room["name"]: room["id"] for room in rooms})
-    for mode, name, brand in still_to_make({room["name"] for room in rooms}, seed):
+    # A business a run left half made has its outside room, and is still to make. Its name in .env is what says so.
+    for mode, name, brand in still_to_make({room["name"] for room in rooms} - set(unfinished_rooms()), seed):
         # One business that can't be made here doesn't stop the others.
         if needs_bridge(brand) and not bridge:
             print(NO_BRIDGE.format(room=name, brand=brand))
