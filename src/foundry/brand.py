@@ -30,6 +30,8 @@ TOO_DEEP = "The brand kit's front matter is nested too deeply."
 NOT_CLOSED = "The brand kit's front matter has no closing --- line."
 LOGO = "logo.png"
 STICKER_MODES = ("off", "subtle", "playful")
+# The same logo for a dark ground, in a kit that has one.
+LOGO_ON_DARK = "logo-on-dark.png"
 
 
 class BrandError(ToolError):
@@ -67,6 +69,11 @@ class Brand:
     # One line saying which style from the design guide fits this business. The kit's word outranks the guide's.
     design_style: str = ""
     stickers: str = ""
+
+    @property
+    def logo_on_dark(self) -> Path | None:
+        path = self.logo_path.parent / LOGO_ON_DARK
+        return path if path.exists() else None
 
     def font_file(self, role: str) -> Path | None:
         path = self.logo_path.parent / "fonts" / f"{role}.ttf"

@@ -19,6 +19,6 @@ Bhorvela Studio is a fictional marketing agency, made up for this demo along wit
 
 Use the paper colour for backgrounds and the ink colour for text. Keep the night indigo for headings and large shapes, and use the sunrise orange once on a page, for the one thing that matters most.
 
-Put the logo on the paper colour, never on the indigo. Leave clear space around it, at least a quarter of its width.
+Put the logo on the paper colour. On the indigo use `logo-on-dark.png`, the same logo reversed, and never `logo.png`. Leave clear space around it, at least a quarter of its width.
 
 How the studio works with clients. Each client has its own agents, its own folder and its own record, so nothing made for one is ever shown to, copied for or reused by another. A client is told only the stage its work has reached, and is never shown who inside the studio is doing what, or who owes the studio anything. The Account Director signs off the brief and the finished work before anything goes out, and the client sees nothing until then. Clients never sign in to the studio's dashboard. What the studio shows a client is the finished campaign set: a deck, a poster, social posts, written copy and, when picture drawing is switched on, pictures.

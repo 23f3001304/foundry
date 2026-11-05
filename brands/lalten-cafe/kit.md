@@ -19,7 +19,7 @@ Lalten Cafe is a fictional neighbourhood cafe. Lalten is Hindi for lantern. Regu
 
 Use the paper colour for backgrounds and the ink colour for text. Keep the primary brown for headings and large shapes, and use the amber accent once on a page, for the one thing that matters most.
 
-Put the logo on the paper colour, never on the brown or on a photo. Leave clear space around it, at least a quarter of its width.
+Put the logo on the paper colour. On the brown use `logo-on-dark.png`, the same logo reversed, and never `logo.png`. Never put either on a photo. Leave clear space around it, at least a quarter of its width.
 
 `hero.png` shows the cafe and `menu.png` shows a menu board. Use them as they are. Do not add text on top of them.
 

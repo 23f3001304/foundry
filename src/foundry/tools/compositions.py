@@ -1,7 +1,8 @@
 """The compositions of a graphic a maker chooses from, besides the split: a huge headline, a picture across the page, and a big sentence on the brand's colour.
 
 They follow the design guide. Margins are a share of the short side, wider in a quiet style. At most two sizes of type, with an obvious jump. Line spacing falls as type grows, and huge type is tracked tight.
-Big type is placed by what the eye sees, not by its box. The logo sits only on the paper colour, with clear space a quarter of its width. No word is ever drawn on a picture.
+Big type is placed by what the eye sees, not by its box. No word is ever drawn on a picture.
+The logo sits inside the same margins as the words and shares an edge with them. It goes straight on the ground where it reads there, in the kit's reversed version where it does not, and only with neither on a plate that follows its own outline, which keeps a real client's logo as the client drew it.
 """
 
 import io
@@ -9,7 +10,10 @@ import math
 import re
 from dataclasses import dataclass, field
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from collections import Counter
+from pathlib import Path
+
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from foundry.brand import Brand
 from foundry.tools import touchstone
@@ -32,6 +36,9 @@ MOST_PANEL_HEIGHT, MOST_TALL_PANEL_HEIGHT, MOST_FOOTER_HEIGHT = 0.44, 0.34, 0.3
 WIDE_FROM = 1.2
 TOO_LONG = "This text is too long to fit: {text}... Shorten it."
 LOGO_CLEAR = 4
+# A colour in a logo counts when it is more than a stray edge. The plate, when there has to be one, is this share of the logo wider all round.
+LOGO_COLOUR_SHARE, PLATE_PAD_SHARE = 0.02, 0.07
+LOGO_SAMPLE = 256
 # A line should not end on a word that leans on the next one, and a headline's last line should not be one word. These weigh against the evenness of the lines.
 LEANING_WORDS = frozenset("a an and at by for from in into is of on or the to with".split())
 LEANING_COST, LONE_WORD_COST = 0.12, 0.6
@@ -96,6 +103,8 @@ class Page:
     canvas: Image.Image
     drawn: list[dict] = field(default_factory=list)
     logo: list[int] = field(default_factory=list)
+    plate: list[int] = field(default_factory=list)
+    logo_file: str = ""
     panel: list[int] = field(default_factory=list)
 
     @property
@@ -275,11 +284,58 @@ def _paper_ground(page: Page) -> None:
             page.canvas.paste(ImageOps.fit(stone.convert("RGB"), page.canvas.size, Image.LANCZOS), (0, 0))
 
 
-def _place_logo(page: Page, side: int, right: int, bottom: int) -> None:
-    logo = Image.open(page.brand.logo_path).convert("RGBA").resize((side, side), Image.LANCZOS)
-    left, top = right - side, bottom - side
-    page.canvas.paste(logo, (left, top), logo)
-    page.logo = [left, top, left + side, top + side]
+def logo_colours(path: Path) -> list[str]:
+    """The colours a logo is drawn in, biggest first, leaving out the soft edges between them."""
+    with Image.open(path) as logo:
+        sampled = logo.convert("RGBA").resize((LOGO_SAMPLE, LOGO_SAMPLE), Image.NEAREST)
+    near: dict[tuple[int, ...], Counter] = {}
+    for count, pixel in sampled.getcolors(LOGO_SAMPLE ** 2):
+        if pixel[3] > 200:
+            near.setdefault(tuple(part // 24 for part in pixel[:3]), Counter())[pixel[:3]] += count
+    total = sum(group.total() for group in near.values())
+    groups = sorted(near.values(), key=lambda group: -group.total())
+    return ["#%02X%02X%02X" % group.most_common(1)[0][0] for group in groups if group.total() >= total * LOGO_COLOUR_SHARE]
+
+
+def logo_for(brand: Brand, ground: str) -> tuple[Path, bool]:
+    """Which logo file goes on this ground, and whether it needs a plate. Its dark colour has to read there, because that is what draws its outline."""
+    darkest = min(logo_colours(brand.logo_path), key=lambda colour: contrast(colour, "#000000"))
+    if contrast(darkest, ground) >= LARGE_CONTRAST:
+        return brand.logo_path, False
+    reversed_logo = brand.logo_on_dark
+    if reversed_logo and contrast(logo_colours(reversed_logo)[0], ground) >= LARGE_CONTRAST:
+        return reversed_logo, False
+    return brand.logo_path, True
+
+
+def _plate_mask(art: Image.Image, pad: int) -> Image.Image:
+    # The logo's own outline, grown evenly by the pad.
+    mask = Image.new("L", (art.width + 2 * pad, art.height + 2 * pad), 0)
+    mask.paste(art.getchannel("A"), (pad, pad))
+    return mask.filter(ImageFilter.GaussianBlur(pad / 2)).point(lambda value: min(max(value - 5, 0) * 32, 255))
+
+
+def place_logo(canvas: Image.Image, brand: Brand, ground: str, side: int, right: int, bottom: int) -> dict:
+    """Puts the logo's visible edge on this right and bottom, within a square of this side. Returns what check_design and the tests read back."""
+    path, plated = logo_for(brand, ground)
+    with Image.open(path) as logo:
+        art = logo.convert("RGBA")
+    art = art.crop(art.getchannel("A").point(lambda value: 255 if value > 16 else 0).getbbox())
+    pad = round(side * PLATE_PAD_SHARE) if plated else 0
+    scale = (side - 2 * pad) / max(art.size)
+    art = art.resize((round(art.width * scale), round(art.height * scale)), Image.LANCZOS)
+    left, top = right - pad - art.width, bottom - pad - art.height
+    plate = []
+    if plated:
+        canvas.paste(rgb(brand.colors["paper"]), (left - pad, top - pad), _plate_mask(art, pad))
+        plate = [left - pad, top - pad, right, bottom]
+    canvas.paste(art, (left, top), art)
+    return {"logo": [left, top, left + art.width, top + art.height], "plate": plate, "logo_file": path.name}
+
+
+def _place_logo(page: Page, ground: str, side: int, right: int, bottom: int) -> None:
+    placed = place_logo(page.canvas, page.brand, ground, side, right, bottom)
+    page.logo, page.plate, page.logo_file = placed["logo"], placed["plate"], placed["logo_file"]
 
 
 def _accent_mark(page: Page, left: int, top: int) -> int:
@@ -327,40 +383,33 @@ def type_led(page: Page, headline: str, subline: str, highlight: str) -> None:
         _accent_mark(page, margin, bottom - (words.height if words else 0) - mark)
     if words:
         _set_lines(page, words, "subline", margin, bottom - words.height, brand.colors["ink"])
-    _place_logo(page, logo_side, page.width - margin, bottom)
+    _place_logo(page, ground, logo_side, page.width - margin, bottom)
 
 
 def statement(page: Page, headline: str, subline: str, highlight: str) -> None:
-    """One big sentence on the brand's colour, with the logo on a piece of the paper colour that runs off the corner."""
+    """One big sentence on the brand's colour, set low on the page, with the subline and the logo in a row on the bottom margin."""
     brand, margin = page.brand, page.margin
     ground, words_colour = statement_colours(brand)
     if brand.style == TOUCHSTONE:
         _paper_ground(page)
     logo_side = round(page.unit * LOGO_SHARE)
-    # Kept on the paper colour with clear space. On the stone the page already is the paper colour, so the logo needs no piece of it.
-    clear = logo_side // LOGO_CLEAR + round(page.unit * 0.012)
-    block = logo_side + 2 * clear
     room = page.width - 2 * margin
-    bottom_of_words = page.height - margin if page.width > page.height * WIDE_FROM else page.height - block - margin // 2
-    words = _words_under(page, subline, room if page.width <= page.height * WIDE_FROM else room - block, page.height * MOST_FOOTER_HEIGHT)
+    bottom = page.height - margin
+    beside_logo = room - logo_side - margin
+    words = _words_under(page, subline, beside_logo, page.height * MOST_FOOTER_HEIGHT)
+    foot = max(logo_side, words.height if words else 0)
     mark = 0 if highlight else max(4, round(page.unit * MARK_THICK_SHARE)) + margin
-    gap = margin if words else 0
-    space = bottom_of_words - margin - mark - gap - (words.height if words else 0)
-    fitted = _fit(page, headline, "headline", room, space, STATEMENT_MOST, LEAST_HEADLINE, 1.08, tight=True, highlight=highlight)
-    words = _with_a_jump(page, words, subline, room if page.width <= page.height * WIDE_FROM else room - block, page.height * MOST_FOOTER_HEIGHT, fitted)
-    # The block as a whole sits a little above the middle of the room it has, which is where the eye settles first.
-    together = mark + fitted.height + gap + (words.height if words else 0)
-    top = margin + max(0, round((bottom_of_words - margin - together) * 0.42))
+    gap = round(margin * 0.6)
+    fitted = _fit(page, headline, "headline", room, bottom - foot - gap - mark - margin, STATEMENT_MOST, LEAST_HEADLINE, 1.08, tight=True, highlight=highlight)
+    words = _with_a_jump(page, words, subline, beside_logo, page.height * MOST_FOOTER_HEIGHT, fitted)
+    foot = max(logo_side, words.height if words else 0)
+    top = bottom - foot - gap - fitted.height
     if not highlight:
-        _accent_mark(page, margin, top)
-    end = _set_lines(page, fitted, "headline", margin, top + mark, words_colour, ground, highlight)
+        _accent_mark(page, margin, top - mark)
+    _set_lines(page, fitted, "headline", margin, top, words_colour, ground, highlight)
     if words:
-        _set_lines(page, words, "subline", margin, end + gap, words_colour)
-    if brand.style == TOUCHSTONE:
-        _place_logo(page, logo_side, page.width - margin, page.height - margin)
-    else:
-        page.draw.rectangle((page.width - block, page.height - block, page.width, page.height), fill=rgb(brand.colors["paper"]))
-        _place_logo(page, logo_side, page.width - clear, page.height - clear)
+        _set_lines(page, words, "subline", margin, bottom - words.height, words_colour)
+    _place_logo(page, ground, logo_side, page.width - margin, bottom)
 
 
 def _focus(picture: Image.Image) -> tuple[float, float]:
@@ -411,7 +460,7 @@ def full_bleed(page: Page, headline: str, subline: str, highlight: str, picture:
     _set_lines(page, fitted, "headline", panel[0] + pad, panel[1] + pad, heading_colour(brand), paper, highlight)
     if words:
         _set_lines(page, words, "subline", panel[0] + pad, panel[3] - pad - words.height, brand.colors["ink"])
-    _place_logo(page, logo_side, panel[2] - pad, panel[3] - pad)
+    _place_logo(page, paper, logo_side, panel[2] - pad, panel[3] - pad)
 
 
 def new_page(brand: Brand, width: int, height: int, ground: str) -> Page:

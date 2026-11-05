@@ -19,7 +19,7 @@ Shilagate Homes is a fictional home builder. Shila is Sanskrit for stone. Buyers
 
 Use the paper colour for backgrounds and the ink colour for text. Keep the slate blue for headings and large shapes, and use the stone colour for lines and secondary labels.
 
-Put the logo on the paper colour, never on the blue or on a photo. Leave clear space around it, at least a quarter of its width.
+Put the logo on the paper colour. On the blue use `logo-on-dark.png`, the same logo reversed, and never `logo.png`. Never put either on a photo. Leave clear space around it, at least a quarter of its width.
 
 `hero.png` shows a finished home and `site.png` shows a site in progress. Use them as they are. Do not add text on top of them.
 

@@ -19,7 +19,7 @@ Phatakha Pop is a fictional fizzy drinks brand, made up for this demo along with
 
 Use the paper colour for backgrounds and the ink colour for text. Keep the firecracker red for headings and large shapes, and use the sparkler yellow on one word of a headline, never on more than one thing a page.
 
-Put the logo on the paper colour, never on the red. Leave clear space around it, at least a quarter of its width.
+Put the logo on the paper colour. On the red use `logo-on-dark.png`, the same logo reversed, and never `logo.png`. Leave clear space around it, at least a quarter of its width.
 
 Write headlines in capitals, in one short line, such as POP THE CAP. Captions are one or two short sentences, with one exclamation mark at most. Write like a friend shouting across a street: quick, loud and kind. Never write about age, alcohol or health, and never make a claim the brief does not give.
 

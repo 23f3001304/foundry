@@ -19,7 +19,7 @@ Ambaryug Teas is a fictional heritage tea house, made up for this demo along wit
 
 Use the paper colour for backgrounds and the ink colour for text. Keep the estate green for headings and large shapes, and use the amber once on a page, for the one thing that matters most.
 
-Put the logo on the paper colour, never on the green. Leave clear space around it, at least a quarter of its width.
+Put the logo on the paper colour. On the green use `logo-on-dark.png`, the same logo reversed, and never `logo.png`. Leave clear space around it, at least a quarter of its width.
 
 Write headlines in sentence case, never in capitals, in one calm line, such as "The first leaves of spring". Captions are two or three full sentences with no exclamation marks. Talk about the leaf, the hills, the season and the pot, and never about discounts. Never make a claim the brief does not give.
 

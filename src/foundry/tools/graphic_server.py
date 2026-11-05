@@ -108,7 +108,7 @@ def render_graphic(brand_dir: str, headline: str, subline: str, size: str, out_p
     composition is how the page is built, chosen for what the graphic has to do:
     type_led is a huge headline filling the page, with no picture, for one short idea that must stop a scroll. Keep the headline to a few words.
     full_bleed is a picture across the whole page, with the words and logo on a clean panel of the paper colour, when one strong picture carries it.
-    statement is one big sentence on the brand's colour, for a plain announcement.
+    statement is one big sentence on the brand's colour, set low on the page, for a plain announcement.
     split is a picture and the words side by side, and it is what you get when you choose nothing.
     picture is the absolute path of a picture you drew, for full_bleed or split, which otherwise use the brand's own. No word is ever drawn on a picture.
     A line break in the headline is kept. Text that cannot fit, or that the brand's fonts cannot draw, raises an error. Shorten or rewrite it.
@@ -139,7 +139,8 @@ def _made(brand: Brand, composition: str, headline: str, subline: str, width: in
     said = {"composition": composition, "headline": headline, "subline": subline}
     if composition == SPLIT:
         drawn: list[dict] = []
-        return {**said, "canvas": _compose(brand, headline, subline, width, height, highlight, picture, drawn), "drawn": drawn}
+        placed: dict = {}
+        return {**said, "canvas": _compose(brand, headline, subline, width, height, highlight, picture, drawn, placed), "drawn": drawn, **placed}
     ground = statement_colours(brand)[0] if composition == STATEMENT else brand.colors["paper"]
     page = new_page(brand, width, height, ground)
     if composition == FULL_BLEED:
@@ -149,7 +150,7 @@ def _made(brand: Brand, composition: str, headline: str, subline: str, width: in
         compositions.full_bleed(page, headline, subline, highlight, art)
     else:
         {TYPE_LED: compositions.type_led, STATEMENT: compositions.statement}[composition](page, headline, subline, highlight)
-    return {**said, "canvas": page.canvas, "drawn": page.drawn, "logo": page.logo, "panel": page.panel}
+    return {**said, "canvas": page.canvas, "drawn": page.drawn, "logo": page.logo, "plate": page.plate, "logo_file": page.logo_file, "panel": page.panel}
 
 
 def picture_height(width: int, height: int, picture_size: tuple[int, int]) -> int:
@@ -159,13 +160,12 @@ def picture_height(width: int, height: int, picture_size: tuple[int, int]) -> in
     return min(round(width * picture_size[1] / picture_size[0]), int(height * MOST_OF_THE_HEIGHT_FOR_THE_PICTURE))
 
 
-def _compose(brand: Brand, headline: str, subline: str, width: int, height: int, highlight: str = "", picture: Image.Image | None = None, drawn: list[dict] | None = None) -> Image.Image:
+def _compose(brand: Brand, headline: str, subline: str, width: int, height: int, highlight: str = "", picture: Image.Image | None = None, drawn: list[dict] | None = None, placed: dict | None = None) -> Image.Image:
     solid = brand.style == "solid"
     background = rgb(brand.colors["primary" if solid else "paper"])
     # On the stone the ash is for what recedes, so a headline is in the colour of its words.
     heading = rgb(brand.colors["paper"] if solid else heading_colour(brand))
     body_colour = rgb(brand.colors["paper" if solid else "ink"])
-    paper = rgb(brand.colors["paper"])
     accent = rgb(brand.colors["accent"])
     canvas = Image.new("RGB", (width, height), background)
     draw = ImageDraw.Draw(canvas)
@@ -189,12 +189,9 @@ def _compose(brand: Brand, headline: str, subline: str, width: int, height: int,
     headline_end = _draw_text(draw, headline, brand.font_file("heading"), "heading", heading, (left, top, right, top + int(space * 0.72)), int(unit * HEADLINE_SHARES[tall]), max(14, int(unit * 0.024)), highlight, accent, rgb(max((brand.colors["ink"], brand.colors["paper"]), key=lambda words: contrast(words, brand.colors["accent"]))), drawn)
     if subline:
         _draw_text(draw, subline, brand.font_file("body"), "body", body_colour, (left, headline_end + margin // 3, right, logo_top - margin // 3), int(unit * SUBLINE_SHARES[tall]), max(12, int(unit * 0.018)), drawn=drawn)
-    logo_left = text_right - margin - logo_side
-    if solid:
-        pad = logo_side // 10
-        draw.rounded_rectangle((logo_left - pad, logo_top - pad, logo_left + logo_side + pad, logo_top + logo_side + pad), radius=pad, fill=paper)
-    logo = Image.open(brand.logo_path).convert("RGBA").resize((logo_side, logo_side), Image.LANCZOS)
-    canvas.paste(logo, (logo_left, logo_top), logo)
+    where = compositions.place_logo(canvas, brand, brand.colors["primary" if solid else "paper"], logo_side, text_right - margin, height - margin)
+    if placed is not None:
+        placed.update(where)
     return canvas
 
 
