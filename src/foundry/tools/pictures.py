@@ -37,7 +37,8 @@ NO_RENDERER = "No program on this machine can turn slides into pictures, so carr
 COULD_NOT = "The slides could not be turned into pictures this time, so carry on without them."
 NOT_THERE = "That file is not there, so there is nothing to look at."
 POWERPOINT_OPEN = "PowerPoint is open on this machine, so no pictures are available and it was left alone; carry on without them."
-LEFT_STUCK = "PowerPoint stopped answering, so it was left as it is and no more pictures will be made until these tools restart; carry on without them."
+LEFT_STUCK = "PowerPoint stopped answering, so it was left as it is and there are no pictures for now; a person can close PowerPoint in Task Manager and restart these tools to bring them back, so carry on without them."
+POWERPOINT_BUSY = "Other pictures have been using PowerPoint for too long, so none are available this time; carry on without them."
 NOT_MADE = "No pictures of this file were made, so judge what you can from its words and say that you had no pictures."
 OFFICE_FOLDERS = ("Microsoft Office/root/Office16", "Microsoft Office/Office16")
 # What the script exits with when it finds a PowerPoint it did not start.
@@ -134,7 +135,7 @@ try { $found | Wait-Process -Timeout 20 -ErrorAction Stop } catch { exit 4 }
 exit 0
 """
 
-# True once PowerPoint has hung in this process, so no later call waits on it again.
+# True once a render here has run past its limit, so no later call waits on PowerPoint while that render is still going. One that ends by itself hung nothing, and this clears.
 _gave_up = False
 # What was left running after a hang. Held so it is never tidied away while it may still finish by itself.
 _left_running: list[subprocess.Popen] = []
@@ -194,7 +195,7 @@ def _one_at_a_time(seconds: float) -> Iterator[None]:
                 break
             except OSError:
                 if time.monotonic() >= deadline:
-                    raise subprocess.TimeoutExpired("waiting for PowerPoint", seconds) from None
+                    raise Unavailable(POWERPOINT_BUSY) from None
                 time.sleep(0.25)
         try:
             yield
@@ -249,18 +250,19 @@ def powerpoint(deck: Path, folder: Path, seconds: float) -> bool:
     global _gave_up
     if not _powerpoint_installed():
         return False
-    if _gave_up:
+    _left_running[:] = [process for process in _left_running if process.poll() is None]
+    if _gave_up and _left_running:
         raise Unavailable(LEFT_STUCK)
-    started = time.monotonic()
+    _gave_up = False
+    # Waiting for another render is no sign of a hang, so the script gets all its time once it starts.
     with _one_at_a_time(seconds):
-        left = max(1.0, seconds - (time.monotonic() - started))
         quit_note = folder / QUIT_NOTE
         env = {**os.environ, "FOUNDRY_DECK": str(deck), "FOUNDRY_PICTURES_FOLDER": str(folder), "FOUNDRY_PICTURE_WIDTH": str(SLIDE_WIDTH), "FOUNDRY_PICTURE_HEIGHT": str(SLIDE_HEIGHT), "FOUNDRY_RENDER_NOTE": str(quit_note), **_named(_read_note(LEAVING))}
         try:
-            code = _wait_alone(_powershell(POWERPOINT_SCRIPT), left, env=env)
+            code = _wait_alone(_powershell(POWERPOINT_SCRIPT), seconds, env=env)
         except subprocess.TimeoutExpired:
             _gave_up = True
-            logger.warning("PowerPoint did not finish %s in %.0f seconds. It was left running, and this process will not use it again.", deck.name, left)
+            logger.warning("PowerPoint did not finish %s in %.0f seconds. It was left running, and this process will not use it again while that lasts.", deck.name, seconds)
             raise Unavailable(LEFT_STUCK, stuck=True) from None
         # Past the first look, whichever one the note named has gone.
         if code not in (OPEN_ALREADY, STILL_GOING):
