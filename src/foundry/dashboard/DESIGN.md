@@ -25,7 +25,7 @@ Each runs from a bright hue to a deeper one and is shown as a gradient, a dot, a
 | Ember | `--ember-*` | Needs someone: a stuck job or a card waiting on this login. Nothing else may use it |
 | Azure | `--azure-*` | Foundry at work: being made, cards opening, files, and the Setup group |
 | Orchid | `--orchid-*` | Being checked: the reviewer and sign-off |
-| Sun | `--sun-*` | With the people: the brief and the inputs being collected, a connection someone has to look at, and the Records group |
+| Sun | `--sun-*` | With the people: the brief and the inputs being collected, a connection someone has to look at, Responses and the Action log in the side bar |
 
 `queries.py` ties each stage to its family in `STEP_FAMILIES`, and `family_of` says stuck is ember and done is lime whatever the stage. `.fam-lime` and the rest set a family on an element, and the state classes `.working`, `.waiting`, `.done`, `.idle` and `.stuck` bring one for a status mark that has none. Every family also has a forge glow for a banner, `--forge-lime` and the rest: near black on the left, and heat from behind the button on the right, in five stops of its own (`--lime-forge-1` to `-5`). Lime cools through green and sun through amber, so neither turns olive or muddy on the way down. Words are white and the button is white in every family, and the words stop at 62% of the banner, so a long line wraps before white stops passing on what is behind it. On a phone the button is full width, so the heat comes up from under it, and its height is fixed so a long message can't reach it.
 
@@ -46,13 +46,13 @@ Drawn in `shapes.py` as our own paths, in one family each. `shapes.defs()` puts 
 | Group | Values |
 |---|---|
 | Space | `--space-` 4, 8, 12, 16, 20, 24, 32, 40, 48, 64 |
-| Type | `--text-` / `--line-` 12/16, 14/20, 16/24, 20/28, 24/32, 32/40 |
+| Type | `--text-` / `--line-` 12/16, 13/16 (the side bar's rows), 14/20, 16/24, 20/28, 24/32, 32/40 |
 | Radius | `--radius-` 4 (chip, and a row in a small menu), 8 (control), 16 (panel, banner, card, the hero's dark bar), 24 (hero and sign-in) |
-| Control height | `--control-` 24 (a button in a table), 32, 36, 40 |
+| Control height | `--control-` 24 (a button in a table), 28 (a row in the side bar), 32, 36, 40 |
 | Icons and sprites | `--size-` 16, 24, 32, 48, 64, 96 |
 | Layout | `--gutter`, `--gap`, `--section`, `--sidebar`, `--side-folded`, `--rail`, `--content`, `--measure`, `--form`, `--sign-in`, `--sign-in-art`, `--hero`, `--hero-shape`, `--col-*`, `--step`, `--tabbar` |
 | Motion | `--dur-fast` 120ms, `--dur-base` 200ms, `--dur-slow` 320ms, `--dur-reveal` 640ms, `--frame` 120ms, `--frame-slow` 320ms, `--ease-out` |
-| Neutrals | `--paper --side --panel --sunken --hover --current --rule --rule-strong --field --ink --ink-soft --ink-faint`, leaning very slightly toward the logo's olive |
+| Neutrals | `--paper --panel --sunken --hover --current --rule --rule-strong --field --ink --ink-soft --ink-faint --ink-quiet`, leaning very slightly toward the logo's olive |
 | Accent and focus | `--primary --primary-hover --primary-ink --focus` |
 | The dark bar and words on colour | `--bar --bar-hover --bar-rule --bar-ink --bar-soft --on-bright --on-deep --grid-line` |
 | Gradients | `--grad-lime --grad-ember --grad-azure --grad-orchid --grad-sun --grad-none`, and `--forge-lime --forge-ember --forge-azure --forge-orchid --forge-sun` with `--forge-shape`. A gradient is only written here |
@@ -122,11 +122,15 @@ Each has one definition, with its states: rest, hover, focus (one shared ring), 
 
 ## Navigation
 
-The side bar has the logo and a fold control, then the business, then Overview and Responses, then the groups Work (Jobs, Generated work), Records (Action log) and Setup (Connections, Data), each built with details, then the person and sign out. There is no top bar. The fold lasts until the next page, because keeping it would need a script or a cookie.
+The side bar has the mark and a fold control, then the business, then Overview and Responses, then the labelled groups Work (Jobs, Generated work, Action log) and Setup (Connections, Data), then the person and sign out. There is no top bar.
+
+It recedes and belongs to the page. It sits on `--paper` with no panel colour and no line, and its top row shares the page title's baseline. It has three levels. A label (`.nav-label`) is 12px in `--ink-quiet`, with no icon, and can't be pressed. A page (`.nav-item`) is 13px regular in `--ink-faint`, with a small muted icon and its name on one shared edge, and every page has both. The page you're on is the only bright thing, in `--ink` on a quiet `--hover` fill, with its icon in its own family's colour. Spacing shows the structure: rows touch inside a group, and groups are 24 apart. The business is a quiet row with no outline.
+
+A count (`.nav-count`) is a plain small number in `--ink-faint`, never a pill. A stuck count adds one small ember dot beside it and nothing else, because that's the real news. Both `--ink-faint` and `--ink-quiet` hold AA on the page. The fold lasts until the next page, because keeping it would need a script or a cookie.
 
 From 1024px down the logo and the business stay along the top, and a bar along the bottom has Overview, Jobs, Responses, Generated work and More. Badges count across every business the login has: cards waiting on it, and stuck jobs. A login with several businesses sees one overview at a time, and the first one until it chooses.
 
-The logo is `static/logo.svg` and the full word is `static/wordmark.svg`, so changing either is one file.
+The logo is `static/logo.svg` and the full word is `static/wordmark.svg`, so changing either is one file. The side bar uses the logo with the word Foundry in the normal type, and only the sign-in page uses the full word.
 
 ## Charts
 

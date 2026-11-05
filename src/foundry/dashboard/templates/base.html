@@ -7,18 +7,18 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 {% from "_ui.html" import switcher, avatar %}
-{% macro nav_item(key, href, name, count=0, says="waiting") %}
-<li><a class="nav-item" href="{{ href }}"{% if page == key %} aria-current="page"{% endif %}><span class="icon icon-{{ key }}" aria-hidden="true"></span><span class="nav-name">{{ name }}</span>{{ badge(count, says) }}</a></li>
+{% macro nav_item(key, href, name, family, count=0, says="waiting") %}
+<li class="fam-{{ family }}"><a class="nav-item" href="{{ href }}"{% if page == key %} aria-current="page"{% endif %}><span class="icon icon-{{ key }}" aria-hidden="true"></span><span class="nav-name">{{ name }}</span>{{ badge(count, says) }}</a></li>
 {% endmacro %}
-{% macro nav_group(key, family, name, pages) %}
-<details class="nav-group fam-{{ family }}{% if page in pages %} is-current{% endif %}" open>
-  <summary class="nav-group-head"><span class="icon icon-group-{{ key }}" aria-hidden="true"></span><span class="nav-name">{{ name }}</span><span class="icon icon-updown" aria-hidden="true"></span></summary>
-  <ul class="nav-list nav-children">
+{% macro nav_group(key, name) %}
+<div class="nav-group">
+  <p class="nav-label" id="nav-{{ key }}">{{ name }}</p>
+  <ul class="nav-list" aria-labelledby="nav-{{ key }}">
     {{ caller() }}
   </ul>
-</details>
+</div>
 {% endmacro %}
-{% macro badge(count, says) %}{% if count %}<span class="pill{% if says == 'stuck' %} pill-stuck{% endif %}">{{ count }}<span class="hidden"> {{ says }}</span></span>{% endif %}{% endmacro %}
+{% macro badge(count, says) %}{% if count %}<span class="nav-count{% if says == 'stuck' %} nav-count-stuck{% endif %}">{% if says == 'stuck' %}<span class="dot fam-ember" aria-hidden="true"></span>{% endif %}{{ count }}<span class="hidden"> {{ says }}</span></span>{% endif %}{% endmacro %}
 {% macro tab(key, href, name, full="", count=0, says="waiting") %}
 <a class="tab" href="{{ href }}"{% if full %} aria-label="{{ full }}"{% endif %}{% if page == key %} aria-current="page"{% endif %}><span class="icon icon-{{ key }}" aria-hidden="true"></span>{{ name }}{{ badge(count, says) }}</a>
 {% endmacro %}
@@ -37,25 +37,23 @@
 <input class="side-toggle" type="checkbox" id="side-toggle" aria-label="Fold the side bar">
 <aside class="side">
   <div class="side-top">
-    <a class="mark" href="{{ link('/', business=business) }}"><img class="wordmark" src="/static/wordmark.svg" alt="Foundry"><img class="logo" src="/static/logo.svg" alt=""></a>
+    <a class="mark" href="{{ link('/', business=business) }}"><img class="logo" src="/static/logo.svg" alt="Foundry"><span class="mark-word" aria-hidden="true">Foundry</span></a>
     <label class="side-fold" for="side-toggle" title="Fold the side bar"><span class="icon icon-panel" aria-hidden="true"></span></label>
   </div>
   {{ switcher(user, business or (job.row.bucket if job else ""), "/jobs" if page == "jobs" else "/", stage if page == "jobs" else "", counts.stuck_in, page == "jobs") }}
   <nav class="side-nav" aria-label="Pages">
     <ul class="nav-list">
-      {{ nav_item("overview", link("/", business=business), "Overview") }}
-      {{ nav_item("responses", "/responses", "Responses", counts.waiting) }}
+      {{ nav_item("overview", link("/", business=business), "Overview", "lime") }}
+      {{ nav_item("responses", "/responses", "Responses", "sun", counts.waiting) }}
     </ul>
-    {% call nav_group("work", "lime", "Work", ("jobs", "work")) %}
-      {{ nav_item("jobs", link("/jobs", business=business), "Jobs", counts.stuck, "stuck") }}
-      {{ nav_item("work", "/work", "Generated work") }}
+    {% call nav_group("work", "Work") %}
+      {{ nav_item("jobs", link("/jobs", business=business), "Jobs", "lime", counts.stuck, "stuck") }}
+      {{ nav_item("work", "/work", "Generated work", "lime") }}
+      {{ nav_item("log", "/log", "Action log", "sun") }}
     {% endcall %}
-    {% call nav_group("records", "sun", "Records", ("log",)) %}
-      {{ nav_item("log", "/log", "Action log") }}
-    {% endcall %}
-    {% call nav_group("setup", "azure", "Setup", ("connections", "data")) %}
-      {{ nav_item("connections", "/connections", "Connections") }}
-      {{ nav_item("data", "/data", "Data") }}
+    {% call nav_group("setup", "Setup") %}
+      {{ nav_item("connections", "/connections", "Connections", "azure") }}
+      {{ nav_item("data", "/data", "Data", "azure") }}
     {% endcall %}
   </nav>
   {{ sign_out() }}
@@ -76,9 +74,9 @@
     <summary class="tab"><span class="icon icon-more" aria-hidden="true"></span>More</summary>
     <div class="more-panel">
       <ul class="nav-list">
-        {{ nav_item("log", "/log", "Action log") }}
-        {{ nav_item("connections", "/connections", "Connections") }}
-        {{ nav_item("data", "/data", "Data") }}
+        {{ nav_item("log", "/log", "Action log", "sun") }}
+        {{ nav_item("connections", "/connections", "Connections", "azure") }}
+        {{ nav_item("data", "/data", "Data", "azure") }}
       </ul>
       {{ sign_out() }}
     </div>
