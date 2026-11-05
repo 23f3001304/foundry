@@ -23,7 +23,7 @@ from starlette.applications import Starlette
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
-from foundry_setup import TRY_ALREADY_SAID, TRY_RECORD, TRY_RUNNING, Machine, running_try
+from foundry_setup import TRY_ALREADY_SAID, TRY_RECORD, TRY_RUNNING, TRY_UNSURE, Machine, running_try
 
 import foundry.desk
 from foundry.cards import CardQueue, Trigger
@@ -324,6 +324,8 @@ def claim(record: Path, port: int, machine: Machine) -> dict | None:
     """Writes this run down as the one using the folder, or returns the one that already is."""
     record.parent.mkdir(parents=True, exist_ok=True)
     pid = os.getpid()
+    # Asked before the record exists, because that takes a second or more on Windows, and a record seen empty in that time looks like a stale one.
+    started = machine.started(pid) or ""
     for _ in range(3):
         running = running_try(record, machine)
         if running:
@@ -333,7 +335,7 @@ def claim(record: Path, port: int, machine: Machine) -> dict | None:
         except FileExistsError:
             continue
         with os.fdopen(handle, "w", encoding="utf-8") as file:
-            json.dump({"pid": pid, "started": machine.started(pid), "port": port}, file)
+            json.dump({"pid": pid, "started": started, "port": port}, file)
         return None
     return running_try(record, machine)
 
@@ -349,6 +351,9 @@ def main(home: Path | None = None) -> int:
         print(f"Try mode can't write to {home}, so it could not start. Check that folder's permissions and run this again.", flush=True)
         return TRY_ALREADY_SAID
     if running:
+        if running["unsure"]:
+            print(TRY_UNSURE.format(port=running["port"]), flush=True)
+            return TRY_ALREADY_SAID
         print(TRY_RUNNING.format(port=running["port"]), flush=True)
         return 0
     try:

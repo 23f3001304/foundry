@@ -19,6 +19,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -56,6 +57,10 @@ FOUNDRY_DATA = {"FOUNDRY_BUFFER_DB": "foundry-buffer.db", "FOUNDRY_LOG_DB": "fou
 OWN_IN_HOME = ("switch", "controller-data", "data", "logs", "corepack", "pnpm-store", "try", "try.json", "images.yml", "images.yml.tmp", "state.json.tmp")
 PORT_NAMES = {"api": "Switch API", "mattermost": "Mattermost", "gateway": "Switch gateway", "postgres": "Postgres", "dashboard": "Foundry dashboard"}
 WINDOWS_TIME = re.compile(r"\d{4}-\d\d-\d\dT[\d:.]+Z")
+# What ps prints for a start time in the C locale, as in Thu Nov 5 12:00:00 2026 once its padding is gone.
+PS_TIME = re.compile(r"[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d\d:\d\d:\d\d \d{4}")
+# What asking about a process number can come back with. Not being able to ask is a third answer, and nothing is stopped or dropped on the strength of it.
+OURS, GONE, OTHERS, UNKNOWN = "ours", "gone", "someone else's", "can't tell"
 DEFAULT_PORTS = {"api": 8000, "mattermost": 8065, "gateway": 3000, "postgres": 5432, "dashboard": 8100}
 PORT_SETTINGS = {"api": "API_HOST_PORT", "mattermost": "MATTERMOST_HOST_PORT", "gateway": "GATEWAY_HOST_PORT", "postgres": "POSTGRES_HOST_PORT"}
 # The console's own package.json asks for it, and for pnpm 10.28, which corepack gets from the same file.
@@ -108,7 +113,11 @@ FAIL_STATE = ".foundry/state.json can't be read, so setup can't tell what it mad
 FAIL_ENV_TEXT = "{name} isn't plain UTF-8 text, so setup can't read it. PowerShell's > can write a file that way. Save it as UTF-8."
 FAIL_RESET_NO_DOCKER = "Docker isn't answering, so setup can't remove its containers and nothing was changed: start Docker and run this again."
 FAIL_RESET_DOWN = "Docker could not remove the containers and data of project {project}, so nothing else was removed. The details are in {log}. Run this again when Docker is working."
-FAIL_PORT_CHOSEN = "Port {port}, which this Foundry's {service} uses, is taken by something else now. Close whatever is using it. To start over on other ports, run this with --reset."
+FAIL_PORT_CHOSEN = "Port {port}, which this setup chose for the {service}, is taken by something else now. Close whatever is using it. To start over on other ports, run this with --reset."
+FAIL_UNSAFE = "Setup won't remove {path}, because it can't show that setup made it: it is not where setup would have put it, so .foundry/state.json or a link may have been changed. Nothing was removed. Look at it, remove it yourself if it is yours, and run this again."
+FAIL_CANT_TELL = "Setup could not check whether the {name} it started earlier is still running, so it started nothing new. This is usually a busy computer, so give it a minute."
+FAIL_NO_START_TIME = "Setup could not ask the computer when the program it just started began, so it ended it again. This is usually a busy computer, so wait a minute and run this again."
+WARN_NOT_PRIVATE = "Setup could not make {name} readable only by you, so anyone who can open this folder can read it."
 FAIL_PORT_REFUSED = "Port {port} for the {service} is in use, and setup can't go on without a port for it. Close whatever is using it."
 FAIL_PORT_NOBODY = "Port {port} for the {service} is in use. Nobody is here to ask, so nothing was changed. To use {alternative} instead, run this with --yes."
 FAIL_UNKNOWN_DEMO = "There is no demo called {demo}. The demos are {demos}."
@@ -117,6 +126,8 @@ STOPPED = "stopped"
 NOT_RUNNING = "was not running"
 NOT_CONFIRMED = "left alone, because process {pid} can't be confirmed as the one setup started"
 WOULD_NOT_STOP = "would not stop (process {pid}). Close it yourself and run this again"
+CANT_TELL = "can't be checked just now (process {pid}), so setup kept its record of it and did nothing to it"
+CANT_TELL_AGAIN = "Setup could not ask the computer about everything it started, so it kept its record of that and stopped only what it could be sure of. This is usually a busy computer: run this again in a minute."
 MAKERS_LEFT = "  Left running, because setup can't prove they are its own: makers' tool servers from this folder, with process numbers {pids}. To close them, close the agent sessions using them or end those numbers yourself."
 UNEXPECTED = "Something unexpected stopped this step. The details are in {log}."
 
@@ -177,13 +188,31 @@ class Machine:
         return shutil.disk_usage(path).free / 1024**3
 
     def port_free(self, port: int) -> bool:
+        windows = os.name == "nt"
+        # On the other systems, bind alone can be fooled both ways: a port whose last connection is still closing refuses it for a minute though a server could bind it, and, with the option below, a listener on every address doesn't refuse it. So whether something answers is asked first.
+        if not windows and self._answers(port):
+            return False
         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            # Without this, Windows lets a second program bind a port another already holds.
-            if os.name == "nt":
+            if windows:
+                # Without this, Windows lets a second program bind a port another already holds. SO_REUSEADDR there does the same thing, so it is never set.
                 probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            else:
+                # A port just stopped is in TIME_WAIT here, which refuses a plain bind for about a minute though uvicorn and Docker bind it fine.
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", port))
             return True
+        except OSError:
+            return False
+        finally:
+            probe.close()
+
+    @staticmethod
+    def _answers(port: int) -> bool:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            probe.settimeout(1)
+            return probe.connect_ex(("127.0.0.1", port)) == 0
         except OSError:
             return False
         finally:
@@ -192,22 +221,22 @@ class Machine:
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
 
-    def keep_private(self, path: Path) -> None:
+    def keep_private(self, path: Path) -> bool:
+        """Whether the file is now readable only by this user, which the caller says when it isn't."""
         if os.name == "nt":
-            self._private_windows(path)
-        else:
-            self._private_posix(path)
+            return self._private_windows(path)
+        self._private_posix(path)
+        return True
 
     def _private_posix(self, path: Path) -> None:
         os.chmod(path, 0o600)
 
-    def _private_windows(self, path: Path) -> None:
+    def _private_windows(self, path: Path) -> bool:
         # Mode bits mean nothing here. What protects a file is its access list, which otherwise inherits whatever the folder allows.
         if self._me is None:
             found = re.search(r"S-1-[\d-]+", self.run(["whoami", "/user", "/fo", "csv", "/nh"], timeout=30).output)
             self._me = found.group() if found else ""
-        if self._me:
-            self.run(["icacls", path, "/inheritance:r", "/grant:r", f"*{self._me}:F"], timeout=30)
+        return bool(self._me) and self.run(["icacls", path, "/inheritance:r", "/grant:r", f"*{self._me}:F"], timeout=30).code == 0
 
     def run(self, command: list, cwd: Path | None = None, env: Mapping[str, str] | None = None, log: Path | None = None, timeout: float | None = None) -> Result:
         # With a log, what the command says goes there and only there. The caller reads the output only of commands that are asking a question.
@@ -257,20 +286,60 @@ class Machine:
                     process = subprocess.Popen(words, creationflags=flags, **options)
             else:
                 process = subprocess.Popen(words, start_new_session=True, **options)
-        return Process(process.pid, self.started(process.pid) or "")
+        # Without its start time there is no telling it from a later program with the same number, and a record without one would be useless. A short wait first, because a busy machine can be slow to answer. If it still can't be asked, what was just started is ended again, since it is not recorded and a second run would start another.
+        started = None
+        for attempt in range(3):
+            started = self.started(process.pid)
+            if started is not None:
+                break
+            self.sleep(1)
+        if started is None:
+            self._end_new(process)
+            raise Failure(FAIL_NO_START_TIME)
+        return Process(process.pid, started)
+
+    def _end_new(self, process: subprocess.Popen) -> None:
+        # Only ever what this machine has just started and still holds, so its number cannot have gone to anything else.
+        try:
+            if os.name == "nt":
+                self.run(["taskkill", "/F", "/T", "/PID", process.pid])
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            process.kill()
+            process.wait(timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def identity(self, process: Process) -> str:
+        """Whether this is the process that was recorded: OURS, GONE when nothing has its number, OTHERS when something else does, and UNKNOWN when the computer could not be asked."""
+        if not process.started:
+            return OTHERS
+        found = self.started(process.pid)
+        if found is None:
+            return UNKNOWN
+        if found == "":
+            return GONE
+        return OURS if found == process.started else OTHERS
 
     def alive(self, process: Process) -> bool:
-        return bool(process.started) and self.started(process.pid) == process.started
+        return self.identity(process) == OURS
 
     def gone(self, process: Process) -> bool:
         # Nothing has that number now. Not being able to ask is a different answer, and never counts as gone.
-        return self.started(process.pid) == ""
+        return self.identity(process) == GONE
 
     def kill(self, process: Process) -> None:
         # The one way anything is stopped: its number and its start time must still match what was recorded, and only then does what it started go with it.
-        if not self.alive(process):
+        if process.pid == os.getpid() or not self.alive(process):
             return
-        family = [pid for pid in family_of(self._process_table(), process.pid) if pid != os.getpid()]
+        table = self._process_table()
+        # The table is read some seconds later on Windows, and the number could have gone to a new program in between.
+        if os.name == "nt" and table.get(process.pid, (0, ""))[1] != process.started:
+            return
+        family = [pid for pid in family_of(table, process.pid) if pid != os.getpid()]
         if os.name == "nt":
             self.run(["taskkill", "/F", *(word for pid in reversed(family) for word in ("/PID", pid))])
             return
@@ -345,11 +414,12 @@ class Machine:
             return "" if fields[0] == "Z" else f"{boot}:{fields[19]}"
         except (OSError, IndexError):
             pass
-        shown = self.run(["ps", "-o", "stat=,lstart=", "-p", pid], env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}, timeout=10)
-        state, _, when = shown.output.strip().partition(" ")
-        if shown.code != 0 or not when:
-            return None
-        return "" if state.startswith("Z") else when.strip()
+        return self._ps_started(pid)
+
+    def _ps_started(self, pid: int) -> str | None:
+        # One flag for each field. Two in one flag (stat=,lstart=) is read differently by different systems, and on a Mac that has never been run, so it is not relied on.
+        shown = self.run(["ps", "-o", "stat=", "-o", "lstart=", "-p", pid], env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}, timeout=10)
+        return parse_ps_start(shown.output) if shown.code == 0 else None
 
     def _process_table(self) -> dict[int, tuple[int, str]]:
         # Each process's parent, and when it started where a number can outlive its process as someone's parent.
@@ -363,6 +433,57 @@ class Machine:
             if len(words) >= 2 and words[0].isdigit() and words[1].isdigit():
                 rows[int(words[0])] = (int(words[1]), words[2] if len(words) > 2 else "")
         return rows
+
+
+def _is_port(value: object) -> bool:
+    return type(value) is int and 1 <= value <= 65535
+
+
+def _is_list_of(value: object, ok: Callable[[str], bool] = lambda text: True) -> bool:
+    return isinstance(value, list) and all(isinstance(entry, str) and ok(entry) for entry in value)
+
+
+def state_is_sound(found: Mapping) -> bool:
+    """Whether every value in the state file is of the kind setup writes. A path, a name or a number from a hand-edited or damaged file never gets as far as something that deletes, so what reset removes is only ever built from values that passed this."""
+    ports = found.get("ports")
+    if "ports" in found and not (isinstance(ports, dict) and set(ports) == set(DEFAULT_PORTS) and all(_is_port(port) for port in ports.values())):
+        return False
+    processes = found.get("processes", {})
+    if not isinstance(processes, dict) or not all(isinstance(entry, dict) and type(entry.get("pid")) is int and entry["pid"] > 0 and isinstance(entry.get("started"), str) for entry in processes.values()):
+        return False
+    created = found.get("created", {})
+    if not isinstance(created, dict) or not all(isinstance(value, bool) for value in created.values()):
+        return False
+    # An image name is handed to docker image rm, so it can't be taken for a flag.
+    if not _is_list_of(found.get("pulled_images", []), lambda name: bool(name) and not name.startswith("-") and not any(letter.isspace() for letter in name)):
+        return False
+    if not (_is_list_of(found.get("before", [])) and _is_list_of(found.get("rooms_made", []))):
+        return False
+    following = found.get("following", {})
+    if not isinstance(following, dict) or not all(isinstance(value, str) for value in following.values()):
+        return False
+    return all(isinstance(found.get(name, ""), str) for name in ("demo", "packages")) and isinstance(found.get("stack_started", False), bool)
+
+
+def parse_ps_start(output: str) -> str | None:
+    """The start time out of what `ps -o stat= -o lstart= -p N` printed: "" for a process that has ended but not been collected, None when the line isn't one it can read. Padding is dropped, so the same process reads the same."""
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines:
+        return None
+    state, _, rest = lines[0].strip().partition(" ")
+    when = " ".join(rest.split())
+    if not state or not PS_TIME.fullmatch(when):
+        return None
+    return "" if state.startswith("Z") else when
+
+
+def is_inside(path: Path, parent: Path) -> bool:
+    """Whether path, with every .. and link in it followed, is somewhere below parent and not parent itself."""
+    try:
+        found, root = Path(os.path.realpath(path)), Path(os.path.realpath(parent))
+    except (OSError, ValueError):
+        return False
+    return found != root and found.is_relative_to(root)
 
 
 def family_of(rows: Mapping[int, tuple[int, str]], root: int) -> list[int]:
@@ -629,6 +750,7 @@ class Setup:
         self.env_file = repo / ".env"
         self.try_record = self.home / TRY_RECORD
         self.state_broken = False
+        self._warned_open = False
         self.state = self._read_state()
 
     # What it remembers
@@ -636,7 +758,7 @@ class Setup:
     def _read_state(self) -> dict:
         try:
             found = json.loads(self.state_file.read_text(encoding="utf-8"))
-            if isinstance(found, dict):
+            if isinstance(found, dict) and state_is_sound(found):
                 return found
         except FileNotFoundError:
             return {}
@@ -657,10 +779,18 @@ class Setup:
         temporary = path.with_name(path.name + ".tmp")
         temporary.unlink(missing_ok=True)
         os.close(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
-        self.machine.keep_private(temporary)
-        with temporary.open("w", encoding="utf-8", newline="\n") as file:
-            file.write(text)
-        temporary.replace(path)
+        try:
+            if not self.machine.keep_private(temporary) and not self._warned_open:
+                # Said once, and written anyway: refusing would stop setup on a disk with no access lists, which a settings file there can't have.
+                self._warned_open = True
+                self.ui.say()
+                self.ui.say(WARN_NOT_PRIVATE.format(name=self._shown(path)))
+            with temporary.open("w", encoding="utf-8", newline="\n") as file:
+                file.write(text)
+            temporary.replace(path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
 
     def _hide_secrets(self, say: bool = False) -> None:
         for path in (self.switch_env_file, self.env_file):
@@ -766,7 +896,8 @@ class Setup:
         for row in self._service_rows():
             if row.get("State") not in ("exited", "dead", "created"):
                 held |= {entry["PublishedPort"] for entry in row.get("Publishers") or [] if isinstance(entry, dict) and entry.get("PublishedPort")}
-        if self._alive("dashboard"):
+        # One that can't be checked is not assumed gone, so its port is not called taken by something else.
+        if self._identity("dashboard") in (OURS, UNKNOWN):
             held.add(self.ports["dashboard"])
         return held
 
@@ -837,11 +968,17 @@ class Setup:
     def switch_is_here(self) -> bool:
         if not (self.switch / "console").is_dir():
             return False
-        asked = self.machine.run([self.machine.which("git") or "git", "-C", self.switch, "rev-parse", "HEAD"], timeout=30)
-        # Git failing says nothing about the commit, and nothing here is deleted on the strength of it.
-        if asked.code != 0:
-            raise Failure(FAIL_SWITCH_UNREADABLE)
-        return asked.output.strip() == PINNED_COMMIT
+        # Without a git folder of its own, the folder was never finished, and git would answer for the clone around it.
+        if not (self.switch / ".git").exists():
+            return False
+        asked = self.machine.run([self.machine.which("git") or "git", "-C", self.switch, "rev-parse", "-q", "--verify", "HEAD"], timeout=30)
+        if asked.code == 0:
+            return asked.output.strip() == PINNED_COMMIT
+        # A checkout stopped halfway has files but no HEAD yet, which git answers with exit 1 and no words. That is finished in place, which get_switch always does.
+        if asked.code == 1 and not asked.output.strip():
+            return False
+        # Anything else is git failing, which says nothing about the commit, and nothing here is deleted on the strength of it.
+        raise Failure(FAIL_SWITCH_UNREADABLE)
 
     def get_switch(self) -> None:
         # Only this one commit, which is far smaller than the whole history. With its line endings kept, because the containers read these files. Always in place, because the folder holds the .env with this stack's passwords, which git leaves alone and nothing can recover.
@@ -1076,33 +1213,48 @@ class Setup:
         found = self.state.get("processes", {}).get(name)
         return Process(found["pid"], found["started"]) if found else None
 
-    def _alive(self, name: str) -> bool:
+    def _identity(self, name: str) -> str | None:
+        """What the computer says of the process recorded under this name: None when nothing is recorded, otherwise OURS, GONE, OTHERS or UNKNOWN."""
         process = self._record(name)
-        return process is not None and self.machine.alive(process)
+        return self.machine.identity(process) if process is not None else None
+
+    def _alive(self, name: str) -> bool:
+        # A run that can't tell whether its process is there stops, since going on would start a second one beside it.
+        found = self._identity(name)
+        if found == UNKNOWN:
+            raise Failure(FAIL_CANT_TELL.format(name=name))
+        return found == OURS
 
     def _start(self, name: str, command: list, cwd: Path, env: Mapping[str, str]) -> None:
         process = self.machine.spawn(command, cwd, env, self._log(name))
         self.state.setdefault("processes", {})[name] = dataclasses.asdict(process)
         self._save_state()
 
-    def _stop_one(self, name: str) -> str:
-        """Stops a process this setup started, if it can still show it is that process, and says what happened in a few words."""
+    def _stop_one(self, name: str) -> tuple[str, str]:
+        """Stops a process this setup started, if it can still show it is that process, and says what happened in a few words, with whether that is settled: "done", "stuck" or "unsure". The record goes only when it is done."""
         process = self._record(name)
-        said = self._end(process) if process else NOT_RUNNING
-        if not said.startswith("would not"):
+        said, result = self._end(process) if process else (NOT_RUNNING, "done")
+        if result == "done":
             self.state.get("processes", {}).pop(name, None)
             self._save_state()
-        return said
+        return said, result
 
-    def _end(self, process: Process) -> str:
-        if not self.machine.alive(process):
-            return NOT_RUNNING if self.machine.gone(process) else NOT_CONFIRMED.format(pid=process.pid)
+    def _end(self, process: Process) -> tuple[str, str]:
+        found = self.machine.identity(process)
+        if found == UNKNOWN:
+            return CANT_TELL.format(pid=process.pid), "unsure"
+        if found == GONE:
+            return NOT_RUNNING, "done"
+        if found == OTHERS:
+            return NOT_CONFIRMED.format(pid=process.pid), "done"
         self.machine.kill(process)
-        if self._waited(lambda: not self.machine.alive(process), 10, 0.5):
-            return STOPPED
-        return WOULD_NOT_STOP.format(pid=process.pid)
+        if self._waited(lambda: self.machine.identity(process) in (GONE, OTHERS), 10, 0.5):
+            return STOPPED, "done"
+        if self.machine.identity(process) == UNKNOWN:
+            return CANT_TELL.format(pid=process.pid), "unsure"
+        return WOULD_NOT_STOP.format(pid=process.pid), "stuck"
 
-    def _stop_try(self) -> str | None:
+    def _stop_try(self) -> tuple[str, str] | None:
         # None when there is no record of one. A record is what makes it setup's own to stop.
         try:
             found = json.loads(self.try_record.read_text(encoding="utf-8"))
@@ -1112,27 +1264,29 @@ class Setup:
         except (OSError, ValueError, KeyError, TypeError):
             self.try_record.unlink(missing_ok=True)
             return None
-        said = self._end(process)
-        if not said.startswith("would not"):
+        said, result = self._end(process)
+        if result == "done":
             self.try_record.unlink(missing_ok=True)
-        return said
+        return said, result
 
     def _stop_processes(self) -> bool:
         had_controller = self._record("controller") is not None
-        fine = True
-        said_try = self._stop_try()
-        if said_try:
-            self.ui.say(f"  try mode: {said_try}")
-            fine = not said_try.startswith("would not")
+        results = []
+        ended_try = self._stop_try()
+        if ended_try:
+            self.ui.say(f"  try mode: {ended_try[0]}")
+            results.append(ended_try[1])
         for name in ("dashboard", "desk", "controller"):
-            said = self._stop_one(name)
+            said, result = self._stop_one(name)
             self.ui.say(f"  {name}: {said}")
-            fine = fine and not said.startswith("would not")
+            results.append(result)
+        if "unsure" in results:
+            self.ui.say(CANT_TELL_AGAIN)
         if had_controller:
             strays = self.machine.leftovers(self.repo)
             if strays:
                 self.ui.say(MAKERS_LEFT.format(pids=", ".join(str(pid) for pid in strays)))
-        return fine
+        return all(result == "done" for result in results)
 
     def _rooms_mark(self) -> str:
         values = self._env_values(self.env_file)
@@ -1146,7 +1300,10 @@ class Setup:
         return self._alive(name) and self.state.get("following", {}).get(name) == self._rooms_mark()
 
     def _start_following(self, name: str, module: str) -> None:
-        self._stop_one(name)
+        # A second one is never started beside one that is still there or can't be checked.
+        said, result = self._stop_one(name)
+        if result != "done":
+            raise Failure(f"The {name} from an earlier run {said}.")
         env = {**os.environ, **self._env_values(self.env_file), "PYTHONUTF8": "1"}
         self._start(name, [self._python(), "-m", module], self.repo, env)
         self.state.setdefault("following", {})[name] = self._rooms_mark()
@@ -1205,7 +1362,7 @@ class Setup:
             return 1
         running = running_try(self.try_record, self.machine)
         if running:
-            self.ui.say(f"Try mode is running at http://127.0.0.1:{running['port']}.")
+            self.ui.say(f"Try mode may be running at http://127.0.0.1:{running['port']}, but the computer could not be asked just now." if running["unsure"] else f"Try mode is running at http://127.0.0.1:{running['port']}.")
         if not self.state.get("ports"):
             self.ui.say("Foundry has not been set up here yet. Run this with no options to set it up, or with --try to look around with made-up data.")
             return 0
@@ -1216,7 +1373,9 @@ class Setup:
             shown = "Docker is not answering" if asked is None else rows.get(service, {}).get("State") or "not created"
             self.ui.say(f"  {service:<12}{shown}")
         for name in ("controller", "desk", "dashboard"):
-            self.ui.say(f"  {name:<12}{'running' if self._alive(name) else 'stopped'}")
+            found = self._identity(name)
+            shown = "running" if found == OURS else "can't tell just now" if found == UNKNOWN else "stopped"
+            self.ui.say(f"  {name:<12}{shown}")
         self.ui.say(f"  Demo rooms  {', '.join(self.state.get('rooms_made', [])) or 'none yet'}")
         self.ui.say()
         self.ui.say(f"  Dashboard   {self.dashboard_url()}")
@@ -1252,8 +1411,10 @@ class Setup:
         lines = []
         if self.state.get("stack_started"):
             lines.append(f"the Docker containers, network and data of project {self.project()}")
+        if self.state.get("processes") or self.try_record.exists():
+            lines.append("first, it stops whatever setup started that is still running: the agent controller, the desk, the dashboard and try mode")
         if self.state.get("pulled_images"):
-            lines.append(f"{len(self.state['pulled_images'])} Docker images only this setup downloaded")
+            lines.append(f"{len(self.state['pulled_images'])} Docker images only this setup downloaded: {', '.join(self.state['pulled_images'])}")
         lines.append(".foundry, with Switch's copy, the controller, Foundry's databases and uploads, and the logs")
         if created.get("env"):
             lines.append(".env, which setup wrote")
@@ -1279,11 +1440,41 @@ class Setup:
             kept += [f".foundry/{entry.name}" for entry in sorted(self.home.iterdir()) if entry.name != "state.json" and (entry.name not in OWN_IN_HOME or entry.name in self.state.get("before", []))]
         return kept
 
-    def _down(self) -> list:
+    def _down(self) -> Result:
+        log = self._log("switch")
         if self.images_file.exists() and (self.switch / COMPOSE_FILE).exists():
-            return self.compose("down", "-v", "--remove-orphans")
-        # Its files have gone, and the project name alone still reaches its containers and nothing else.
-        return [self.machine.which("docker") or "docker", "compose", "-p", self.project(), "down", "-v", "--remove-orphans"]
+            return self.machine.run(self.compose("down", "-v", "--remove-orphans"), log=log, timeout=300)
+        # Its files have gone, and the project name alone still reaches its containers and nothing else. From a folder with nothing in it, so a compose file in whatever folder this was run from is not read as well.
+        with tempfile.TemporaryDirectory(prefix="foundry-down-") as empty:
+            return self.machine.run([self.machine.which("docker") or "docker", "compose", "-p", self.project(), "down", "-v", "--remove-orphans"], cwd=Path(empty), log=log, timeout=300)
+
+    def _agents_folder_is_ours(self) -> bool:
+        # Switch names the folder after the server's port, so a port in the state file proves nothing alone. This clone's own Switch settings, which setup wrote, must say the same port.
+        port = self.ports["api"]
+        root = self.machine.home() / ".switch" / "agents"
+        folder = self.agents_folder()
+        try:
+            written = self._env_values(self.switch_env_file).get("API_HOST_PORT")
+        except Failure:
+            return False
+        return written == str(port) and folder.name == f"127.0.0.1-{port}" and Path(os.path.realpath(folder)) == Path(os.path.realpath(root)) / folder.name
+
+    def _unsafe_removals(self) -> list[str]:
+        """What reset would remove that is not where setup puts it, which only an edited state file or a link can cause. Looked at before anything is removed."""
+        created = self.state.get("created", {})
+        before = self.state.get("before", [])
+        unsafe = [str(self.home / name) for name in OWN_IN_HOME if name not in before and (self.home / name).exists() and not is_inside(self.home / name, self.home)]
+        if created.get("venv") and (self.repo / ".venv").exists() and not is_inside(self.repo / ".venv", self.repo):
+            unsafe.append(str(self.repo / ".venv"))
+        if created.get("agents_folder") and "ports" in self.state and self.agents_folder().exists() and not self._agents_folder_is_ours():
+            unsafe.append(str(self.agents_folder()))
+        return unsafe
+
+    def _remove_below(self, path: Path, parent: Path) -> None:
+        # The one way reset removes a folder, so none is removed that does not sit below the folder it belongs in.
+        if not is_inside(path, parent):
+            raise Failure(FAIL_UNSAFE.format(path=path))
+        self.machine.remove_tree(path)
 
     def reset(self) -> int:
         self._hide_secrets(say=True)
@@ -1293,6 +1484,11 @@ class Setup:
         if not self.state:
             self.ui.say("Nothing to remove. Setup has no record of making anything here.")
             return 0
+        unsafe = self._unsafe_removals()
+        if unsafe:
+            for path in unsafe:
+                self.ui.say(FAIL_UNSAFE.format(path=path))
+            return 1
         if self.state.get("stack_started") and _quiet_run(self.machine, "docker", "info").code != 0:
             self.ui.say(FAIL_RESET_NO_DOCKER)
             return 1
@@ -1313,19 +1509,19 @@ class Setup:
             self.ui.say("Nothing else was removed.")
             return 1
         created = self.state.get("created", {})
-        if self.state.get("stack_started") and self.machine.run(self._down(), log=self._log("switch"), timeout=300).code != 0:
+        if self.state.get("stack_started") and self._down().code != 0:
             self.ui.say(FAIL_RESET_DOWN.format(project=self.project(), log=self._shown(self._log("switch"))))
             return 1
         docker = self.machine.which("docker") or "docker"
         # Never with force, so an image another container has come to use stays.
         images_left = [image for image in self.state.get("pulled_images", []) if self.machine.run([docker, "image", "rm", image], timeout=120).code != 0]
-        if created.get("agents_folder") and "ports" in self.state:
-            self.machine.remove_tree(self.agents_folder())
+        if created.get("agents_folder") and "ports" in self.state and self.agents_folder().exists():
+            self._remove_below(self.agents_folder(), self.machine.home() / ".switch" / "agents")
         if created.get("env"):
             self.env_file.unlink(missing_ok=True)
             self.env_file.with_name(".env.tmp").unlink(missing_ok=True)
-        if created.get("venv"):
-            self.machine.remove_tree(self.repo / ".venv")
+        if created.get("venv") and (self.repo / ".venv").exists():
+            self._remove_below(self.repo / ".venv", self.repo)
         self._remove_own_folder()
         self.state = {}
         self.ui.say("Removed. Run this again to set it all up from the start.")
@@ -1340,7 +1536,7 @@ class Setup:
         for name in OWN_IN_HOME:
             path = self.home / name
             if name not in before and path.is_dir():
-                self.machine.remove_tree(path)
+                self._remove_below(path, self.home)
             elif name not in before:
                 path.unlink(missing_ok=True)
         self.state_file.unlink(missing_ok=True)
@@ -1363,7 +1559,8 @@ TRY_RECORD = "try.json"
 # What tools/try_foundry.py returns when it has said why it stopped itself.
 TRY_ALREADY_SAID = 3
 TRY_RUNNING = "Try mode is already running at http://127.0.0.1:{port}. Its sign-in page shows the made-up login. To stop it, press Ctrl+C where it started or run this with --stop."
-TRY_DID_NOT_RUN = "Try mode has stopped. If it never showed an address, uv probably could not fetch Python or Foundry's packages, which the first run needs the internet for."
+TRY_UNSURE = "Setup could not check whether the try mode it recorded, at http://127.0.0.1:{port}, is still running, so it started none beside it. This is usually a busy computer: run this again in a minute."
+TRY_DID_NOT_RUN ="Try mode has stopped. If it never showed an address, uv probably could not fetch Python or Foundry's packages, which the first run needs the internet for."
 
 
 def running_try(record: Path, machine: Machine) -> dict | None:
@@ -1377,8 +1574,10 @@ def running_try(record: Path, machine: Machine) -> dict | None:
     except (OSError, ValueError, KeyError, TypeError):
         record.unlink(missing_ok=True)
         return None
-    if machine.alive(process):
-        return {"pid": process.pid, "started": process.started, "port": port}
+    found = machine.identity(process)
+    if found in (OURS, UNKNOWN):
+        # "unsure" when the computer could not be asked: the record stays, and nothing is started beside what may be running.
+        return {"pid": process.pid, "started": process.started, "port": port, "unsure": found == UNKNOWN}
     record.unlink(missing_ok=True)
     return None
 
@@ -1391,6 +1590,9 @@ def try_mode(repo: Path, machine: Machine, ui: Ui, build: "Setup") -> int:
     # It needs only uv. Its data and settings live in its own folder, it never reads a .env, and tools/try_foundry.py listens on this machine and connects to nothing.
     running = running_try(build.try_record, machine)
     if running:
+        if running["unsure"]:
+            ui.say(TRY_UNSURE.format(port=running["port"]))
+            return 1
         ui.say(TRY_RUNNING.format(port=running["port"]))
         return 0
     uv = machine.which("uv")
