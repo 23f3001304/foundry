@@ -39,6 +39,8 @@ DECIMAL_COMMAS_READ = "Numbers with a comma in them were read as decimal commas,
 # The marks at the front of a file that say how it is written. Excel's Unicode Text export begins with a UTF-16 one.
 BOMS = ((codecs.BOM_UTF8, "utf-8-sig"), (codecs.BOM_UTF16_LE, "utf-16"), (codecs.BOM_UTF16_BE, "utf-16"))
 NOT_A_SPREADSHEET = "I couldn't read {name} as a spreadsheet. It may be damaged, or not really an .xlsx file."
+# The folder of a client's own documents, inside its brand folder.
+DOCUMENTS = "sources"
 NO_COLUMN = 'There is no column "{name}". The columns are: {columns}.'
 
 
@@ -83,6 +85,13 @@ def column_named(table: Table, name: str) -> int:
 def safe_name(text: str, fallback: str) -> str:
     # Letters, digits, dots, dashes and underscores only, so a name can't be a folder or reach one.
     return re.sub(r"[^\w.-]+", "_", text).strip("._-") or fallback
+
+
+def client_documents(brands: Path, bucket: str) -> Path | None:
+    # A brand's folder is named for its bucket, and a bucket that is not one plain name has no folder to read.
+    if not bucket or Path(bucket).name != bucket or bucket in (".", ".."):
+        return None
+    return brands / bucket / DOCUMENTS
 
 
 def job_folder(inputs_dir: Path | str, bucket: str, job_id: str) -> Path:

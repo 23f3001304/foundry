@@ -20,7 +20,7 @@ from foundry.checks import RESULT, cell_number, shown_words
 from foundry.items import IN, ItemState, ItemStore, desk_wrote, owed_items, own_words
 from foundry.jobs import Job
 from foundry.log import Entry, Log
-from foundry.tables import Row, Table, address, column_named, is_file_answer, is_under, job_folder, read_file, squash, words
+from foundry.tables import DOCUMENTS, Row, Table, address, client_documents, column_named, is_file_answer, is_under, job_folder, read_file, squash, words
 from foundry.text import quiet
 from foundry.tools import confine
 from foundry.tools.layout import NOT_RECEIVED, MakerError, check_font_can_draw, figure_text, load_font, mix
@@ -30,7 +30,6 @@ mcp = MCPServer("foundry-data")
 
 # The folders of each client's own documents, one folder for each brand, and the part of it a maker may have read.
 BRANDS = Path(__file__).resolve().parents[3] / "brands"
-DOCUMENTS = "sources"
 DATA_NAME = "foundry-data"
 ANSWERS = "answers:"
 ANSWER_COLUMNS = ("owner", "measure", "value", "entry")
@@ -125,10 +124,7 @@ def _resolved(text: str) -> Path | None:
 
 
 def _documents(job: Job) -> Path | None:
-    # A brand's folder is named for its bucket, and a bucket that is not one plain name has no folder to read.
-    if not job.bucket or Path(job.bucket).name != job.bucket or job.bucket in (".", ".."):
-        return None
-    return BRANDS / job.bucket / DOCUMENTS
+    return client_documents(BRANDS, job.bucket)
 
 
 def _readable(job: Job, log: Log, source: str) -> Path:
