@@ -32,8 +32,10 @@ MONTH_NAMES = r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?
 MONTH = rf"(?:{MONTH_NAMES}|{MONTH_NAMES.upper()})\b\.?"
 YEAR = r"(?:19|20)\d{2}"
 DAY = r"\d{1,2}(?:st|nd|rd|th|ST|ND|RD|TH)?"
+# A date or a period's name is written on one line. Text from a deck has a line break between its shapes and its cells, so a figure beside a month in the next shape is still a figure.
+ON_ONE_LINE = r"[ \t\u00a0]"
 # 8 Nov 2026, 8th of November, Nov 8, 2026 and 2026-11-08, and the same in capitals.
-WRITTEN_DATE = re.compile(rf"\b{DAY}\s+(?:(?:of|OF)\s+)?{MONTH}(?:,?\s+{YEAR})?|\b{MONTH}\s+{DAY}\b(?:,?\s+{YEAR})?|\b{YEAR}-\d{{2}}-\d{{2}}\b")
+WRITTEN_DATE = re.compile(rf"\b{DAY}{ON_ONE_LINE}+(?:(?:of|OF){ON_ONE_LINE}+)?{MONTH}(?:,?{ON_ONE_LINE}+{YEAR})?|\b{MONTH}{ON_ONE_LINE}+{DAY}\b(?:,?{ON_ONE_LINE}+{YEAR})?|\b{YEAR}-\d{{2}}-\d{{2}}\b")
 # A year is four plain digits. With a comma, as in 2,026, or after a currency mark or before a %, as in ₹1999 and 2000%, it is a quantity.
 YEAR_ONLY = re.compile(YEAR)
 CURRENCY_BEFORE = re.compile(r"(?:₹|(?<![A-Za-z])Rs\.?|[$€£])\s*$")
@@ -44,7 +46,7 @@ FIGURE = re.compile(rf"(-?)\s*[₹$€£]?\s*({NUMBER.pattern})\s*%?")
 # A period label is a quarter, a financial year, or both, such as Q1, FY26 and Q1 FY2026. It names a period and is no figure, so it is skipped by its shape as a date is.
 # Only that exact shape: a label followed by more digits, a percent sign or a decimal part, a bare Q5, a Q1 followed by a number and 26 before an FY are all figures.
 LABEL_END = r"(?![\w%]|[.,]\d)"
-PERIOD = re.compile(rf"\b(?:Q[1-4]\s*)?FY\s?(?:\d{{4}}|\d{{2}}){LABEL_END}|\bQ[1-4]{LABEL_END}", re.IGNORECASE)
+PERIOD = re.compile(rf"\b(?:Q[1-4]{ON_ONE_LINE}*)?FY{ON_ONE_LINE}?(?:\d{{4}}|\d{{2}}){LABEL_END}|\bQ[1-4]{LABEL_END}", re.IGNORECASE)
 
 
 def _normal(token: str) -> str:
