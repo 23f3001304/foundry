@@ -45,7 +45,7 @@ Answer with one JSON object and nothing else:
 
 kind is one of:
 answer: the sender gives the answer to one of the items. value is the answer as written, in the form the item asks for.
-reason: the sender says why they cannot give an item now, such as being blocked. reason is a short quote. Leave person blank when the reason is about the sender or their own team. Only fill it when it is about someone else on the list of items.
+reason: the sender says why they cannot give an item now, such as being blocked. reason is a short quote. Leave person blank when the reason is about the sender or their own team, and that includes who is holding them up, as in "blocked on QA". Only fill it when it is about someone else in the items or the people above.
 passed_on: the sender passes on an answer that someone else gave, such as "Team Lead C says 40%". person is who gave it and value is the answer.
 unavailable: someone says a person is away, such as on leave. person is who, left blank when it is the sender. until is the day they are back as YYYY-MM-DD, left blank when no day is given.
 replace: someone says to ask a different person for an item. person is who to ask instead.
