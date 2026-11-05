@@ -85,6 +85,7 @@ ONE_BY_ONE = "one_by_one"
 SEEDED = "seeded"
 WAITING_SINCE = "waiting_since"
 DETAIL_POSTED = "detail_posted"
+FILES, FILES_POSTED = "files", "files_posted"
 # An item that must be seen to be answered, such as a report, is brought by "Show what needs me" even when it is clean.
 ALWAYS_SHOW = "always_show"
 # A clean item is only clean until this time. One that comes round after it is no longer clean, so one press never approves a stale item.
@@ -130,6 +131,15 @@ def fit_detail(client: SwitchClient, room_id: str, detail: str) -> str:
         return detail
     client.post_message(room_id, detail)
     return READ_ABOVE
+
+
+def post_files(client: SwitchClient, room_id: str, files: list[str]) -> None:
+    # Each file goes up just before the card that asks about it. A file gone from disk is left out rather than keeping the card shut.
+    for path in files:
+        if Path(path).is_file():
+            client.post_file(room_id, path, f"For your sign-off: {Path(path).name}")
+        else:
+            logger.warning("Could not send %s with its card, as it is no longer there", path)
 
 
 def _new_id() -> str:
@@ -424,6 +434,10 @@ class CardQueue:
         self._save(card)
 
     def _open(self, card: Card) -> None:
+        # The files go up once, however many tries the card takes to open.
+        if card.data.get(FILES) and not card.data.get(FILES_POSTED):
+            post_files(self.client, card.room_id, card.data[FILES])
+            card.data[FILES_POSTED] = True
         detail = self._detail_that_fits(card)
         if card.choices:
             # A question's title is the question itself, under the heading the client gives a person's note. On any other card the title is the heading.

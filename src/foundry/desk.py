@@ -869,13 +869,11 @@ class Desk:
 
     def _ask_for_signoff(self, job: Job, reviewer_said: str) -> None:
         room = self._approval_room(job)
-        for path in job.artifacts:
-            self.client.post_file(room, path, f"For your sign-off: {Path(path).name}")
         # Last round's lines from this check go, because that work has changed. Lines other checks wrote stay.
         job.attention = [line for line in job.attention if not WORK_CHECK_LINE.fullmatch(line)] + self._attention_for_work(job)
         lines = "\n".join(quiet(line) for line in job.attention)
         said = self._reviewer_said(job, room, reviewer_said)
-        self.gate.ask(job, FINAL_WORK_TITLE.format(title=self._title(job)), "\n\n".join(part for part in (lines, said, SIGNOFF) if part), room)
+        self.gate.ask(job, FINAL_WORK_TITLE.format(title=self._title(job)), "\n\n".join(part for part in (lines, said, SIGNOFF) if part), room, list(job.artifacts))
         self._sticker(room, "needs_input")
 
     def _maker_said(self, job: Job, words: str) -> str:
@@ -1620,7 +1618,7 @@ class Desk:
         # A card that ran out has no buttons left, so these would stay stuck.
         self.client.post_message(room_id, RAN_OUT_OPENED_AGAIN)
         for job in jobs:
-            self.gate.ask(job, job.approval["title"], job.approval["detail"], job.approval_room)
+            self.gate.ask(job, job.approval["title"], job.approval["detail"], job.approval_room, job.approval.get("files"))
             self.store.save(job)
 
     def _note_answer_time(self, card: Card | None, outcome: Outcome) -> None:

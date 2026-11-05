@@ -8,7 +8,7 @@ from enum import Enum
 
 import httpx
 
-from foundry.cards import ANSWERED, CARD_LIMIT, READ_ABOVE, CardQueue, Trigger, fit_detail  # noqa: F401
+from foundry.cards import ANSWERED, CARD_LIMIT, FILES, READ_ABOVE, CardQueue, Trigger, fit_detail, post_files  # noqa: F401
 from foundry.jobs import Job, State
 from foundry.switch_client import Outcome, SwitchClient
 
@@ -72,8 +72,9 @@ class Gate:
         self.client = client
         self.extra_words = extra_words
 
-    def ask(self, job: Job, title: str, detail: str, room_id: str | None = None) -> None:
-        job.approval = {"request_id": f"{job.id}-{uuid.uuid4().hex[:8]}", "title": title, "detail": detail, "awaiting_notes": False, "room_id": room_id or job.room_id}
+    def ask(self, job: Job, title: str, detail: str, room_id: str | None = None, files: list[str] | None = None) -> None:
+        # The files go out with the card itself, on every platform, so the approver sees the work right where they answer.
+        job.approval = {"request_id": f"{job.id}-{uuid.uuid4().hex[:8]}", "title": title, "detail": detail, "awaiting_notes": False, "room_id": room_id or job.room_id, "files": list(files or [])}
         job.revision_notes = None
         self._show(job)
 
@@ -94,7 +95,7 @@ class Gate:
         if outcome.state != "answered":
             return Decision.NONE
         if outcome.answered_by != job.approver:
-            self.ask(job, job.approval["title"], job.approval["detail"], job.approval_room)
+            self.ask(job, job.approval["title"], job.approval["detail"], job.approval_room, job.approval.get("files"))
             return Decision.NOT_APPROVER
         if outcome.answer == "approve":
             return self._finish(job, Decision.APPROVE)
@@ -143,6 +144,7 @@ class Gate:
 
 class CardGate(Gate):
     def _show(self, job: Job) -> None:
+        post_files(self.client, job.approval_room, job.approval.get("files", []))
         detail = fit_detail(self.client, job.approval_room, job.approval["detail"])
         self.client.open_card(job.approval_room, job.approval["request_id"], job.approval["title"], detail)
 
@@ -169,7 +171,7 @@ class QueuedCardGate(CardGate):
         trigger = {State.BRIEF_PENDING: Trigger.BRIEF, State.BLOCKED: Trigger.STUCK}.get(job.state, Trigger.FINAL_WORK)
         # Nothing comes round to ask again about a job's answers once it has moved on, so a card Switch refuses stays in the queue, which also keeps its long text from being posted twice.
         keep = job.makes_nothing and job.state is State.SIGNOFF_PENDING
-        self.cards.submit(trigger, job.approver, job.bucket, job.approval_room, approval["title"], approval["detail"], job_id=job.id, request_id=approval["request_id"], keep_refused=keep)
+        self.cards.submit(trigger, job.approver, job.bucket, job.approval_room, approval["title"], approval["detail"], job_id=job.id, request_id=approval["request_id"], keep_refused=keep, data={FILES: approval.get("files", [])})
 
     def _close(self, job: Job) -> None:
         super()._close(job)
