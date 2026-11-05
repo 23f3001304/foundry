@@ -955,12 +955,26 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     For a deck of one slide, give no slides and put its points in bullets. It is then one content slide on the brand's paper, with title, subtitle and bullets on it.
 
     Each slide is one of:
+    {"layout": "big_number", "title": "...", "caption": "What the figure is, with its unit", "labels": ["Office A", "Office B"], "values": [6420, null], "highlight": "Office A"}
+    {"layout": "big_number", "title": "...", "number": "19,800", "caption": "What the figure is, with its unit"}
+    {"layout": "chart", "title": "...", "caption": "What the figures are", "labels": ["Office A", "Office B"], "values": [18.62, 15.3], "unit": "%"}
+    {"layout": "table", "title": "...", "rows": [["Region", "Revenue"], ["North", "100"]]} where the first row is the headings, at most 8 columns, and the table must fit on the slide
     {"layout": "content", "title": "...", "bullets": ["...", "..."]}
     {"layout": "statement", "text": "One big sentence."}
     {"layout": "title", "title": "...", "subtitle": "..."}
-    {"layout": "table", "title": "...", "rows": [["Region", "Revenue"], ["North", "100"]]} where the first row is the headings, at most 8 columns, and the table must fit on the slide
-    {"layout": "picture", "title": "...", "path": "/absolute/path/chart.png"} where the picture is a .png or .jpg, such as a chart draw_chart made, shown whole
-    Any slide can also have "highlight": words on that slide to put on the brand's accent colour, for the one thing that matters most.
+    {"layout": "picture", "title": "...", "path": "/absolute/path/chart.png"} where the picture is a .png or .jpg, shown whole
+
+    When a slide is about figures, use these without being asked. big_number is for one figure that matters, shown very large, with the others as strokes under it, or alone.
+    chart is for comparing figures, as upright strokes, with the one that matters over its own stroke. Give "keep_order": true for a series over time, which otherwise goes largest first.
+    A table is for who gave what, or for more than one column of figures. It sets its figures large and lights one, the largest in its last column of figures, or the row a highlight names.
+    draw_chart and the picture layout are for a chart with a figure below zero, which a stroke cannot show. draw_chart also delivers a chart on its own.
+
+    In labels and values, at most 10 of each, a value is a number from calculate or job_facts, never your own sum. The slide writes it with commas, so give 6420, and unit goes after it, such as "%".
+    The largest is lit, and on a chart slide highlight must be one of the labels if you want another lit.
+    A value is null when nobody sent that figure, and so is a cell of a table's rows. The slide then says "not received", with no number and no stroke. Give it no source, and never fill in a figure.
+    A figure far from the others is said on the slide in words by itself, such as "Office E: far from the others. Shown as given.", on these two layouts and on a table whose slide has sources. Do not leave the figure out or correct it.
+
+    Any other slide can also have "highlight": words on that slide to light in the brand's accent colour, for the one thing that matters most. A slide with no highlight and nothing lit shows the accent as a short mark.
     highlight does the same for the title slide. Text that cannot fit raises an error. Shorten it or split the slide.
 
     Only when foundry-desk's message asks for sources, a slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 IST"}],

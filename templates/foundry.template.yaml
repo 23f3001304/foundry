@@ -150,8 +150,11 @@ resources:
       answer, by its file name as job_facts lists it; or a CSV or XLSX file in the sources
       folder of this client's brand folder. Every result lists the rows it came from, and calculate
       records its result on the job, so a figure it worked out is counted as backed. When it says it
-      left out a cell, or gives any warning, say so wherever you use the result. draw_chart draws a bar, line or pie chart in the brand's colours, and
-      the table and picture layouts of build_deck put a table or a chart on a slide. Take every figure
+      left out a cell, or gives any warning, say so wherever you use the result. On a slide about figures,
+      reach first for the big_number and chart layouts of build_deck, which light the one figure that matters
+      and let the rest recede, and give a null for a figure nobody sent, which shows as not received.
+      The table and picture layouts of build_deck put a table or a picture on a slide. draw_chart draws a bar, line
+      or pie chart in the brand's colours, for delivering a chart on its own. Take every figure
       from a tool result or a log entry, never from your own sums.
 
       Never edit a file after the tool has made it. If the tool cannot do what the brief
