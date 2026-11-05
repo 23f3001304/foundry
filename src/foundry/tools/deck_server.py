@@ -19,9 +19,9 @@ from pptx.util import Pt
 
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
-from foundry.checks import PERIOD, figure, outliers
+from foundry.checks import PERIOD, WRITTEN_DATE, carries, figure, outliers
 from foundry.tools import confine, touchstone
-from foundry.tools.layout import LINE_SPACING, NOT_RECEIVED, MakerError, contrast, figure_text, fit_size, load_font, mix, words_of, wrap
+from foundry.tools.layout import LINE_SPACING, NOT_RECEIVED, MakerError, contrast, figure_text, fit_size, load_font, mix, with_commas, words_of, wrap
 
 mcp = MCPServer("foundry-deck")
 
@@ -47,6 +47,10 @@ WORD_SLACK = 4
 RULE_WIDTH = 9525
 PICTURE_KINDS = (".png", ".jpg", ".jpeg")
 ROWS_SHAPE = 'A table\'s "rows" is a list of rows, and each row is a list of cells. The first row holds the headings.'
+# A column under a heading like these holds years, which stay as written. A heading that only mentions a year, such as Revenue this year, holds figures.
+YEARS_HEADING = re.compile(r"(?:(?:calendar|financial|fiscal)\s+)?(?:year|yr|fy|period)(?:\s+(?:ended|ending|end|founded))?|founded", re.IGNORECASE)
+# What may follow a figure in a cell: words with no digit in them, such as USD m.
+FIGURE_AND_UNIT = re.compile(r"(\S+)(?:\s+[^\d\s][^\d]*)?")
 TABLE_TOO_TALL = "This table is too big to fit on one slide, because it is too tall. Show fewer rows, shorten the cells, or split it over two slides."
 TABLE_TOO_WIDE = "This table is too big to fit on one slide, because it is too wide: its longest words do not fit side by side at the smallest size. Use fewer columns or shorter words."
 DRAWING = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
@@ -379,14 +383,40 @@ def _one_slide(deck: Presentation, brand: Brand, title: str, subtitle: str, bull
     _corner_logo(slide, brand, look)
 
 
-def _cell_text(cell: object) -> str:
+def _cell_text(cell: object, as_written: bool = False) -> str:
     # A null is a figure nobody sent. It is said in words, so there is never a number in its place and never an empty cell that could be read as nothing.
+    # A figure is written with its commas, so the number check reads 1,980 where it would take 1980 for a year. A heading or a year stays as written.
     if cell is None:
         return NOT_RECEIVED
-    if isinstance(cell, float) and cell.is_integer():
+    if as_written and isinstance(cell, float) and cell.is_integer():
         return str(int(cell))
+    if not as_written and _is_figure(cell):
+        return figure_text(cell)
     text = str(cell).strip()
-    return NOT_RECEIVED if text.casefold() == NOT_RECEIVED else text
+    if text.casefold() == NOT_RECEIVED:
+        return NOT_RECEIVED
+    bare = not as_written and figure(text) is not None and text[0].isdigit() and text[-1].isdigit()
+    return with_commas(text) if bare else text
+
+
+def _cell_figure(text: str):
+    # The figure a cell starts with, when all that follows it is its unit. A date, a period's name or words with a number in them, such as Office 1, hold none.
+    whole = FIGURE_AND_UNIT.fullmatch(text)
+    return figure(whole[1]) if whole and not WRITTEN_DATE.search(text) else None
+
+
+def _written_rows(rows: list[list]) -> list[list[str]]:
+    # What a table's cells say on the slide. In a column of figures, one with its unit after it gets its commas too. The first column names the rows.
+    headings = [_cell_text(cell, as_written=True) for cell in rows[0]]
+    years = {at for at, heading in enumerate(headings) if YEARS_HEADING.fullmatch(heading)}
+    body = [[_cell_text(cell, at in years) for at, cell in enumerate(row)] for row in rows[1:]]
+    for at in set(range(1, len(headings))) - years:
+        given = [row[at] for row in body if at < len(row) and row[at] and row[at] != NOT_RECEIVED]
+        if 2 * sum(_cell_figure(text) is not None for text in given) >= len(given):
+            for row in body:
+                if at < len(row) and _cell_figure(row[at]) is not None:
+                    row[at] = with_commas(row[at])
+    return [headings, *body]
 
 
 def _table_cells(spec: dict) -> list[list[str]]:
@@ -395,7 +425,7 @@ def _table_cells(spec: dict) -> list[list[str]]:
         raise MakerError(ROWS_SHAPE)
     if len(rows) < 2:
         raise MakerError("A table needs its headings and at least one row under them.")
-    cells = [[_periods_together(_cell_text(cell)) for cell in row] for row in rows]
+    cells = [[_periods_together(text) for text in row] for row in _written_rows(rows)]
     columns = len(cells[0])
     if not columns:
         raise MakerError("A table needs at least one column.")
@@ -783,12 +813,17 @@ def _make_big_number(deck: Presentation, brand: Brand, spec: dict) -> None:
         _number_over_strokes(deck, brand, spec, title)
 
 
+def _written_number(number: str | float) -> str:
+    # A number is always in a figure's place, so a year-shaped one gets its comma with or without words after it.
+    return with_commas(number.strip()) if isinstance(number, str) else figure_text(number)
+
+
 def _number_alone(deck: Presentation, brand: Brand, spec: dict, title: str) -> None:
     number = spec["number"]
     if isinstance(number, bool) or not (number is None or isinstance(number, str) or (isinstance(number, int | float) and math.isfinite(number))):
         raise MakerError(NOT_A_NUMBER.format(value=number))
     missing = number is None or (isinstance(number, str) and number.strip().casefold() == NOT_RECEIVED)
-    written = NOT_RECEIVED if missing else number.strip() if isinstance(number, str) else figure_text(number)
+    written = NOT_RECEIVED if missing else _written_number(number)
     look = _look(brand, loud=True)
     slide = _new_slide(deck, brand, look)
     _title(slide, brand, look, (look.left, TITLE_TOP, SIDE_RIGHT - look.left, TITLE_HEIGHT), title, 36, 16)
@@ -902,7 +937,8 @@ def _source(item: object, slide: int, words: list[str]) -> Link:
         raise MakerError(f'A source needs its "label", who gave it and when. {SOURCE_SHAPE}')
     if value.strip().casefold() == NOT_RECEIVED:
         raise MakerError(NO_SOURCE_FOR_NOTHING)
-    if not any(value in text for text in words):
+    # However the figure is written, and as a whole figure, so 4 is not on a slide that says 4,730.
+    if not carries("\n".join(word for word in words if isinstance(word, str)), value):
         raise MakerError(f"A source's value must be words on its slide. {value!r} is not on it.")
     return Link(slide, value, entry, label)
 
@@ -918,7 +954,8 @@ def _sources_of(spec: dict, slide: int) -> list[Link]:
 def _data_words(spec: dict) -> list[str]:
     # The words a table's cells and a chart's record put on their slide. Left alone when they are not shaped right, which the layout will say.
     if spec.get("layout") == "table" and isinstance(spec.get("rows"), list):
-        return [_cell_text(cell) for row in spec["rows"] if isinstance(row, list) for cell in row]
+        rows = [row for row in spec["rows"] if isinstance(row, list)]
+        return [text for row in _written_rows(rows) for text in row] if rows else []
     if spec.get("layout") == "picture" and isinstance(spec.get("path"), str):
         return _chart_record(Path(spec["path"])).splitlines()
     if spec.get("layout") in ("big_number", "chart"):
@@ -933,10 +970,12 @@ def _is_figure(value: object) -> bool:
 def _chart_slide_words(spec: dict) -> list[str]:
     # The figures a chart slide writes, with and without its unit, and its words.
     values = spec["values"] if isinstance(spec.get("values"), list) else []
-    written = [figure_text(value) for value in [*values, spec.get("number")] if _is_figure(value)]
+    written = [figure_text(value) for value in values if _is_figure(value)]
+    if _is_figure(spec.get("number")) or isinstance(spec.get("number"), str):
+        written.append(_written_number(spec["number"]))
     unit = spec.get("unit", "") if isinstance(spec.get("unit", ""), str) else ""
     labels = spec["labels"] if isinstance(spec.get("labels"), list) else []
-    words = [*written, *(text + unit for text in written), *labels, spec.get("caption"), spec.get("number")]
+    words = [*written, *(text + unit for text in written), *labels, spec.get("caption")]
     return [word for word in words if isinstance(word, str)]
 
 

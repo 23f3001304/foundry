@@ -83,6 +83,15 @@ def contrast(one: str, other: str) -> float:
     return (light + 0.05) / (dark + 0.05)
 
 
+# The digits a figure starts with, when what follows them is its decimal part, words or nothing. One that starts with a zero is a code, such as 007.
+LEADING_DIGITS = re.compile(r"[1-9]\d*(?=(?:\.\d+)?(?:\s|$))")
+
+
+def with_commas(text: str) -> str:
+    # A figure as figure_text writes it when it came as text, so that 1980 is 1,980 and numbers_in does not take it for a year.
+    return LEADING_DIGITS.sub(lambda digits: re.sub(r"(?<=\d)(?=(?:\d{3})+$)", ",", digits.group()), text, count=1) if LEADING_DIGITS.match(text) else text
+
+
 def figure_text(value: float) -> str:
     # Written so that numbers_in reads it back as the number it was given: digits, with commas between the thousands.
     text = f"{Decimal(format(value, '.15g')):,f}"
