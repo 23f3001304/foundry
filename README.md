@@ -251,7 +251,7 @@ The inputs are due 15 minutes in and the deck 60 minutes in. The scene needs a r
 
 ### 9. Play the marketing agency demo
 
-Bhorvela Studio is a fictional marketing agency with two fictional clients. Phatakha Pop is a loud fizzy drinks brand, and Ambaryug Teas is a quiet heritage tea house. A Marketing Manager at each asks for a full campaign set: a deck, a poster, social posts at 1080x1080 and 1080x1920, and written copy. Each client's kit leads its set, so the two come out looking and sounding different. The agency's Account Director approves each brief and each finished set inside the studio rooms, and the clients see nothing of it. **The people's messages are scripted. Everything Foundry says back, and every file, comes from the real desk, real agents and real models.**
+Bhorvela Studio is a fictional marketing agency with two fictional clients. Phatakha Pop is a loud fizzy drinks brand, and Ambaryug Teas is a quiet heritage tea house. A Marketing Manager at each asks for a full campaign set: a deck, a poster, social posts at 1080x1080 and 1080x1920, and written copy. Each client's kit leads its set, so the two come out looking and sounding different. The agency's Account Director approves each brief and each finished set inside the studio rooms, and is a member of each client's review room too, because a long reply of the reviewer's is cut short on the sign-off card and the whole of it is there. The clients see nothing of any of it. **The people's messages are scripted. Everything Foundry says back, and every file, comes from the real desk, real agents and real models.**
 
 What this demo shows about clients:
 

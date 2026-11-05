@@ -1,15 +1,15 @@
 # The marketing agency's campaign sets. A fictional agency with two fictional clients, and job titles for people. The people's words are scripted, and everything Foundry says back is real.
 # Both clients ask before either is answered, so two jobs run at once, each with agents of its own.
-# The Account Director works inside, in each client's studio room, where the brief and the final work wait for a yes. The clients are in their own rooms only, and never see a card.
+# The Account Director works inside, in each client's studio room, where the brief and the final work wait for a yes, and in its review room, where the reviewer's whole reply is when the sign-off card cuts it short. The clients are in their own rooms only, and never see a card.
 # Start the desk with FOUNDRY_QUIET_SECONDS=8. Picture drawing is off unless FOUNDRY_IMAGES=on, and the written copy says plainly when no pictures were drawn.
 name: agency
 # Two businesses, so brands and not brand. Neither has earlier history, because nobody in an agency scene owes anything.
 brands: [demo-agency-client-a, demo-agency-client-b]
 people:
-  Account Director: [phatakha-studio, ambaryug-studio]
+  Account Director: [phatakha-studio, phatakha-review, ambaryug-studio, ambaryug-review]
   Marketing Manager A: [phatakha]
   Marketing Manager B: [ambaryug]
-watch: [phatakha, phatakha-studio, ambaryug, ambaryug-studio]
+watch: [phatakha, phatakha-studio, phatakha-review, ambaryug, ambaryug-studio, ambaryug-review]
 steps:
   - as: Marketing Manager A
     room: phatakha
