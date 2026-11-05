@@ -1131,15 +1131,18 @@ class Coordinator:
         # "Team Lead C is blocked" says nothing about what the sender owes, however the name is written. It takes another person the reader could mean for that: "Team B", "my team" or "QA" is still the sender talking about themselves, and so is "I", "Team Lead C and me", or "a vendor", whose "a" isn't Team Lead A.
         # A name and an id are each compared on their own, because someone on a bridge has an id with nothing of their name in it, and it can hold a word of someone else's name.
         sender = heard.burst.sender
-        # Only a lowercase "a" is the article, because a capital one can be the start of a name, as in "A Rajan".
-        person = _name_words(re.sub(r"^a\s+", "", heard.reading.person or ""))
+        # The reader is shown everything open in this business and everyone who has written in it, so all of them can be meant, as well as these jobs' own lists.
+        listed = [*(item for job_id in {one.job_id for one in pool} for item in self.items.for_job(job_id)), *heard.open_here]
+        people = [*((item.owner, item.owner_name) for item in listed), *((writer.sender, _name(writer)) for writer in self._writers(heard.bucket))]
+        written = heard.reading.person or ""
+        person = _name_words(written)
+        # A leading "a" is the article unless the whole phrase is someone's name: "A vendor" is nobody, and "A Rajan" is a person.
+        if not any(person in (_name_words(owner), _name_words(name)) for owner, name in people):
+            person = _name_words(re.sub(r"^a\s+", "", written, flags=re.IGNORECASE))
         if person == {"i"} or person & {"me", "we", "us"}:
             return False
         names = [_name_words(name) for name in (self._name_of(sender, heard.bucket), *(item.owner_name for item in pool))]
         ids = [*names, _name_words(sender)]
-        # The reader is shown everything open in this business and everyone who has written in it, so all of them can be meant, as well as these jobs' own lists.
-        listed = [*(item for job_id in {one.job_id for one in pool} for item in self.items.for_job(job_id)), *heard.open_here]
-        people = [*((item.owner, item.owner_name) for item in listed), *((writer.sender, _name(writer)) for writer in self._writers(heard.bucket))]
         return any(_means_them(person, ids, _name_words(owner)) or _means_them(person, names, _name_words(name)) for owner, name in people if owner != sender)
 
     def _give_reason(self, item: Item, reason: str, at: datetime, room_id: str, sender: str) -> None:
