@@ -15,7 +15,7 @@ voice: Plain, careful and exact. Says what each figure is and who gave it. No hy
 ---
 Kasauti Capital Partners is a fictional global investment firm, made up for this demo along with everything in this folder, and every figure in it is made up too. It is not a real company. Kasauti is Hindi for touchstone, the dark stone a goldsmith rubs gold on to test it.
 
-Everything the firm writes here is an internal summary of made-up numbers. It is never investment advice, and it never tells anyone to buy, sell or hold anything. Say so on the first slide of every deck: "Internal summary of made-up figures. Not advice."
+Everything the firm writes here is an internal summary of made-up numbers. It is never investment advice, and it never tells anyone to buy, sell or hold anything. Say so on the first slide of every deck: "Internal summary of made-up figures. Not advice." Give build_deck that line as its subtitle, so it is a smaller line under the title, and keep the title to its own words.
 
 Use the paper colour for backgrounds and the ink colour for text. Keep the charcoal for headings and large shapes, and use the gold once on a page, for the one thing that matters most.
 
