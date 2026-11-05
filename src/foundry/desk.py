@@ -127,7 +127,7 @@ NOTHING_MADE = "Nobody made a file for this job. Make what the brief asks for."
 LOG_TOKEN = "Log token for this job: {token}. Give it to the foundry-log and foundry-data tools, and to nothing else."
 # Only for a job that collected inputs from people, because a source prints on the slide.
 GIVE_SOURCES = (
-    "This job collected inputs from people. The deck maker: where a number or fact on a slide came from a log entry, give that slide a \"sources\" list with one item for it, made of \"value\", \"entry\" and \"label\". "
+    "This job collected inputs from people. The deck maker: where a number on a slide came from a log entry, give that slide a \"sources\" list with one item for it, made of \"value\", \"entry\" and \"label\". "
     "The value is the number exactly as it is on the slide, the entry is that entry's number from job_facts, and the label is the name job_facts shows for that entry, a comma, and the date and time it shows, written as in \"Team Lead B, 2026-11-04 18:12 IST\". Never make up an entry number."
 )
 # What the reviewer is told people gave, because it has no log tool to look for itself.

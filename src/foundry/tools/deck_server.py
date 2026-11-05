@@ -19,7 +19,7 @@ from pptx.util import Pt
 
 from foundry.brand import Brand, load_brand_dir
 from foundry.chain import Link, source_line, write_links
-from foundry.checks import PERIOD, WRITTEN_DATE, carries, figure, outliers
+from foundry.checks import PERIOD, WRITTEN_DATE, carries, figure, numbers_in, outliers
 from foundry.tools import confine, touchstone
 from foundry.tools.layout import LINE_SPACING, NOT_RECEIVED, MakerError, contrast, figure_text, fit_size, load_font, mix, with_commas, words_of, wrap
 
@@ -95,6 +95,7 @@ NO_LABEL = "Every label on a chart needs its words."
 LABEL_TOO_LONG = "This label is too long to fit: {label}..."
 HIGHLIGHT_A_LABEL = "On a {layout} slide the highlight must be one of the labels, which is the one that gets lit: {labels}. {highlight!r} is not."
 NO_SOURCE_FOR_NOTHING = "A figure nobody sent has no source. Leave it out of sources."
+NO_FIGURE_IN_SOURCE = "A source is for a figure, and {value!r} has none in it. Give the figure as it is on the slide, such as 1,980, and leave words out of sources."
 # Where the foot of a figure sits in its text box, and how much of its size the digits stand above that, as a share of the size. The same for the kits' fonts within a point or two.
 BASELINE_SHARE, DIGIT_SHARE = 0.9, 0.72
 # A unit after a figure is this share of the figure's size.
@@ -931,13 +932,15 @@ def _source(item: object, slide: int, words: list[str]) -> Link:
         raise MakerError(SOURCE_SHAPE)
     value, entry, label = item.get("value"), item.get("entry"), item.get("label")
     if not isinstance(value, str) or not value.strip():
-        raise MakerError(f'A source needs its "value", the words or number it is for. {SOURCE_SHAPE}')
+        raise MakerError(f'A source needs its "value", the number it is for. {SOURCE_SHAPE}')
     if isinstance(entry, bool) or not isinstance(entry, int):
         raise MakerError(f'A source needs its "entry", the whole number job_facts gave for it. {SOURCE_SHAPE}')
     if not isinstance(label, str) or not label.strip():
         raise MakerError(f'A source needs its "label", who gave it and when. {SOURCE_SHAPE}')
-    if value.strip().casefold() == NOT_RECEIVED:
+    if NOT_RECEIVED in value.casefold():
         raise MakerError(NO_SOURCE_FOR_NOTHING)
+    if not numbers_in(value):
+        raise MakerError(NO_FIGURE_IN_SOURCE.format(value=value))
     # However the figure is written, and as a whole figure, so 4 is not on a slide that says 4,730.
     if not carries("\n".join(word for word in words if isinstance(word, str)), value):
         raise MakerError(f"A source's value must be words on its slide. {value!r} is not on it.")
@@ -972,7 +975,8 @@ def _chart_slide_words(spec: dict) -> list[str]:
     # The figures a chart slide writes, with and without its unit, and its words.
     values = spec["values"] if isinstance(spec.get("values"), list) else []
     written = [figure_text(value) for value in values if _is_figure(value)]
-    if _is_figure(spec.get("number")) or isinstance(spec.get("number"), str):
+    # A number beside labels and values is not shown, so it is not on the slide.
+    if "labels" not in spec and "values" not in spec and (_is_figure(spec.get("number")) or isinstance(spec.get("number"), str)):
         written.append(_written_number(spec["number"]))
     unit = spec.get("unit", "") if isinstance(spec.get("unit", ""), str) else ""
     labels = spec["labels"] if isinstance(spec.get("labels"), list) else []
@@ -1018,7 +1022,7 @@ def build_deck(brand_dir: str, title: str, slides: list[dict], out_path: str, hi
     highlight does the same for the title slide. Text that cannot fit raises an error. Shorten it or split the slide.
 
     Only when foundry-desk's message asks for sources, a slide can also have "sources": [{"value": "62%", "entry": 123, "label": "Team Lead B, 2026-11-04 18:12 IST"}],
-    one for each number or fact on that slide that came from a log entry. value is the words on the slide. entry is the number job_facts gave that entry.
+    one for each number on that slide that came from a log entry. value is that number as it is on the slide, and a value with no figure in it is refused. entry is the number job_facts gave that entry.
     label is the name job_facts shows for that entry, a comma, and the date and time it shows, written as in the example. The slide prints them as a small line, and the links are saved beside the deck.
     sources does the same for the first slide, which is all a one-slide deck has.
     """
