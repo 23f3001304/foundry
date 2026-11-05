@@ -116,15 +116,15 @@
       <div class="cell-head"><h3>Jobs through the stages</h3><span class="delta delta-flat">now</span></div>
       {% set stage_links = {} %}
       {% for key, name, count in b.stages[:-1] %}{% set _ = stage_links.update({key: link("/jobs", stage=key, business=own)}) %}{% endfor %}
-      <div class="flow-band-wrap">{{ charts.flow(b.stages[:-1], "Open jobs at each stage", stage_links) }}</div>
-      {% set most = b.stages[:-1]|map(attribute=2)|max %}
-      <ol class="flow-stages">
+      <p class="cell-figure">{{ b.stages[:-1]|map(attribute=2)|sum }}</p>
+      <p class="cell-note">Open jobs</p>
+      {{ charts.segments(b.stages[:-1], families, "Open jobs at each stage", stage_links) }}
+      <ol class="stage-list">
         {% for key, name, count in b.stages[:-1] %}
         <li>
-          <a class="flow-stage{% if not count %} is-empty{% endif %}" href="{{ link('/jobs', stage=key, business=own) }}">
-            <span class="flow-count">{{ count }}</span>
-            <span class="flow-name"><span class="dot fam-{{ families[key] }}" aria-hidden="true"></span>{{ name }}</span>
-            <span class="flow-meter">{{ charts.meter(count, most, name, families[key]) }}</span>
+          <a class="stage-link{% if not count %} is-empty{% endif %}" href="{{ link('/jobs', stage=key, business=own) }}">
+            <span class="stage-count">{{ count }}</span>
+            <span class="stage-name"><span class="dot fam-{{ families[key] }}" aria-hidden="true"></span>{{ name }}</span>
           </a>
         </li>
         {% endfor %}

@@ -8,7 +8,7 @@
   Page        .page-head  .title  .tabs  .state-pills  .section-head  .with-rail  .rail
   Big things  .hero  .banner  .empty-state  .sign-in-stage
   Components  .chart-panel  .chart-cell  .delta  .legend  .tile  .pill  .chip-link  button  .nav-item  table.list  .stepper  .stage  .alert  .fold  .avatar  .sprite  .icon  .go
-  Charts      .chart with .area, .bars, .donut, .flow or .meter, all drawn by charts.py
+  Charts      .chart with .area, .bars, .donut, .stage-bar or .meter, all drawn by charts.py
   Lists       .jobs-table  .need-list  .rows  .response  .connection-row  ol.chain
   Motion      @keyframes, the sprite sheets, and prefers-reduced-motion
 */
@@ -64,9 +64,6 @@
   --ember-wash: #2c150c;
   --ember-line: #7d371a;
   --ember-mark: #ff6b2c;
-  --ember-deep-1: #c9410d;
-  --ember-deep-2: #bd2614;
-  --ember-deep-3: #a30f44;
 
   --azure-1: #8fe3ff;
   --azure-2: #47a4ff;
@@ -75,8 +72,6 @@
   --azure-wash: #0f1b33;
   --azure-line: #2a4a85;
   --azure-mark: #47a4ff;
-  --azure-deep-1: #1f63d6;
-  --azure-deep-2: #3b45e0;
 
   --orchid-1: #ffb9ec;
   --orchid-2: #ec62c9;
@@ -85,8 +80,6 @@
   --orchid-wash: #2a1231;
   --orchid-line: #6d2c78;
   --orchid-mark: #ec62c9;
-  --orchid-deep-1: #b4178f;
-  --orchid-deep-2: #6c24d6;
 
   --sun-1: #ffe98a;
   --sun-2: #ffc933;
@@ -96,15 +89,48 @@
   --sun-line: #6b5a18;
   --sun-mark: #ffc933;
 
+  --ember-forge-1: #ff6a2c;
+  --ember-forge-2: #c22a10;
+  --ember-forge-3: #5c120c;
+  --ember-forge-4: #1c0d0d;
+  --ember-forge-5: #141012;
+
+  --lime-forge-1: #d9f23f;
+  --lime-forge-2: #5fb30c;
+  --lime-forge-3: #176005;
+  --lime-forge-4: #0f1f0c;
+  --lime-forge-5: #101310;
+
+  --azure-forge-1: #47a4ff;
+  --azure-forge-2: #1b5fc2;
+  --azure-forge-3: #0f2f66;
+  --azure-forge-4: #0c1524;
+  --azure-forge-5: #101114;
+
+  --orchid-forge-1: #ec62c9;
+  --orchid-forge-2: #a81fa0;
+  --orchid-forge-3: #4f1163;
+  --orchid-forge-4: #1a0d1f;
+  --orchid-forge-5: #131014;
+
+  --sun-forge-1: #ffc933;
+  --sun-forge-2: #d98a00;
+  --sun-forge-3: #7a4a00;
+  --sun-forge-4: #1f1405;
+  --sun-forge-5: #141210;
+
   --grad-lime: linear-gradient(115deg, var(--lime-1), var(--lime-2) 48%, var(--lime-3));
   --grad-ember: linear-gradient(115deg, var(--ember-1), var(--ember-2) 48%, var(--ember-3));
   --grad-azure: linear-gradient(115deg, var(--azure-1), var(--azure-2) 48%, var(--azure-3));
   --grad-orchid: linear-gradient(115deg, var(--orchid-1), var(--orchid-2) 48%, var(--orchid-3));
   --grad-sun: linear-gradient(115deg, var(--sun-1), var(--sun-2) 48%, var(--sun-3));
   --grad-none: linear-gradient(115deg, var(--ink-soft), var(--field));
-  --deep-ember: linear-gradient(100deg, var(--ember-deep-1), var(--ember-deep-2) 52%, var(--ember-deep-3));
-  --deep-orchid: linear-gradient(100deg, var(--orchid-deep-1), var(--orchid-deep-2));
-  --deep-azure: linear-gradient(100deg, var(--azure-deep-1), var(--azure-deep-2));
+  --forge-shape: 90% 260% at 100% 50%;
+  --forge-ember: radial-gradient(var(--forge-shape), var(--ember-forge-1) 0%, var(--ember-forge-2) 26%, var(--ember-forge-3) 56%, var(--ember-forge-4) 82%, var(--ember-forge-5) 100%);
+  --forge-lime: radial-gradient(var(--forge-shape), var(--lime-forge-1) 0%, var(--lime-forge-2) 26%, var(--lime-forge-3) 56%, var(--lime-forge-4) 82%, var(--lime-forge-5) 100%);
+  --forge-azure: radial-gradient(var(--forge-shape), var(--azure-forge-1) 0%, var(--azure-forge-2) 26%, var(--azure-forge-3) 56%, var(--azure-forge-4) 82%, var(--azure-forge-5) 100%);
+  --forge-orchid: radial-gradient(var(--forge-shape), var(--orchid-forge-1) 0%, var(--orchid-forge-2) 26%, var(--orchid-forge-3) 56%, var(--orchid-forge-4) 82%, var(--orchid-forge-5) 100%);
+  --forge-sun: radial-gradient(var(--forge-shape), var(--sun-forge-1) 0%, var(--sun-forge-2) 26%, var(--sun-forge-3) 56%, var(--sun-forge-4) 82%, var(--sun-forge-5) 100%);
 
   --soft: 0.32;
   --grid-opacity: 0.5;
@@ -144,6 +170,7 @@
   --radius-24: 24px;
 
   --control-32: 32px;
+  --control-36: 36px;
   --control-40: 40px;
 
   --size-16: 16px;
@@ -479,21 +506,21 @@ main > .section-foot { margin-top: var(--space-32); }
 
 /* The one loud thing on a job's page. Only one at a time, and only for stuck, waiting on a person, or just delivered. */
 
-.banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-12) var(--space-24); margin-bottom: var(--space-16); padding: var(--space-16) var(--space-20); color: var(--on-deep); background: var(--fam-grad); border-radius: var(--radius-12); animation: rise var(--dur-slow) var(--ease-out); }
-.banner.fam-ember { background: var(--deep-ember); }
-.banner.fam-orchid { background: var(--deep-orchid); }
-.banner.fam-azure { background: var(--deep-azure); }
-.banner.fam-lime, .banner.fam-sun { color: var(--on-bright); }
-.banner-words { flex: 1 1 var(--col-320); min-width: 0; }
+.banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-24); margin-bottom: var(--space-16); padding: var(--space-16) var(--space-20); color: var(--on-deep); background: var(--bar); border-radius: var(--radius-12); animation: rise var(--dur-slow) var(--ease-out); }
+.banner.fam-ember { background: var(--forge-ember); }
+.banner.fam-lime { background: var(--forge-lime); }
+.banner.fam-azure { background: var(--forge-azure); }
+.banner.fam-orchid { background: var(--forge-orchid); }
+.banner.fam-sun { background: var(--forge-sun); }
+/* The words stop short of the heat, so a long line wraps before white stops passing on what is behind it. */
+.banner-words { flex: 0 1 62%; min-width: 0; }
 .banner p { margin: 0; max-width: none; }
 .banner-title { font-family: var(--font-head); font-size: var(--text-16); line-height: var(--line-16); font-weight: 700; letter-spacing: -0.01em; }
-.banner-detail { font-size: var(--text-12); line-height: var(--line-12); }
-.banner-go { display: inline-flex; flex: none; align-items: center; min-height: var(--control-32); padding-inline: var(--space-16); color: var(--on-bright); font-size: var(--text-12); line-height: var(--line-12); font-weight: 700; text-decoration: none; background: var(--on-deep); border-radius: var(--radius-8); transition: scale var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out); }
+.banner-detail { font-size: var(--text-14); line-height: var(--line-14); text-wrap: pretty; }
+.banner-go { display: inline-flex; flex: none; align-items: center; min-height: var(--control-36); padding-inline: var(--space-16); color: var(--on-bright); font-size: var(--text-14); line-height: var(--line-14); font-weight: 700; text-decoration: none; background: var(--on-deep); border-radius: var(--radius-8); transition: scale var(--dur-fast) var(--ease-out), opacity var(--dur-fast) var(--ease-out); }
 .banner-go:hover { opacity: 0.88; }
 .banner-go:active { scale: 0.97; }
-.banner.fam-lime .banner-go, .banner.fam-sun .banner-go { color: var(--on-deep); background: var(--on-bright); }
-.banner .banner-go:focus-visible { outline-color: currentColor; }
-.banner:not(.fam-lime):not(.fam-sun) .banner-go:focus-visible { outline-color: var(--on-deep); }
+.banner .banner-go:focus-visible { outline-color: var(--on-bright); }
 
 /* One bordered panel cut by hairlines into chart cells. The gap is the hairline. */
 
@@ -591,17 +618,15 @@ a:hover .go, .figure:hover .go, .job-row:hover .go { translate: var(--space-4) 0
 .need .go { color: var(--ink-faint); }
 .need:hover .go { color: var(--ink); }
 
-/* The stages, with a band across them */
+/* The stages: one flat bar, and how many sit at each under it */
 
-.flow-band-wrap { margin: var(--space-8) calc(-1 * var(--space-16)) 0; }
-.flow-stages { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-4); margin: auto 0 0; padding: var(--space-8) 0 0; list-style: none; }
-.flow-stage { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; padding: var(--space-4) var(--space-8); color: var(--ink); text-decoration: none; border-radius: var(--radius-8); transition: background-color var(--dur-fast) var(--ease-out); }
-.flow-stage:hover { background: var(--hover); }
-.flow-stage:active { background: var(--current); }
-.flow-name { display: flex; align-items: center; gap: var(--space-8); color: var(--ink-soft); font-size: var(--text-12); line-height: var(--line-12); }
-.flow-count { font-family: var(--font-mono); font-size: var(--text-20); line-height: var(--line-20); font-weight: 600; letter-spacing: -0.03em; animation: rise var(--dur-slow) var(--ease-out); }
-.flow-stage.is-empty .flow-count { color: var(--ink-faint); }
-.flow-meter { display: none; }
+.stage-list { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-4); margin: 0 calc(-1 * var(--space-8)); padding: var(--space-12) 0 0; list-style: none; }
+.stage-link { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; padding: var(--space-4) var(--space-8); color: var(--ink); text-decoration: none; border-radius: var(--radius-8); transition: background-color var(--dur-fast) var(--ease-out); }
+.stage-link:hover { background: var(--hover); }
+.stage-link:active { background: var(--current); }
+.stage-name { display: flex; align-items: center; gap: var(--space-8); color: var(--ink-soft); font-size: var(--text-12); line-height: var(--line-12); }
+.stage-count { font-family: var(--font-mono); font-size: var(--text-20); line-height: var(--line-20); font-weight: 600; letter-spacing: -0.03em; animation: rise var(--dur-slow) var(--ease-out); }
+.stage-link.is-empty .stage-count { color: var(--ink-faint); }
 
 /* Lists of one name, one number and a thin bar */
 
@@ -645,7 +670,12 @@ a:hover .go, .figure:hover .go, .job-row:hover .go { translate: var(--space-4) 0
 .part-rest { stroke: var(--field); }
 .donut .donut-middle { fill: var(--ink); font-family: var(--font-mono); font-size: var(--text-24); font-weight: 600; letter-spacing: -0.04em; }
 .donut .donut-under { fill: var(--ink-faint); font-family: var(--font-mono); font-size: var(--text-12); }
-.flow .flow-edge { fill: none; stroke: none; }
+.cell-note:has(+ .stage-bar) { margin-bottom: var(--space-12); }
+.stage-bar { margin-top: auto; overflow: hidden; border-radius: var(--radius-4); animation: reveal var(--dur-reveal) var(--ease-out); }
+.stage-bar .segment { fill: var(--fam-dot); }
+.stage-bar .segment:hover { fill-opacity: 0.88; }
+.stage-bar .segment-track { fill: var(--sunken); }
+.stage-bar .segment-rule { stroke: var(--panel); stroke-width: 2; }
 .meter .meter-track { fill: var(--sunken); }
 .meter .meter-fill { fill: var(--field); transform-box: fill-box; transform-origin: left; animation: grow-across var(--dur-slow) var(--ease-out); }
 .meter.lime .meter-fill, .meter.done .meter-fill { fill: var(--lime-mark); }
@@ -1138,7 +1168,7 @@ form.panel { gap: var(--space-16); margin: 0; }
 /* A phone: one cell to a row, a table row becomes a short block, and nothing is wider than the screen */
 
 @media (max-width: 640px) {
-  :root { --gutter: 16px; --gap: 12px; --text-32: 24px; --line-32: 32px; --hero: 464px; }
+  :root { --gutter: 16px; --gap: 12px; --text-32: 24px; --line-32: 32px; --hero: 464px; --forge-shape: 200% var(--col-160) at 50% 100%; }
   input, textarea { font-size: var(--text-16); line-height: var(--line-16); }
   button, .button { min-height: var(--control-40); }
   button.quiet { min-height: var(--size-24); }
@@ -1151,16 +1181,12 @@ form.panel { gap: var(--space-16); margin: 0; }
   .figure { padding: var(--space-8); }
   .chart-panel .span-3, .chart-panel .span-4, .chart-panel .span-6 { grid-column: 1 / -1; }
   .chart-cell { padding: var(--space-12); }
-  .flow-band-wrap { margin-inline: calc(-1 * var(--space-12)); }
-  .flow-stages { grid-template-columns: minmax(0, 1fr); }
-  .flow-stage { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-4) var(--space-12); padding-inline: var(--space-4); }
-  .flow-name { grid-column: 1; grid-row: 1; }
-  .flow-count { grid-column: 2; grid-row: 1; }
-  .flow-meter { display: block; grid-column: 1 / -1; }
-  .flow-band-wrap { display: none; }
+  .stage-list { grid-template-columns: minmax(0, 1fr); gap: 0; margin-inline: 0; }
+  .stage-link { flex-direction: row-reverse; align-items: center; justify-content: space-between; gap: var(--space-12); min-height: var(--control-40); padding-inline: var(--space-4); }
   .fold-body { padding-left: var(--space-4); }
   .fold-meta { display: none; }
-  .banner { padding: var(--space-12) var(--space-16); }
+  .banner { flex-direction: column; align-items: stretch; gap: var(--space-12); padding: var(--space-16); }
+  .banner-words { flex: none; }
   .banner-go { width: 100%; justify-content: center; min-height: var(--control-40); }
   .sign-in { padding: var(--space-24); }
   .empty-state { flex-direction: column; align-items: stretch; gap: var(--space-16); padding: var(--space-16) 0 0 var(--space-16); }

@@ -22,7 +22,6 @@ def defs() -> Markup:
         parts.append(f'<linearGradient id="deep-{family}" x1="0" y1="1" x2="1" y2="0">{_stops(family)}</linearGradient>')
         parts.append(f'<linearGradient id="tile-{family}" x1="0" y1="1" x2="1" y2="0"><stop offset="0" class="stop-{family}-2"/><stop offset="1" class="stop-{family}-3"/></linearGradient>')
         parts.append(f'<linearGradient id="soft-{family}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="stop-soft-{family}"/><stop offset="1" class="stop-none-{family}"/></linearGradient>')
-    parts.append('<linearGradient id="through-stages" x1="0" y1="0" x2="1" y2="0"><stop offset="0" class="stop-sun-2"/><stop offset="0.3" class="stop-sun-3"/><stop offset="0.5" class="stop-azure-2"/><stop offset="0.74" class="stop-orchid-3"/><stop offset="1" class="stop-orchid-2"/></linearGradient>')
     parts.append(f'<pattern id="grid-cells" width="{GRID_CELL}" height="{GRID_CELL}" patternUnits="userSpaceOnUse"><path class="grid-cell" d="M{GRID_CELL - 0.5} 0V{GRID_CELL}M0 {GRID_CELL - 0.5}H{GRID_CELL}"/></pattern>')
     return Markup(f'<svg class="defs" aria-hidden="true" focusable="false" width="0" height="0"><defs>{"".join(parts)}</defs></svg>')
 

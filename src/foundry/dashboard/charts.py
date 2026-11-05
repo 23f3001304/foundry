@@ -9,7 +9,7 @@ from math import ceil, pi
 
 from markupsafe import Markup, escape
 
-AREA_HEIGHT, BARS_HEIGHT, FLOW_HEIGHT, METER_HEIGHT = 136, 136, 128, 8
+AREA_HEIGHT, BARS_HEIGHT, SEGMENTS_HEIGHT, METER_HEIGHT = 136, 136, 24, 8
 # How far each end of a line is marked, in whole pixels either way.
 END_MARK = 1
 
@@ -146,43 +146,23 @@ def donut(parts: Sequence[tuple[str, str, int]], label: str, middle: str, under:
     return _svg("donut", f"{label}: {said}.", "".join(shapes), 'viewBox="0 0 120 120"')
 
 
-def flow(stages: Sequence[tuple[str, str, int]], label: str, links: Mapping[str, str] | None = None) -> Markup:
-    """A band across the stages, as thick at each one as the number of jobs there. Each stage is a key, a name and a count. Links, if given, say where each key's stretch goes."""
-    count = len(stages)
-    if not count:
-        return _svg("flow", f"{label}: nothing to show yet", "", 'width="100%"', f'height="{FLOW_HEIGHT}"')
-    highest = max((number for _, _, number in stages), default=0)
-    width, middle, most = 600.0, 50.0, 34.0
-    each = width / count
-    half = [2 + (most - 2) * number / highest if highest and number else 1.0 for _, _, number in stages]
-    edges = [(each * index + each * 0.3, each * index + each * 0.7) for index in range(count)]
-
-    def edge(sign: int, order: Sequence[int]) -> str:
-        path = []
-        for place, index in enumerate(order):
-            first, last = edges[index] if sign < 0 else edges[index][::-1]
-            height = middle + sign * half[index]
-            if place:
-                before = order[place - 1]
-                start = edges[before][1] if sign < 0 else edges[before][0]
-                bend = (first + start) / 2
-                path.append(f"C {_n(bend)} {_n(middle + sign * half[before])} {_n(bend)} {_n(height)} {_n(first)} {_n(height)}")
-            path.append(f"L {_n(last)} {_n(height)}")
-        return " ".join(path)
-
-    ahead = list(range(count))
-    over = f"{edge(-1, ahead)} L {_n(width)} {_n(middle - half[-1])}"
-    under = f"{edge(1, ahead[::-1])} L 0 {_n(middle + half[0])}"
-    shapes = [
-        f'<path class="flow-band" fill="url(#through-stages)" d="M 0 {_n(middle - half[0])} {over} L {_n(width)} {_n(middle + half[-1])} {under} Z"/>',
-        f'<path class="flow-edge" d="M 0 {_n(middle - half[0])} {over}"/>',
-        f'<path class="flow-edge" d="M {_n(width)} {_n(middle + half[-1])} {under}"/>',
-    ]
-    for index, (key, name, number) in enumerate(stages):
-        hit = f'<rect class="hit" x="{_n(each * index)}" y="0" width="{_n(each)}" height="100"><title>{escape(name)}: {number}</title></rect>'
-        shapes.append(_linked(hit, (links or {}).get(key, "")))
+def segments(stages: Sequence[tuple[str, str, int]], families: Mapping[str, str], label: str, links: Mapping[str, str] | None = None) -> Markup:
+    """One flat bar cut into stages, each as long as its share of the jobs and in its own family's colour, with a hairline where one meets the next. Each stage is a key, a name and a count. Links, if given, say where each key's part goes."""
+    total = sum(number for _, _, number in stages)
+    size = ('width="100%"', f'height="{SEGMENTS_HEIGHT}"')
+    if not total:
+        return _svg("stage-bar", f"{label}: nothing to show yet", '<rect class="segment-track" width="100%" height="100%"/>', *size)
+    parts, rules, done = [], [], 0
+    for key, name, number in stages:
+        if not number:
+            continue
+        if done:
+            rules.append(f'<line class="segment-rule" x1="{_n(100 * done / total)}%" x2="{_n(100 * done / total)}%" y1="0" y2="100%"/>')
+        part = f'<rect class="segment fam-{escape(families.get(key, "none"))}" x="{_n(100 * done / total)}%" width="{_n(100 * number / total)}%" height="100%"><title>{escape(name)}: {number}</title></rect>'
+        parts.append(_linked(part, (links or {}).get(key, "")))
+        done += number
     said = ", ".join(f"{name} {number}" for _, name, number in stages)
-    return _svg("flow", f"{label}: {said}.", "".join(shapes), f'viewBox="0 0 {_n(width)} 100"', 'preserveAspectRatio="none"', 'width="100%"', f'height="{FLOW_HEIGHT}"')
+    return _svg("stage-bar", f"{label}: {said}.", "".join(parts + rules), *size)
 
 
 def meter(value: int, total: int, label: str, tone: str = "") -> Markup:

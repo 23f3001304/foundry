@@ -22,12 +22,12 @@ Each runs from a bright hue to a deeper one and is shown as a gradient, a dot, a
 | Family | Tokens | What it means |
 |---|---|---|
 | Lime | `--lime-*` | Good and finished: delivered, the primary action, the Work group, and the logo's own colour |
-| Ember | `--ember-*`, `--ember-deep-*` | Needs someone: a stuck job or a card waiting on this login. Nothing else may use it |
-| Azure | `--azure-*`, `--azure-deep-*` | Foundry at work: being made, cards opening, files, and the Setup group |
-| Orchid | `--orchid-*`, `--orchid-deep-*` | Being checked: the reviewer and sign-off |
+| Ember | `--ember-*` | Needs someone: a stuck job or a card waiting on this login. Nothing else may use it |
+| Azure | `--azure-*` | Foundry at work: being made, cards opening, files, and the Setup group |
+| Orchid | `--orchid-*` | Being checked: the reviewer and sign-off |
 | Sun | `--sun-*` | With the people: the brief and the inputs being collected, and the Records group |
 
-`queries.py` ties each stage to its family in `STEP_FAMILIES`, and `family_of` says stuck is ember and done is lime whatever the stage. `.fam-lime` and the rest set a family on an element, and the state classes `.working`, `.waiting`, `.done`, `.idle` and `.stuck` bring one for a status mark that has none. A family used for a banner has a deep version, so white words on it pass AA. Lime and sun are too bright for that, so a banner in either has dark words and a dark button.
+`queries.py` ties each stage to its family in `STEP_FAMILIES`, and `family_of` says stuck is ember and done is lime whatever the stage. `.fam-lime` and the rest set a family on an element, and the state classes `.working`, `.waiting`, `.done`, `.idle` and `.stuck` bring one for a status mark that has none. Every family also has a forge glow for a banner, `--forge-lime` and the rest: near black on the left, and heat from behind the button on the right, in five stops of its own (`--lime-forge-1` to `-5`). Lime cools through green and sun through amber, so neither turns olive or muddy on the way down. Words are white and the button is white in every family, and the words stop at 62% of the banner, so a long line wraps before white stops passing on what is behind it. On a phone the button is full width, so the heat comes up from under it, and its height is fixed so a long message can't reach it.
 
 Ember is not used for a fall in a number. A delta that moved is green, one that didn't is quiet, and ember only appears on a chart when the job has stopped.
 
@@ -48,14 +48,14 @@ Drawn in `shapes.py` as our own paths, in one family each. `shapes.defs()` puts 
 | Space | `--space-` 4, 8, 12, 16, 20, 24, 32, 40, 48, 64 |
 | Type | `--text-` / `--line-` 12/16, 14/20, 16/24, 20/28, 24/32, 32/40 |
 | Radius | `--radius-` 4 (chip), 8 (control), 12 (panel), 16 (card), 24 (hero and sign-in) |
-| Control height | `--control-` 32, 40 |
+| Control height | `--control-` 32, 36, 40 |
 | Icons and sprites | `--size-` 16, 24, 32, 48, 64, 96 |
 | Layout | `--gutter`, `--gap`, `--sidebar`, `--side-folded`, `--rail`, `--content`, `--measure`, `--form`, `--sign-in`, `--sign-in-art`, `--hero`, `--hero-shape`, `--col-*`, `--step`, `--tabbar` |
 | Motion | `--dur-fast` 120ms, `--dur-base` 200ms, `--dur-slow` 320ms, `--dur-reveal` 640ms, `--frame` 120ms, `--frame-slow` 320ms, `--ease-out` |
 | Neutrals | `--paper --side --panel --sunken --hover --current --rule --rule-strong --field --ink --ink-soft --ink-faint`, leaning very slightly toward the logo's olive |
 | Accent and focus | `--primary --primary-hover --primary-ink --focus` |
 | The dark bar and words on colour | `--bar --bar-hover --bar-rule --bar-ink --bar-soft --on-bright --on-deep --grid-line` |
-| Gradients | `--grad-lime --grad-ember --grad-azure --grad-orchid --grad-sun --grad-none --deep-ember --deep-orchid --deep-azure`. A gradient is only written here |
+| Gradients | `--grad-lime --grad-ember --grad-azure --grad-orchid --grad-sun --grad-none`, and `--forge-lime --forge-ember --forge-azure --forge-orchid --forge-sun` with `--forge-shape`. A gradient is only written here |
 
 ## Components
 
@@ -67,7 +67,7 @@ Each has one definition, with its states: rest, hover, focus (one shared ring), 
 | Job tabs | `job_tabs()`, `.tabs` | Underlined. Job, Timeline, Files, and Chain once something is flagged |
 | State pills | `.state-pills`, `.state-pill` | Under the title: a coloured dot, and the current one outlined |
 | Hero | `.hero` | The overview's one loud thing, with `.hero-bar` and `.figure` inside it |
-| Banner | `.banner` | The job page's one loud thing, one at a time. It says what happened, and its one button goes to where it can be dealt with. What it says isn't said again below it |
+| Banner | `.banner` | The job page's one loud thing, one at a time. A forge glow in the job's family, with white words and one white button. It says what happened, and the button goes to where it can be dealt with. What it says isn't said again below it |
 | Chart panel | `.chart-panel`, `.chart-cell` | One bordered panel cut by hairlines into cells, each with a title and a delta. A cell with nothing to draw says so and has no delta, and a job with nothing to chart has no cells |
 | Delta | `.delta` | A soft chip beside a chart's title. `.delta-good`, `.delta-flat`, `.delta-stuck` |
 | Legend | `legend()`, `.legend` | Diamonds in the line's own colour, with mono values |
@@ -103,6 +103,7 @@ Every number comes from `queries.py`, scoped to what the login may see. No chart
 
 - **A job's three charts** are running counts from its own log at twelve even points of its life. The band is the real gap between two lines, for example asked for and in. It is not a confidence band.
 - **The overview's charts** are per day over the last 14 days, and the fill under a line is only a fade.
+- **Jobs through the stages** is one flat bar, each stage as long as its share of the open jobs and in its own family's colour with no blending, a hairline where one meets the next, and each stage's count listed under it.
 - **Lines** are saturated, in the family of what they count, with a soft fill, a dashed line at zero and a diamond at the end. Bars and meters use a family's bright hue.
 
 ## Characters
