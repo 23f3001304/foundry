@@ -5,20 +5,20 @@ name: it_firm
 brand: demo-it-firm
 people:
   # The approver works inside, so each room's cards for them come up in that room's projects room.
-  Delivery Manager: [morpankh-delivery, morpankh-delivery-projects, morpankh-team-a-projects, morpankh-team-b-projects, morpankh-team-c-projects]
-  Team Lead A: [morpankh-team-a]
-  Team Lead B: [morpankh-team-b]
-  Team Lead C: [morpankh-team-c]
-watch: [morpankh-delivery, morpankh-team-a, morpankh-team-b, morpankh-team-c, morpankh-delivery-projects]
+  Delivery Manager: [delivery, delivery-projects, team-a-projects, team-b-projects, team-c-projects]
+  Team Lead A: [team-a]
+  Team Lead B: [team-b]
+  Team Lead C: [team-c]
+watch: [delivery, team-a, team-b, team-c, delivery-projects]
 # What people said before the scene, so the card can say when each last wrote. Written by scripts/seed_history.py and marked as seeded in the log.
 history:
-  - {as: Team Lead A, room: morpankh-team-a, days_ago: 1, say: "Team A has the customer portal build in QA."}
-  - {as: Team Lead B, room: morpankh-team-b, days_ago: 3, say: "Team B moved the payment fixes to QA."}
-  - {as: Team Lead C, room: morpankh-team-c, days_ago: 21, say: "Team C has the reporting module in UAT."}
+  - {as: Team Lead A, room: team-a, days_ago: 1, say: "Team A has the customer portal build in QA."}
+  - {as: Team Lead B, room: team-b, days_ago: 3, say: "Team B moved the payment fixes to QA."}
+  - {as: Team Lead C, room: team-c, days_ago: 21, say: "Team C has the reporting module in UAT."}
 # Work from the 28 days before the scene, so the overview's charts have something to draw. Written by scripts/seed_history.py and marked as seeded.
 earlier_work:
   as: Delivery Manager
-  room: morpankh-delivery
+  room: delivery
   # The log finds a person's name from what they wrote, so this is how a seeded answer says who gave it.
   say: "Team A has its weekly deck."
   jobs:
@@ -35,56 +35,56 @@ earlier_work:
 steps:
   # A Team Lead's daily note. It is a Hinglish voice note when there is a Sarvam key. Without one the same words are typed, and the timeline says so.
   - as: Team Lead A
-    room: morpankh-team-a
+    room: team-a
     voice: "aaj Team A ne customer portal ke login defects fix kar diye, kal QA wale retest karenge"
     say: "aaj Team A ne customer portal ke login defects fix kar diye, kal QA wale retest karenge"
     wait_for: {text: "in today's report", timeout: 180}
   # The request, and the brief's card with who owes what.
   - as: Delivery Manager
-    room: morpankh-delivery
+    room: delivery
     say: "I need the release status deck for our client Harsingar Stores by {in:60}. Team Leads A, B and C each owe me their team's stories closed this sprint and defects open by {in:8}."
     wait_for: {button: Approve, timeout: 300}
   - as: Delivery Manager
-    room: morpankh-delivery
+    room: delivery
     press: Approve
-    wait_for: {room: morpankh-team-a, text: "Exact measure", timeout: 120}
+    wait_for: {room: team-a, text: "Exact measure", timeout: 120}
   # Team Lead A answers. Team Lead B gives a reason. Team Lead C says nothing.
   - as: Team Lead A
-    room: morpankh-team-a
+    room: team-a
     say: "Team A closed 41 stories this sprint and has 3 defects open."
     wait_for: {text: ": 3.", timeout: 180}
   - as: Team Lead B
-    room: morpankh-team-b
+    room: team-b
     say: "blocked on QA"
     wait_for: {text: "Noted", timeout: 180}
   # Anyone in the bucket's rooms can ask where it stands.
   - as: Team Lead A
-    room: morpankh-team-a
+    room: team-a
     say: "where's the deck?"
     wait_for: {text: "no reply to Foundry yet", timeout: 180}
   # Team Lead C's one reminder, halfway to the due time.
   - as: Team Lead C
-    room: morpankh-team-c
+    room: team-c
     wait_for: {button: "Can't today", timeout: 720}
   # The due card lists Team Lead B's reason and Team Lead C's silence.
   - as: Delivery Manager
-    room: morpankh-delivery
+    room: delivery
     wait_for: {button: "Go without", timeout: 900}
   - as: Delivery Manager
-    room: morpankh-delivery
+    room: delivery
     press: "Go without"
     # The sign-off card by its title, because a maker's stuck card has an Approve button too.
     wait_for: {button: Approve, text: "Final work:", timeout: 2700}
   # The makers made it and the reviewer passed it. The Delivery Manager signs off.
   - as: Delivery Manager
-    room: morpankh-delivery
+    room: delivery
     press: Approve
     wait_for: {text: "Here is your final work", timeout: 180}
   # The set times: one routine card with the day's report on it.
   - as: Delivery Manager
-    room: morpankh-delivery-projects
+    room: delivery-projects
     wait_for: {button: "Approve everything clean", timeout: 1800}
   - as: Delivery Manager
-    room: morpankh-delivery-projects
+    room: delivery-projects
     press: "Approve everything clean"
     wait_for: {text: "Report for", timeout: 180}
