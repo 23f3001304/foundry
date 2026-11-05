@@ -1,6 +1,6 @@
 /*
   Foundry's dashboard. DESIGN.md says what is here and why, and tests/test_dashboard_design.py keeps it true.
-  Dark first and light keeps working. Five colour families, each with one job. Every size, colour and duration below is a token from :root.
+  Light by default, whatever the system says, and dark for a person who has chosen it. Five colour families, each with one job. Every size, colour and duration below is a token from :root.
 
   Tokens      :root
   Families    .fam-lime and friends, and the tone each state brings
@@ -21,30 +21,32 @@
 }
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
-  --paper: #0a0b08;
-  --panel: #131410;
-  --sunken: #1a1b16;
-  --hover: #20211b;
-  --current: #2a2b24;
-  --rule: #25261f;
-  --rule-strong: #3a3b32;
-  --field: #71726a;
-  --ink: #f3f3ef;
-  --ink-soft: #bdbeb4;
-  --ink-faint: #94958b;
-  --ink-quiet: #83847a;
-  --primary: #d9f23f;
-  --primary-hover: #e7f873;
-  --primary-ink: #14160a;
-  --focus: #d9f23f;
+  --paper: #f7f7f2;
+  --panel: #ffffff;
+  --sunken: #f0f0ea;
+  --hover: #e9e9e2;
+  --current: #e0e0d7;
+  --rule: #e3e3db;
+  --rule-strong: #cbcbc0;
+  --field: #8b8c80;
+  --ink: #1c1e13;
+  --ink-soft: #45473b;
+  --ink-faint: #5c5d51;
+  --ink-quiet: #66675b;
+  --primary: #3f6d0e;
+  --primary-hover: #335a0a;
+  --primary-ink: #ffffff;
+  --focus: #3f6d0e;
 
-  --bar: #0c0d09;
-  --bar-hover: #1c1d17;
-  --bar-rule: #2c2d25;
-  --bar-ink: #f3f3ef;
-  --bar-soft: #b8b9ae;
+  --bar: #ffffff;
+  --bar-hover: #f0f0ea;
+  --bar-rule: #e3e3db;
+  --bar-ink: #1c1e13;
+  --bar-soft: #5c5d51;
+  --none-1: #e0e0d7;
+  --none-2: #c0c0b4;
   --on-bright: #14160a;
   --on-deep: #ffffff;
   --grid-line: #14160a;
@@ -52,42 +54,42 @@
   --lime-1: #f1fda8;
   --lime-2: #d9f23f;
   --lime-3: #62d67a;
-  --lime-text: #d9f23f;
-  --lime-wash: #1e2610;
-  --lime-line: #4f6119;
-  --lime-mark: #d9f23f;
+  --lime-text: #3a640c;
+  --lime-wash: #eff6d2;
+  --lime-line: #b9d163;
+  --lime-mark: #5f9410;
 
   --ember-1: #ffb35c;
   --ember-2: #ff6b2c;
-  --ember-3: #ef2f33;
-  --ember-text: #ff8f6b;
-  --ember-wash: #2c150c;
-  --ember-line: #7d371a;
-  --ember-mark: #ff6b2c;
+  --ember-3: #ee4a2b;
+  --ember-text: #a83a08;
+  --ember-wash: #fdecdf;
+  --ember-line: #f2b48a;
+  --ember-mark: #d9480f;
 
   --azure-1: #8fe3ff;
   --azure-2: #47a4ff;
   --azure-3: #4a5cff;
-  --azure-text: #84c4ff;
-  --azure-wash: #0f1b33;
-  --azure-line: #2a4a85;
-  --azure-mark: #47a4ff;
+  --azure-text: #1c52b5;
+  --azure-wash: #e6f0ff;
+  --azure-line: #a6c6f5;
+  --azure-mark: #2a6fdf;
 
   --orchid-1: #ffb9ec;
   --orchid-2: #ec62c9;
   --orchid-3: #9847f5;
-  --orchid-text: #f29be0;
-  --orchid-wash: #2a1231;
-  --orchid-line: #6d2c78;
-  --orchid-mark: #ec62c9;
+  --orchid-text: #8f1686;
+  --orchid-wash: #fbe9f7;
+  --orchid-line: #e8afdd;
+  --orchid-mark: #b92a9a;
 
   --sun-1: #ffe98a;
   --sun-2: #ffc933;
   --sun-3: #f99f2a;
-  --sun-text: #ffd166;
-  --sun-wash: #282209;
-  --sun-line: #6b5a18;
-  --sun-mark: #ffc933;
+  --sun-text: #755604;
+  --sun-wash: #fcf3cc;
+  --sun-line: #e6cf74;
+  --sun-mark: #b38100;
 
   --ember-forge-1: #ff6a2c;
   --ember-forge-2: #c22a10;
@@ -124,7 +126,7 @@
   --grad-azure: linear-gradient(115deg, var(--azure-1), var(--azure-2) 48%, var(--azure-3));
   --grad-orchid: linear-gradient(115deg, var(--orchid-1), var(--orchid-2) 48%, var(--orchid-3));
   --grad-sun: linear-gradient(115deg, var(--sun-1), var(--sun-2) 48%, var(--sun-3));
-  --grad-none: linear-gradient(115deg, var(--ink-soft), var(--field));
+  --grad-none: linear-gradient(115deg, var(--none-1), var(--none-2));
   --forge-shape: 90% 260% at 100% 50%;
   --forge-ember: radial-gradient(var(--forge-shape), var(--ember-forge-1) 0%, var(--ember-forge-2) 26%, var(--ember-forge-3) 56%, var(--ember-forge-4) 82%, var(--ember-forge-5) 100%);
   --forge-lime: radial-gradient(var(--forge-shape), var(--lime-forge-1) 0%, var(--lime-forge-2) 26%, var(--lime-forge-3) 56%, var(--lime-forge-4) 82%, var(--lime-forge-5) 100%);
@@ -222,6 +224,57 @@
   --frame-slow: 320ms;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
 }
+
+/* The other look, for a person who has chosen it. It only changes what differs, and its ground and words are soft on purpose: no black and no white. */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --paper: #1a1b16;
+  --panel: #21221c;
+  --sunken: #282922;
+  --hover: #2f3029;
+  --current: #393a32;
+  --rule: #32332c;
+  --rule-strong: #4b4c42;
+  --field: #83847a;
+  --ink: #e2e2da;
+  --ink-soft: #bcbdb3;
+  --ink-faint: #a7a89e;
+  --ink-quiet: #9c9d93;
+  --primary: #d9f23f;
+  --primary-hover: #e7f873;
+  --primary-ink: #14160a;
+  --focus: #d9f23f;
+  --bar: #1a1b16;
+  --bar-hover: #2f3029;
+  --bar-rule: #393a32;
+  --bar-ink: #e2e2da;
+  --bar-soft: #bcbdb3;
+  --none-1: #bdbeb4;
+  --none-2: #83847a;
+  --lime-text: #d3ea4a;
+  --lime-wash: #2a3315;
+  --lime-line: #566a1d;
+  --lime-mark: #d3ea4a;
+  --ember-text: #ff9a78;
+  --ember-wash: #3b1e12;
+  --ember-line: #83401f;
+  --ember-mark: #ff7a42;
+  --azure-text: #93caff;
+  --azure-wash: #1a2a47;
+  --azure-line: #34548f;
+  --azure-mark: #5aaeff;
+  --orchid-text: #f3a6e4;
+  --orchid-wash: #371a3f;
+  --orchid-line: #743481;
+  --orchid-mark: #ee74cf;
+  --sun-text: #ffd675;
+  --sun-wash: #352d10;
+  --sun-line: #6f5e1e;
+  --sun-mark: #ffcf4d;
+}
+
 
 *, *::before, *::after { box-sizing: border-box; }
 
@@ -394,7 +447,7 @@ summary.switcher-head:hover { color: var(--ink); }
 .nav-item:hover { color: var(--ink); background: var(--sunken); }
 .nav-item:active { background: var(--current); }
 .nav-item[aria-current="page"] { color: var(--ink); font-weight: 500; background: var(--hover); }
-.nav-item[aria-current="page"] .icon { color: var(--fam-dot); }
+.nav-item[aria-current="page"] .icon { color: var(--primary); }
 .nav-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-count { display: inline-flex; flex: none; align-items: center; gap: var(--space-4); color: var(--ink-faint); font-size: var(--text-12); line-height: var(--line-12); font-variant-numeric: tabular-nums; }
 
@@ -508,7 +561,7 @@ main > .section-foot { margin-top: var(--gap); }
 .figure dt { display: flex; align-items: center; gap: var(--space-8); grid-column: 1; min-width: 0; color: var(--bar-soft); font-size: var(--text-12); line-height: var(--line-12); }
 .figure dd { margin: 0; }
 .figure > dd:first-of-type { grid-column: 1 / -1; color: var(--bar-ink); font-family: var(--font-mono); font-size: var(--text-24); line-height: var(--line-24); font-weight: 600; letter-spacing: -0.04em; animation: rise var(--dur-slow) var(--ease-out); }
-.figure.is-stuck > dd:first-of-type { color: var(--ember-1); }
+.figure.is-stuck > dd:first-of-type { color: var(--ember-text); }
 .figure .figure-go { display: flex; grid-column: 2; grid-row: 1; color: var(--field); transition: color var(--dur-fast) var(--ease-out); }
 .figure:hover .figure-go { color: var(--bar-ink); }
 .figure-go a { display: inline-flex; color: inherit; text-decoration: none; }
@@ -516,15 +569,15 @@ main > .section-foot { margin-top: var(--gap); }
 .figure-go a:focus-visible { outline: none; }
 .figure-go a:focus-visible::after { outline: 2px solid var(--focus); outline-offset: 2px; }
 .hero-go { display: inline-flex; flex: none; align-items: center; gap: var(--space-8); margin: calc(-1 * var(--space-8)) calc(-1 * var(--space-8)) calc(-1 * var(--space-8)) 0; padding-inline: var(--space-24); color: var(--bar-ink); font-weight: 600; white-space: nowrap; text-decoration: none; border-left: 1px solid var(--bar-rule); border-radius: 0 var(--radius-16) var(--radius-16) 0; transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out); }
-.hero-go:hover { color: var(--on-bright); background: var(--bar-ink); }
-.hero-go:active { color: var(--on-bright); background: var(--bar-soft); }
+.hero-go:hover { color: var(--bar); background: var(--bar-ink); }
+.hero-go:active { color: var(--bar); background: var(--bar-soft); }
 .hero-go:focus-visible { outline-offset: -2px; }
 .hero-go .icon { transition: translate var(--dur-fast) var(--ease-out); }
 .hero-go:hover .icon { translate: var(--space-4) 0; }
 
 /* The one loud thing on a job's page. Only one at a time, and only for stuck, waiting on a person, or just delivered. */
 
-.banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-24); min-height: calc(var(--control-36) + 2 * var(--space-32)); margin-bottom: var(--gap); padding: var(--space-16) var(--space-32) var(--space-16) var(--space-16); color: var(--on-deep); background: var(--bar); border-radius: var(--radius-16); animation: rise var(--dur-slow) var(--ease-out); }
+.banner { display: flex; align-items: center; justify-content: space-between; gap: var(--space-24); min-height: calc(var(--control-36) + 2 * var(--space-32)); margin-bottom: var(--gap); padding: var(--space-16) var(--space-32) var(--space-16) var(--space-16); color: var(--on-deep); background: var(--on-bright); border-radius: var(--radius-16); animation: rise var(--dur-slow) var(--ease-out); }
 .banner.fam-ember { background: var(--forge-ember); }
 .banner.fam-lime { background: var(--forge-lime); }
 .banner.fam-azure { background: var(--forge-azure); }
@@ -876,7 +929,7 @@ ul.file-rows > li { display: flex; flex-wrap: wrap; align-items: center; justify
 .flag-fold > summary { color: var(--ink-faint); font-size: var(--text-12); line-height: var(--line-12); list-style: none; cursor: pointer; transition: color var(--dur-fast) var(--ease-out); }
 .flag-fold > summary::-webkit-details-marker { display: none; }
 .flag-fold > summary:hover { color: var(--ink); }
-.flag-fold[open] { flex-basis: 100%; }
+.flag-fold[open] { flex-basis: 100%; min-width: 0; }
 .flag-fold .flag-form { margin: var(--space-8) 0; padding-top: 0; border-top: 0; }
 
 /* A card: one row, and what it says and asks opens under it */
@@ -1131,49 +1184,6 @@ form.panel { gap: var(--space-16); margin: 0; }
 @keyframes grow-up { from { transform: scaleY(0); } }
 @keyframes reveal { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
 @keyframes swell { from { transform: scaleY(0.8); opacity: 0; } }
-
-/* Light keeps working: the neutrals and the soft fills change, and the families and the big things stay as they are. */
-
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
-
-    --paper: #fbfbf8;
-    --panel: #ffffff;
-    --sunken: #f2f2ec;
-    --hover: #eaeae3;
-    --current: #e2e2d9;
-    --rule: #e4e4dc;
-    --rule-strong: #c8c8bd;
-    --field: #84857a;
-    --ink: #14160a;
-    --ink-soft: #46473d;
-    --ink-faint: #63645a;
-    --ink-quiet: #6e6f65;
-    --focus: #1f7a50;
-
-    --lime-text: #2d6410;
-    --lime-wash: #eef8c8;
-    --lime-line: #b5cf5a;
-    --lime-mark: #4f8a10;
-    --ember-text: #a83a08;
-    --ember-wash: #ffe9da;
-    --ember-line: #f2b48a;
-    --ember-mark: #d9480f;
-    --azure-text: #1c52b5;
-    --azure-wash: #e3efff;
-    --azure-line: #a6c6f5;
-    --azure-mark: #1f63d6;
-    --orchid-text: #94178a;
-    --orchid-wash: #fbe6f6;
-    --orchid-line: #e8afdd;
-    --orchid-mark: #b4178f;
-    --sun-text: #7a5a05;
-    --sun-wash: #fdf3c9;
-    --sun-line: #e6cf74;
-    --sun-mark: #a86f00;
-  }
-}
 
 /* Up to the size where the rail has room beside the page */
 

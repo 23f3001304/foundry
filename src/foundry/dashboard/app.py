@@ -67,6 +67,9 @@ MOST_LOGIN_BODY = 20_000
 # More digits than this is not a number a form could mean, and is cheap to refuse before it is read as one.
 MOST_DIGITS = 9
 MOST_NAME = 80
+# Light whatever the system says, unless the person has chosen dark.
+THEME_COOKIE = "foundry-theme"
+LIGHT, DARK = "light", "dark"
 # The pages a person opens a file from, for its way back.
 BACK_PATHS = re.compile(r"/(work|jobs|log|responses)?|/jobs/[\w-]+|/log/flagged/\d+")
 DEFAULT_BACK = "/work"
@@ -108,7 +111,7 @@ def render(request: Request, name: str, user: User | None = None, status: int = 
     found = find_session(request)
     # A page reached some other way than a signed-in handler, like an address that isn't here, shows no counts.
     counts = getattr(request.state, "counts", None) or NavCounts()
-    return request.app.state.templates.TemplateResponse(request, name, {"user": user, "csrf": found[1].csrf if found else "", "counts": counts, "here": f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path, **context}, status_code=status)
+    return request.app.state.templates.TemplateResponse(request, name, {"user": user, "csrf": found[1].csrf if found else "", "counts": counts, "here": f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path, "theme": DARK if request.cookies.get(THEME_COOKIE) == DARK else LIGHT, **context}, status_code=status)
 
 
 def check_body(request: Request, most: int) -> None:

@@ -13,7 +13,8 @@ Everything visible comes from `static/style.css`, the macros in `templates/_ui.h
 - **Every empty or result page offers the next step.**
 - **No scripts and no inline styles.** The Content-Security-Policy stays as it is in `app.py`. Fonts, pictures and icons come from `/static`, and shapes and charts are drawn on the server.
 - **Words carry the meaning.** A mark, a shape, a sprite or a chart never says something the text beside it doesn't. Shapes and sprites are hidden from screen readers, and a chart says what it shows in words.
-- **Dark first.** Dark is what gets designed and judged. Light follows the system setting and keeps working: its block changes the neutrals, the soft fills and the marks (`--lime-mark` and the rest, for dots and chart lines, which a bright hue can't carry on white), and the gradients and the big shapes stay as they are.
+- **Light by default.** Light is what gets designed and judged, whatever the system says. `:root` sets the whole look. Hierarchy comes from value: a white panel on a warm off-white page, and greys that step down. The bright lime is for shapes and gradients only, because it can't carry words on white, so the one accent, `--primary`, is the same hue taken deep enough to pass AA, and it is the primary button, the current tab and the focus ring. Red stays small: a dot or a soft chip, plus the one loud shape when something is stuck.
+- **Dark is soft.** `:root[data-theme="dark"]`, set when the `foundry-theme` cookie says dark, changes the neutrals, the accent, the bar, the soft fills and the marks. There is no black and no white in it: the ground is lifted to `--paper` #1a1b16 and words start at an off-white `--ink`, about 13 to 1. Each step down is clearly lower and all of them hold AA. There is no switch on the page yet, because setting a choice needs a form and an address of its own.
 
 ## The families
 
@@ -37,7 +38,7 @@ Drawn in `shapes.py` as our own paths, in one family each. `shapes.defs()` puts 
 
 | Shape | Function | Where |
 |---|---|---|
-| Cut-out | `shapes.cut_out(family)` | The overview's hero: long curves and one sharp cusp hugging the bottom of a rounded panel, with the figures in a dark bar over it. Ember when something is stuck or waiting on this login, otherwise lime |
+| Cut-out | `shapes.cut_out(family)` | The overview's hero: long curves and one sharp cusp hugging the bottom of a rounded panel, with the figures in a bar over it. Ember when something is stuck or waiting on this login, otherwise lime |
 | Grid tile | `shapes.grid_tile(family)` | Sign-in, empty states and Generated work's header: a family's gradient with thin dark lines, and a dark card overlapping it and running off the edge |
 | Icon tile | `tile(icon, family)` | Beside a section's title, a small square in its family's gradient |
 
@@ -47,14 +48,14 @@ Drawn in `shapes.py` as our own paths, in one family each. `shapes.defs()` puts 
 |---|---|
 | Space | `--space-` 4, 8, 12, 16, 20, 24, 32, 40, 48, 64 |
 | Type | `--text-` / `--line-` 12/16, 13/16 (the side bar's rows), 14/20, 16/24, 20/28, 24/32, 32/40 |
-| Radius | `--radius-` 4 (chip, and a row in a small menu), 8 (control), 16 (panel, banner, card, the hero's dark bar), 24 (hero and sign-in) |
+| Radius | `--radius-` 4 (chip, and a row in a small menu), 8 (control), 16 (panel, banner, card, the hero's bar), 24 (hero and sign-in) |
 | Control height | `--control-` 24 (a button in a table), 28 (a row in the side bar), 32, 36, 40 |
 | Icons and sprites | `--size-` 16, 24, 32, 48, 64, 96 |
 | Layout | `--gutter`, `--gap`, `--section`, `--sidebar`, `--side-folded`, `--logo-nudge`, `--viewer-head`, `--viewer-slide`, `--rail`, `--content`, `--measure`, `--form`, `--sign-in`, `--sign-in-art`, `--hero`, `--hero-shape`, `--col-*`, `--step`, `--tabbar` |
 | Motion | `--dur-fast` 120ms, `--dur-base` 200ms, `--dur-slow` 320ms, `--dur-reveal` 640ms, `--frame` 120ms, `--frame-slow` 320ms, `--ease-out` |
 | Neutrals | `--paper --panel --sunken --hover --current --rule --rule-strong --field --ink --ink-soft --ink-faint --ink-quiet`, leaning very slightly toward the logo's olive |
 | Accent and focus | `--primary --primary-hover --primary-ink --focus` |
-| The dark bar and words on colour | `--bar --bar-hover --bar-rule --bar-ink --bar-soft --on-bright --on-deep --grid-line` |
+| The hero's bar and words on colour | `--bar --bar-hover --bar-rule --bar-ink --bar-soft --on-bright --on-deep --grid-line --none-1 --none-2` |
 | Gradients | `--grad-lime --grad-ember --grad-azure --grad-orchid --grad-sun --grad-none`, and `--forge-lime --forge-ember --forge-azure --forge-orchid --forge-sun` with `--forge-shape`. A gradient is only written here |
 
 ## Spacing
@@ -102,7 +103,7 @@ Each has one definition, with its states: rest, hover, focus (one shared ring), 
 | Delta | `.delta` | A soft chip beside a chart's title. `.delta-good`, `.delta-flat`, `.delta-stuck` |
 | Legend | `legend()`, `.legend` | Diamonds in the line's own colour, with mono values |
 | Icon tile | `tile()`, `.tile` | One family's gradient beside a section title |
-| Figure | `.figure` | Label with its arrow beside it, and the number under them, on the hero's dark bar. The whole figure is the link |
+| Figure | `.figure` | Label with its arrow beside it, and the number under them, on the hero's bar. The whole figure is the link |
 | Pill | `.pill` | A short fact or a count. `.pill-needs` needs you |
 | Chip | `.chip-link` | A filter, kept in the address, with a dot in the stage's family |
 | Button | `button` `.button` | `.primary`, `.danger` (inverted, not red), `.quiet`, `.button-wide` |
@@ -126,7 +127,7 @@ Each has one definition, with its states: rest, hover, focus (one shared ring), 
 
 The side bar has the mark and a fold control, then the business, then Overview and Responses, then the labelled groups Work (Jobs, Generated work, Action log) and Setup (Connections, Data), then the person and sign out. There is no top bar.
 
-It recedes and belongs to the page. It sits on `--paper` with no panel colour and no line. It starts with one brand block: the mark in the icon column, ink 20 tall, then the word Foundry with the business under it, smaller and quieter, in the text column. With several businesses that second line is the switcher, and its menu opens under the whole block. The mark, the block and the fold share one centre line, which is the page title's, so the bar and the page start level. The pages start 24 under the block. It has three levels below that. A label (`.nav-label`) is 12px in `--ink-quiet`, with no icon, and can't be pressed. A page (`.nav-item`) is 13px regular in `--ink-faint`, with a small muted icon and its name on one shared edge, and every page has both. The mark's ink, the labels, the icons' ink and the person's avatar share one left edge at 20, and the text edge is 44. `--logo-nudge` moves the mark so its ink, not its box, sits on that edge. The page you're on is the only bright thing, in `--ink` on a quiet `--hover` fill, with its icon in its own family's colour. Spacing shows the structure: rows touch inside a group, and groups are 24 apart. 
+It recedes and belongs to the page. It sits on `--paper` with no panel colour and no line. It starts with one brand block: the mark in the icon column, ink 20 tall, then the word Foundry with the business under it, smaller and quieter, in the text column. With several businesses that second line is the switcher, and its menu opens under the whole block. The mark, the block and the fold share one centre line, which is the page title's, so the bar and the page start level. The pages start 24 under the block. It has three levels below that. A label (`.nav-label`) is 12px in `--ink-quiet`, with no icon, and can't be pressed. A page (`.nav-item`) is 13px regular in `--ink-faint`, with a small muted icon and its name on one shared edge, and every page has both. The mark's ink, the labels, the icons' ink and the person's avatar share one left edge at 20, and the text edge is 44. `--logo-nudge` moves the mark so its ink, not its box, sits on that edge. The page you're on is the only bright thing, in `--ink` on a quiet `--hover` fill, with its icon in the accent. Spacing shows the structure: rows touch inside a group, and groups are 24 apart. 
 
 A count (`.nav-count`) is a plain small number in `--ink-faint`, never a pill. A stuck count adds one small ember dot beside it and nothing else, because that's the real news. Both `--ink-faint` and `--ink-quiet` hold AA on the page. The fold lasts until the next page, because keeping it would need a script or a cookie.
 
