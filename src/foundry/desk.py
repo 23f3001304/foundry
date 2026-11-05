@@ -165,8 +165,9 @@ LAST_LIST = "The list you wrote last time. Change what the approver asked about 
 QUESTION_WINDOW = timedelta(hours=24)
 # What a voice note has come to: the sender hasn't answered yet, said it was right, or typed what they meant. Typed notes have none of these.
 UNCONFIRMED, CONFIRMED, CORRECTED = "unconfirmed", "confirmed", "corrected"
-# Kept on the voice card whose Wrong asked for the fix: the burst of words whose log line and card are already made.
+# Kept on the voice card whose Wrong asked for the fix: the burst of words whose card is already made, and the burst whose log line is.
 FIX_TAKEN = "fix_taken"
+FIX_LOGGED = "fix_logged"
 LATE_FIX_CHOICES = ("Re-make with the fix", "Carry on")
 VOICE_CARD_DETAIL = 'I heard: "{text}"\n\nIs that right?'
 # The brief or report card, when the sender is the one approving it, shows this and does both jobs.
@@ -959,7 +960,7 @@ class Desk:
         else:
             self._ask_voice_approval(job, words or burst.text, entries)
 
-    def _ask_voice_approval(self, job: Job, heard_text: str, entries: Iterable[int] = (), new_card: bool = True) -> None:
+    def _ask_voice_approval(self, job: Job, heard_text: str, entries: Iterable[int] = (), new_card: bool = True, keep_refused: bool = False) -> None:
         # Work doesn't wait for the answer. Until it comes the note is unconfirmed, and the approver's final card says so.
         job.heard = UNCONFIRMED
         if VOICE_UNCONFIRMED not in job.attention:
@@ -969,7 +970,7 @@ class Desk:
         try:
             self.cards.submit(
                 Trigger.VOICE, job.requester, job.bucket, job.room_id, VOICE_CARD_TITLE, VOICE_CARD_DETAIL.format(text=quiet(heard_text)), (RIGHT, WRONG),
-                job_id=job.id, data={"heard": heard_text, "entries": list(entries)},
+                job_id=job.id, data={"heard": heard_text, "entries": list(entries)}, keep_refused=keep_refused,
             )
         except httpx.HTTPError as error:
             logger.warning("Could not open a voice card for job %s, so what was heard stays unconfirmed: %s", job.id, error)
@@ -1087,17 +1088,19 @@ class Desk:
     def _take_voice_fix(self, job: Job, card: Card, burst: Burst) -> None:
         # A note sent again is speech-to-text too, so its sender is asked about it. Words they typed are their own.
         spoken = bool(burst.language)
-        # The log line and the card to approve what was heard are made once. If the step after them fails, the fix is tried again with neither.
-        taken = card.data.get(FIX_TAKEN) == burst.first_at.isoformat()
+        # The card to approve what was heard and the log line are each made once. If a step after them fails, the fix is tried again without them.
+        this_burst = burst.first_at.isoformat()
         if spoken:
             words, entries = self._voice_in(job.bucket, burst.entry_ids)
-            self._ask_voice_approval(job, words or burst.text, entries, new_card=not taken)
+            # A card Switch refuses stays in the queue and is tried on every tick, so its sender is still asked and the fix doesn't wait for it.
+            self._ask_voice_approval(job, words or burst.text, entries, new_card=card.data.get(FIX_TAKEN) != this_burst, keep_refused=True)
+            self.cards.note(card.request_id, **{FIX_TAKEN: this_burst})
         else:
             job.heard = CORRECTED
             job.attention = [line for line in job.attention if line != VOICE_UNCONFIRMED]
-        if not taken:
+        if card.data.get(FIX_LOGGED) != this_burst:
             self.log.add(burst.first_at, job.bucket, burst.room_id, burst.sender, "voice_corrected", burst.text, job_id=job.id, ref=_ids(card.data.get("entries", [])))
-            self.cards.note(card.request_id, **{FIX_TAKEN: burst.first_at.isoformat()})
+            self.cards.note(card.request_id, **{FIX_LOGGED: this_burst})
         self._apply_voice_fix(job, burst.text, spoken)
         self.store.save(job)
         self.cards.note(card.request_id, awaiting_fix=None)

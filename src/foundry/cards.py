@@ -186,18 +186,21 @@ class CardQueue:
             db.execute("CREATE TABLE IF NOT EXISTS set_time_runs (bucket TEXT NOT NULL, person TEXT NOT NULL, slot TEXT NOT NULL, PRIMARY KEY (bucket, person, slot))")
             db.execute("CREATE TABLE IF NOT EXISTS answer_times (person TEXT NOT NULL, room_id TEXT NOT NULL, answered_at TEXT NOT NULL, PRIMARY KEY (person, room_id))")
 
-    def submit(self, trigger: Trigger, person: str, bucket: str, room_id: str, title: str, detail: str, choices: tuple[str, ...] | list[str] = (), job_id: str | None = None, item_id: str | None = None, data: dict | None = None, request_id: str | None = None) -> Card:
+    def submit(self, trigger: Trigger, person: str, bucket: str, room_id: str, title: str, detail: str, choices: tuple[str, ...] | list[str] = (), job_id: str | None = None, item_id: str | None = None, data: dict | None = None, request_id: str | None = None, keep_refused: bool = False) -> Card:
         now = ROUTE[trigger].now
         card = Card(request_id or _new_id(), trigger, person, bucket, room_id, title, detail, list(choices), job_id, item_id, QUEUED, self.clock(), None, dict(data or {}))
         if now and self._nothing_in_the_way(person, bucket):
-            # A card that can't open raises with nothing saved, so the caller's retry isn't a second card.
+            # A card that can't open raises with nothing saved, so the caller's retry isn't a second card. A caller with no retry of its own keeps it instead, and the queue tries it on every run.
             try:
                 self._open(card)
-            except httpx.HTTPStatusError as error:
-                if error.response.status_code != ALREADY_THERE:
+            except httpx.HTTPError as error:
+                if isinstance(error, httpx.HTTPStatusError) and error.response.status_code == ALREADY_THERE:
+                    # Switch has this request id already, so an earlier try got through and only its reply was lost. The card is there, and the answer to it must find it here.
+                    self._mark_open(card)
+                elif keep_refused:
+                    self._try_again_later(card, error)
+                else:
                     raise
-                # Switch has this request id already, so an earlier try got through and only its reply was lost. The card is there, and the answer to it must find it here.
-                self._mark_open(card)
         else:
             self._save(card)
         return card
