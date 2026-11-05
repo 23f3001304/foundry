@@ -1,6 +1,6 @@
-"""One command from a fresh clone to a running Foundry: ./setup.sh on macOS and Linux, .\\setup.ps1 on Windows. Those two only find uv and run this.
+"""One command from a fresh clone to a running Foundry: ./setup.sh on macOS and Linux, setup.ps1 on Windows. Those two only find uv and run this.
 
-Each step checks whether it is already done, so a run that stopped halfway is finished by running it again. Everything it makes lives in .foundry and the two git-ignored .env files, under a Docker project name of its own, and --stop and --reset only touch that.
+Each step checks whether it is already done, so a run that stopped halfway is finished by running it again. What it makes is in .foundry and the git-ignored .env and .venv, under a Docker project name of its own, in the agents' folder under ~/.switch, and in uv's own Python and cache. --stop stops only processes it recorded starting, checked by number and start time, and --reset removes only what it recorded making.
 
 This file uses only the standard library, because it runs before Foundry's packages are installed.
 """
@@ -88,7 +88,7 @@ DEMOS = {
 
 FAIL_ENV_NOT_OURS = "There is already a .env here that setup did not write, so nothing was changed. Run this from a fresh clone, or move that .env somewhere else first."
 FAIL_CLONE = "Git could not fetch Switch. Check your internet connection."
-FAIL_COMPOSE = "Docker could not start Switch's containers. Check that Docker Desktop is running and has disk space."
+FAIL_COMPOSE = "Docker could not start Switch's containers. The usual causes are Docker having stopped or a full disk."
 FAIL_HEALTHY = "Switch's containers started but Switch did not become healthy in time. It can be slow the first time, so give it a minute."
 FAIL_BRIDGE = "Switch came up but its Mattermost connection did not appear in time. It can be slow the first time, so give it a minute."
 FAIL_BUILD = "The agent controller did not build. Check your internet connection and disk space."
@@ -475,7 +475,8 @@ def fill_env(text: str, values: Mapping[str, str]) -> str:
 def switch_env(example: str, ports: Mapping[str, int], token: Callable[[], str] = lambda: secrets.token_hex(32)) -> str:
     values = {name: token() for name in SWITCH_SECRETS}
     values["SECRET_KEYS"] = f"local:{values['SECRET_KEYS']}"
-    return fill_env(example, {**values, "FEATURE_FLAGS_ENABLED": "agent_management", **{setting: str(ports[name]) for name, setting in PORT_SETTINGS.items()}})
+    # Left on, Switch sends people's names to outside avatar services.
+    return fill_env(example, {**values, "FEATURE_FLAGS_ENABLED": "agent_management", "THIRD_PARTY_AVATARS_ENABLED": "false", **{setting: str(ports[name]) for name, setting in PORT_SETTINGS.items()}})
 
 
 def project_name(repo: Path) -> str:
@@ -516,7 +517,7 @@ def missing_prerequisites(repo: Path, machine: Machine) -> list[str]:
     elif _quiet_run(machine, "docker", "compose", "version").code != 0:
         missing.append(f"Docker is here but its compose command is not. Get a current Docker from {LINKS['docker']}.")
     elif _quiet_run(machine, "docker", "info").code != 0:
-        missing.append("Docker is installed but not running. Start Docker Desktop, or the Docker service, and wait until it says it is running.")
+        missing.append("Docker is installed but not running. Start Docker Desktop, or the Docker service, and wait until it says it is running. On Linux, your user may also need to be in the docker group.")
     if not machine.which("node"):
         missing.append(f"Node {NODE_MAJOR} or newer is not installed. Get it from {LINKS['node']}.")
     else:
@@ -556,6 +557,16 @@ def _took(seconds: float) -> str:
     return f"{int(seconds)}s" if seconds < 60 else f"{int(seconds // 60)}m {int(seconds % 60)}s"
 
 
+def _write_traceback(log: Path) -> None:
+    # Inside an except, for whoever needs the details later. Not on the screen.
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as file:
+            file.write(traceback.format_exc())
+    except OSError:
+        pass
+
+
 def run_steps(steps: list[Step], ui: Ui, log: Path | None = None) -> int:
     for number, step in enumerate(steps, start=1):
         place = f"{number:>2}/{len(steps)}"
@@ -578,12 +589,7 @@ def run_steps(steps: list[Step], ui: Ui, log: Path | None = None) -> int:
             ui.say()
             ui.say()
             written = log or Path("setup.log")
-            try:
-                written.parent.mkdir(parents=True, exist_ok=True)
-                with written.open("a", encoding="utf-8") as file:
-                    file.write(traceback.format_exc())
-            except OSError:
-                pass
+            _write_traceback(written)
             ui.say(UNEXPECTED.format(log=written))
             ui.say(RUN_AGAIN)
             return 1
@@ -621,6 +627,7 @@ class Setup:
         self.images_file = self.home / "images.yml"
         self.switch_env_file = self.switch / ".env"
         self.env_file = repo / ".env"
+        self.try_record = self.home / TRY_RECORD
         self.state_broken = False
         self.state = self._read_state()
 
@@ -1095,9 +1102,28 @@ class Setup:
             return STOPPED
         return WOULD_NOT_STOP.format(pid=process.pid)
 
+    def _stop_try(self) -> str | None:
+        # None when there is no record of one. A record is what makes it setup's own to stop.
+        try:
+            found = json.loads(self.try_record.read_text(encoding="utf-8"))
+            process = Process(int(found["pid"]), str(found["started"]))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, KeyError, TypeError):
+            self.try_record.unlink(missing_ok=True)
+            return None
+        said = self._end(process)
+        if not said.startswith("would not"):
+            self.try_record.unlink(missing_ok=True)
+        return said
+
     def _stop_processes(self) -> bool:
         had_controller = self._record("controller") is not None
         fine = True
+        said_try = self._stop_try()
+        if said_try:
+            self.ui.say(f"  try mode: {said_try}")
+            fine = not said_try.startswith("would not")
         for name in ("dashboard", "desk", "controller"):
             said = self._stop_one(name)
             self.ui.say(f"  {name}: {said}")
@@ -1177,6 +1203,9 @@ class Setup:
         if self.state_broken:
             self.ui.say(FAIL_STATE)
             return 1
+        running = running_try(self.try_record, self.machine)
+        if running:
+            self.ui.say(f"Try mode is running at http://127.0.0.1:{running['port']}.")
         if not self.state.get("ports"):
             self.ui.say("Foundry has not been set up here yet. Run this with no options to set it up, or with --try to look around with made-up data.")
             return 0
@@ -1201,10 +1230,13 @@ class Setup:
         if self.state_broken:
             self.ui.say(FAIL_STATE)
             return 1
-        if not self.state.get("processes") and not self.state.get("stack_started"):
+        if not self.state.get("processes") and not self.state.get("stack_started") and not self.try_record.exists():
             self.ui.say("Nothing to stop. Setup has not started anything here.")
             return 0
+        only_try = not self.state.get("processes") and not self.state.get("stack_started")
         fine = self._stop_processes()
+        if only_try:
+            return 0 if fine else 1
         if self.state.get("stack_started") and self.images_file.exists():
             if self.machine.run(self.compose("stop"), log=self._log("switch"), timeout=300).code == 0:
                 self.ui.say("  Switch's containers: stopped")
@@ -1327,12 +1359,40 @@ NOT_FOR_TRY_MODE = ("FOUNDRY_", "SWITCH_", "MATTERMOST_", "ANTHROPIC_", "SARVAM_
 NO_UV = "Try mode needs uv, and uv is not on your PATH. Get it from https://docs.astral.sh/uv/getting-started/installation/."
 
 
+TRY_RECORD = "try.json"
+# What tools/try_foundry.py returns when it has said why it stopped itself.
+TRY_ALREADY_SAID = 3
+TRY_RUNNING = "Try mode is already running at http://127.0.0.1:{port}. Its sign-in page shows the made-up login. To stop it, press Ctrl+C where it started or run this with --stop."
+TRY_DID_NOT_RUN = "Try mode has stopped. If it never showed an address, uv probably could not fetch Python or Foundry's packages, which the first run needs the internet for."
+
+
+def running_try(record: Path, machine: Machine) -> dict | None:
+    """The try mode recorded here, if that same process is still running. A record of anything else is stale, and goes."""
+    try:
+        found = json.loads(record.read_text(encoding="utf-8"))
+        process = Process(int(found["pid"]), str(found["started"]))
+        port = int(found["port"])
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError):
+        record.unlink(missing_ok=True)
+        return None
+    if machine.alive(process):
+        return {"pid": process.pid, "started": process.started, "port": port}
+    record.unlink(missing_ok=True)
+    return None
+
+
 def clean_env(env: Mapping[str, str]) -> dict[str, str]:
     return {name: value for name, value in env.items() if not name.upper().startswith(NOT_FOR_TRY_MODE)}
 
 
 def try_mode(repo: Path, machine: Machine, ui: Ui, build: "Setup") -> int:
     # It needs only uv. Its data and settings live in its own folder, it never reads a .env, and tools/try_foundry.py listens on this machine and connects to nothing.
+    running = running_try(build.try_record, machine)
+    if running:
+        ui.say(TRY_RUNNING.format(port=running["port"]))
+        return 0
     uv = machine.which("uv")
     if not uv:
         ui.say(NO_UV)
@@ -1345,28 +1405,32 @@ def try_mode(repo: Path, machine: Machine, ui: Ui, build: "Setup") -> int:
         ui.say("The first time, uv downloads Python and Foundry's packages, about 2 minutes. After that nothing leaves this machine.")
     command = [uv, "run", "--frozen", "--no-dev", "python", "tools/try_foundry.py"]
     try:
-        return subprocess.run(command, cwd=repo, env={**clean_env(os.environ), "PYTHONUTF8": "1"}, check=False).returncode
+        code = subprocess.run(command, cwd=repo, env={**clean_env(os.environ), "PYTHONUTF8": "1"}, check=False).returncode
     except KeyboardInterrupt:
         ui.say("Try mode stopped.")
         return 0
+    if code not in (0, TRY_ALREADY_SAID):
+        ui.say(TRY_DID_NOT_RUN)
+    return code
 
 
 def parser() -> argparse.ArgumentParser:
     ask = argparse.ArgumentParser(prog="setup", description="Sets Foundry up from a fresh clone, and can be run again at any point.")
-    ask.add_argument("--try", dest="try_mode", action="store_true", help="the dashboard with made-up data and no agents. It needs only uv")
-    ask.add_argument("--stop", action="store_true", help="stop what setup started")
-    ask.add_argument("--status", action="store_true", help="show what is up")
-    ask.add_argument("--reset", action="store_true", help="remove only what setup made, after asking")
+    command = ask.add_mutually_exclusive_group()
+    command.add_argument("--try", dest="try_mode", action="store_true", help="the dashboard with made-up data and no agents. It needs only uv")
+    command.add_argument("--stop", action="store_true", help="stop what setup started")
+    command.add_argument("--status", action="store_true", help="show what is up")
+    command.add_argument("--reset", action="store_true", help="remove only what setup recorded making, after asking")
     ask.add_argument("--demo", choices=list(DEMOS), help="which demo to make rooms for. It is asked if not given")
-    ask.add_argument("--yes", action="store_true", help="take the default for anything it would ask")
+    ask.add_argument("--yes", action="store_true", help="say yes to whatever it would ask, including --reset's question, so with --reset it removes without asking")
     return ask
 
 
 def main(arguments: list[str] | None = None) -> int:
     chosen = parser().parse_args(arguments)
     ui = Ui(stdin=True)
-    build = Setup(REPO, Machine(), ui, demo=chosen.demo, yes=chosen.yes)
     try:
+        build = Setup(REPO, Machine(), ui, demo=chosen.demo, yes=chosen.yes)
         if chosen.try_mode:
             return build.try_mode()
         if chosen.stop:
@@ -1380,8 +1444,16 @@ def main(arguments: list[str] | None = None) -> int:
         ui.say()
         ui.say("Stopped. Run this again to carry on from here.")
         return 130
+    except Failure as failure:
+        ui.say(str(failure))
+        return 1
     except OSError as error:
-        ui.say(FAIL_FILE_IN_USE.format(path=error.filename or "A file here"))
+        ui.say(FAIL_FILE_IN_USE.format(path=str(error.filename or "A file here").removeprefix("\\\\?\\")))
+        return 1
+    except Exception:
+        log = REPO / ".foundry" / "logs" / "setup.log"
+        _write_traceback(log)
+        ui.say(UNEXPECTED.format(log=log))
         return 1
 
 

@@ -1,4 +1,4 @@
-"""Writes a scene's earlier history into the log, marked as seeded, so a demo can say "3 weeks ago" with no fake clock, and its overview's charts have 28 days to draw. Nothing else can write to the log this way.
+"""Writes a scene's earlier history into the log, marked as seeded, so a demo can say "3 weeks ago" with no fake clock, and its overview's charts have 28 days to draw. Only this and try mode, in its own made-up folder, write to a log this way.
 
 uv run --env-file .env python scripts/seed_history.py it_firm
 """

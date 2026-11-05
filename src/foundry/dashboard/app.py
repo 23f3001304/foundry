@@ -277,6 +277,9 @@ async def overview(request: Request, user: User) -> Response:
 
 
 def connections_link(request: Request) -> str:
+    # Try mode's Switch is made up, and a link to it would send a browser out looking for a name that isn't there.
+    if request.app.state.templates.env.globals.get("try_mode"):
+        return "/connections"
     return f"{request.app.state.switch_url.rstrip('/')}/collaborations"
 
 

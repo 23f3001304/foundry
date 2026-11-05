@@ -1,14 +1,16 @@
 """Try mode: the real dashboard on made-up data, started by ./setup.sh --try. It needs no Docker, no agents and no sign-in to anything.
 
-Its login, its Switch and every business in it are made up. It keeps everything in .foundry/try and wipes that folder when it starts. It answers on this machine only, connects to nothing, and never looks at a .env.
+Its login, its Switch and every business in it are made up. It keeps everything in .foundry/try and wipes that folder when it starts, unless another run of it is using the folder, in which case it says that one's address and leaves. It answers on this machine only, connects to nothing, and never looks at a .env.
 """
 
+import json
 import logging
 import os
 import secrets
 import shutil
 import socket
 import sys
+import traceback
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -20,6 +22,8 @@ from starlette.applications import Starlette
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
+
+from foundry_setup import TRY_ALREADY_SAID, TRY_RECORD, TRY_RUNNING, Machine, running_try
 
 import foundry.desk
 from foundry.cards import CardQueue, Trigger
@@ -106,12 +110,18 @@ def forget_real_settings() -> None:
 
 
 def fresh_folder(folder: Path) -> None:
-    # Wiped on every start, so it is refused unless this mode made it.
+    # Wiped on every start, so it is refused unless this mode made it. The mark stays through the wipe, so one that fails halfway can be finished by the next start.
     if folder.exists() and any(folder.iterdir()) and not (folder / OWN_FOLDER_MARK).exists():
-        raise ValueError(f"{folder} isn't try mode's own folder, so nothing in it was touched.")
+        raise ValueError(f"{folder} isn't try mode's own folder, so nothing in it was touched. Move it somewhere else and run this again.")
     if folder.exists():
-        shutil.rmtree(folder)
-    folder.mkdir(parents=True)
+        for entry in folder.iterdir():
+            if entry.name == OWN_FOLDER_MARK:
+                continue
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+    folder.mkdir(parents=True, exist_ok=True)
     (folder / OWN_FOLDER_MARK).write_text("Made-up data for try mode. It is wiped each time try mode starts.\n", encoding="utf-8")
 
 
@@ -119,8 +129,6 @@ def answer(request: httpx.Request) -> httpx.Response:
     # All the Switch this mode has. Only the made-up login gets in.
     path = request.url.path
     if path == "/gateway/auth/login":
-        import json
-
         sent = json.loads(request.content)
         if sent.get("email", "").casefold() == LOGIN and sent.get("password") == PASSWORD:
             return httpx.Response(200, json={}, headers={"set-cookie": "try_mode=1; Path=/; HttpOnly"})
@@ -159,7 +167,7 @@ def settings_in(folder: Path) -> Settings:
 
 
 class World:
-    """Writes what the desk would have written, in the desk's own files, all of it marked as seeded."""
+    """Writes what the desk would have written, in the desk's own files, all of them in try mode's folder. The log's lines are marked as seeded, apart from what the card queue adds itself."""
 
     def __init__(self, settings: Settings, folder: Path, now: datetime) -> None:
         self.settings, self.folder, self.now = settings, folder, now
@@ -197,11 +205,12 @@ class World:
         self.items.save(item)
 
     def deck(self, job, name: str, title: str, slides: list[dict], maker: str = "foundry-deck", hours_ago: float = 1) -> None:
-        path = build_deck(str(self.folder / "brands" / job.bucket), title, slides, str(self.made / f"{job.id[:6]}-{name}.pptx"))
+        # The file's name and its first slide say what it is, because the banner stays behind when it is saved.
+        path = build_deck(str(self.folder / "brands" / job.bucket), f"{title} (made up)", slides, str(self.made / f"made-up-{job.id[:6]}-{name}.pptx"))
         self.say(job, hours_ago, maker, "file_made", Path(path).name, ref=path)
 
     def picture(self, job, name: str, words: str, line: str, maker: str = "foundry-visual", hours_ago: float = 1) -> None:
-        path = render_graphic(str(self.folder / "brands" / job.bucket), words, line, "1080x1080", str(self.made / f"{job.id[:6]}-{name}.png"), composition="statement")
+        path = render_graphic(str(self.folder / "brands" / job.bucket), words, f"{line} (made up)", "1080x1080", str(self.made / f"made-up-{job.id[:6]}-{name}.png"), composition="statement")
         self.say(job, hours_ago, maker, "file_made", Path(path).name, ref=path)
 
     def card(self, job, trigger: Trigger, title: str, detail: str, choices: tuple[str, ...] = ("Approve", "Revise")) -> None:
@@ -311,20 +320,64 @@ def free_port(port: int) -> int:
             probe.close()
 
 
-def main() -> None:
+def claim(record: Path, port: int, machine: Machine) -> dict | None:
+    """Writes this run down as the one using the folder, or returns the one that already is."""
+    record.parent.mkdir(parents=True, exist_ok=True)
+    pid = os.getpid()
+    for _ in range(3):
+        running = running_try(record, machine)
+        if running:
+            return running
+        try:
+            handle = os.open(record, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(handle, "w", encoding="utf-8") as file:
+            json.dump({"pid": pid, "started": machine.started(pid), "port": port}, file)
+        return None
+    return running_try(record, machine)
+
+
+def main(home: Path | None = None) -> int:
+    home = home or REPO / ".foundry"
+    record = home / TRY_RECORD
     logging.basicConfig(level=logging.WARNING)
-    print("Making up the data...", flush=True)
-    app = build_app(REPO / ".foundry" / "try")
     port = free_port(FIRST_PORT)
-    print(flush=True)
-    print("  TRY MODE. Everything in it is made up, no agents are running and nothing is sent anywhere.", flush=True)
-    print(f"  Open      http://{HOST}:{port}", flush=True)
-    print(f"  Login     {LOGIN}", flush=True)
-    print(f"  Password  {PASSWORD}", flush=True)
-    print("  Both work only in try mode. The real setup generates its own and never prints them.", flush=True)
-    print("  Press Ctrl+C to stop.", flush=True)
-    uvicorn.run(app, host=HOST, port=port, log_level="warning")
+    running = claim(record, port, Machine())
+    if running:
+        print(TRY_RUNNING.format(port=running["port"]), flush=True)
+        return 0
+    try:
+        print("Making up the data...", flush=True)
+        app = build_app(home / "try")
+        print(flush=True)
+        print("  TRY MODE. Everything in it is made up, no agents are running and nothing is sent anywhere.", flush=True)
+        print(f"  Open      http://{HOST}:{port}", flush=True)
+        print(f"  Login     {LOGIN}", flush=True)
+        print(f"  Password  {PASSWORD}", flush=True)
+        print("  Both work only in try mode. The real setup generates its own and never prints them.", flush=True)
+        print("  Press Ctrl+C to stop.", flush=True)
+        uvicorn.run(app, host=HOST, port=port, log_level="warning")
+        return 0
+    except KeyboardInterrupt:
+        print("Try mode stopped.", flush=True)
+        return 0
+    except ValueError as refused:
+        print(refused, flush=True)
+        return TRY_ALREADY_SAID
+    except OSError as error:
+        print(f"{error.filename or 'A file try mode needs'} is in use by something else, so try mode could not start. Close whatever has it open and run this again.", flush=True)
+        return TRY_ALREADY_SAID
+    except Exception:
+        log = home / "logs" / "try.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a", encoding="utf-8") as written:
+            written.write(traceback.format_exc())
+        print(f"Something unexpected stopped try mode. The details are in {log}.", flush=True)
+        return TRY_ALREADY_SAID
+    finally:
+        record.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
