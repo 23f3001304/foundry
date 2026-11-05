@@ -114,7 +114,14 @@ FAIL_ENV_TEXT = "{name} isn't plain UTF-8 text, so setup can't read it. PowerShe
 FAIL_RESET_NO_DOCKER = "Docker isn't answering, so setup can't remove its containers and nothing was changed: start Docker and run this again."
 FAIL_RESET_DOWN = "Docker could not remove the containers and data of project {project}, so nothing else was removed. The details are in {log}. Run this again when Docker is working."
 FAIL_PORT_CHOSEN = "Port {port}, which this setup chose for the {service}, is taken by something else now. Close whatever is using it. To start over on other ports, run this with --reset."
-FAIL_UNSAFE = "Setup won't remove {path}, because it can't show that setup made it: it is not where setup would have put it, so .foundry/state.json or a link may have been changed. Nothing was removed. Look at it, remove it yourself if it is yours, and run this again."
+FAIL_SWITCH_NOT_OURS = "There is already a .foundry/switch folder that setup did not make, so it left it exactly as it is and changed nothing. Move it somewhere else, or run this from a fresh clone."
+FAIL_LOCK = "Git left a lock file at .foundry/switch/.git/index.lock, and setup can't show that no git is using it, so it left it. If no git is running, delete that file."
+AGENTS_NO_ENV = "The agents' folder {path} stays, because Switch's settings in .foundry/switch, which show the port it belongs to, are gone. Delete it yourself if you don't need it."
+AGENTS_NO_MARK = "The agents' folder {path} stays, because it has no mark saying setup made it for this folder. Delete it yourself if it is yours."
+AGENTS_SHARED = "The agents' folder {path} stays, because another Foundry folder on this machine also uses it. Only this folder's mark in it was removed."
+# A file with this start in the agents' folder says which clone uses it. The controller names its own folders there from a name that starts with a letter or digit and never lists the folder, so it can't meet one.
+OWNER_PREFIX = ".foundry-owner-"
+FAIL_UNSAFE ="Setup won't remove {path}, because it can't show that setup made it: it is not where setup would have put it, so .foundry/state.json or a link may have been changed. Nothing was removed. Look at it, remove it yourself if it is yours, and run this again."
 FAIL_CANT_TELL = "Setup could not check whether the {name} it started earlier is still running, so it started nothing new. This is usually a busy computer, so give it a minute."
 FAIL_NO_START_TIME = "Setup could not ask the computer when the program it just started began, so it ended it again. This is usually a busy computer, so wait a minute and run this again."
 WARN_NOT_PRIVATE = "Setup could not make {name} readable only by you, so anyone who can open this folder can read it."
@@ -368,6 +375,14 @@ class Machine:
         # Only ever said out loud, never stopped: a maker's tool server from this folder whose line back to the controller is broken, as a session can outlive what started it. A person running one by hand looks exactly the same.
         wanted = _fold(f"--directory {repo} run python -m foundry.tools.")
         return [pid for pid, line in _processes(self) if pid != os.getpid() and wanted in _fold(line)]
+
+    def git_in_use(self, folder: Path) -> bool | None:
+        """Whether any git has this folder in its command line. None when the process list couldn't be read, which shows as this script's own process missing from it."""
+        rows = _processes(self)
+        if not any(pid == os.getpid() for pid, _ in rows):
+            return None
+        wanted = _fold(str(folder))
+        return any(pid != os.getpid() and "git" in _fold(line).casefold() and wanted in _fold(line) for pid, line in rows)
 
     def remove_tree(self, path: Path) -> None:
         # A package folder goes deeper than Windows' usual path limit, and git keeps its files read-only.
@@ -966,6 +981,13 @@ class Setup:
         self.choose_demo()
 
     def switch_is_here(self) -> bool:
+        # A folder that was already there before setup's first word is somebody's own, with work in it that a forced checkout would replace, so setup leaves it as it is. One setup started itself is not listed, because its record was saved before the clone was begun.
+        before = self.state.get("before", [])
+        if "switch" in before:
+            if self.switch.exists():
+                raise Failure(FAIL_SWITCH_NOT_OURS)
+            self.state["before"] = [name for name in before if name != "switch"]
+            self._save_state()
         if not (self.switch / "console").is_dir():
             return False
         # Without a git folder of its own, the folder was never finished, and git would answer for the clone around it.
@@ -985,10 +1007,29 @@ class Setup:
         self.switch.mkdir(parents=True, exist_ok=True)
         git = [self.machine.which("git") or "git", "-C", self.switch]
         for arguments in (("init", "-q"), ("config", "core.autocrlf", "false"), ("config", "core.longpaths", "true"), ("fetch", "--depth", "1", SWITCH_GIT, PINNED_COMMIT), ("checkout", "-q", "-f", "FETCH_HEAD")):
+            checking_out = arguments[0] == "checkout"
+            if checking_out:
+                self._clear_stale_lock()
             if self.machine.run([*git, *arguments], log=self._log("switch-clone"), timeout=600).code != 0:
+                # A lock left behind makes every checkout fail, which is not the internet's doing.
+                if checking_out and self._index_lock().exists():
+                    raise Failure(FAIL_LOCK)
                 raise self._failed(FAIL_CLONE, "switch-clone")
         # A build from an earlier commit isn't this commit's.
         (self.console / CONTROLLER_CLI).unlink(missing_ok=True)
+
+    def _index_lock(self) -> Path:
+        return self.switch / ".git" / "index.lock"
+
+    def _clear_stale_lock(self) -> None:
+        """A checkout killed outright leaves the lock git takes, and every later checkout then fails on it. It goes only when it is this one file in the folder setup made, and no git has that folder open."""
+        lock = self._index_lock()
+        if not lock.exists() and not lock.is_symlink():
+            return
+        if lock.is_symlink() or not lock.is_file() or not is_inside(lock, self.switch) or self.machine.git_in_use(self.switch) is not False:
+            raise Failure(FAIL_LOCK)
+        lock.unlink()
+        self.ui.write("cleared a lock an interrupted checkout left, ")
 
     def write_switch_env(self) -> None:
         # Only ever when there is no such file, so a stack's secrets never change under it. A database left with no file has passwords nobody can now give it.
@@ -1089,6 +1130,20 @@ class Setup:
         # Where the controller keeps its agents' working folders, named by Switch after the server's address.
         return self.machine.home() / ".switch" / "agents" / f"127.0.0.1-{self.ports['api']}"
 
+    def _mark(self) -> Path:
+        return self.agents_folder() / (OWNER_PREFIX + self.project())
+
+    def _mark_agents_folder(self) -> None:
+        # Each clone that uses the folder leaves a mark of its own in it, made or not by this one, so a reset knows whether anyone else is using what it made. Not worth failing a run for.
+        folder = self.agents_folder()
+        try:
+            if self.state.get("created", {}).get("agents_folder"):
+                folder.mkdir(parents=True, exist_ok=True)
+            if folder.is_dir():
+                self._mark().write_text(f"{self.repo}\n", encoding="utf-8")
+        except OSError:
+            pass
+
     def _controller_row(self) -> dict | None:
         cookies = self._sign_in()
         if cookies is None:
@@ -1111,6 +1166,7 @@ class Setup:
     def start_controller(self) -> None:
         if not self._alive("controller"):
             self.state.setdefault("created", {}).setdefault("agents_folder", not self.agents_folder().exists())
+            self._mark_agents_folder()
             self._start("controller", self._cli("run", "--data-dir", self.controller_data, "--no-self-update"), self.console, dict(os.environ))
         row = self._waited(self._ready_controller, 30, 3)
         if not row:
@@ -1420,7 +1476,7 @@ class Setup:
             lines.append(".env, which setup wrote")
         if created.get("venv"):
             lines.append(".venv, which setup made")
-        if created.get("agents_folder") and "ports" in self.state:
+        if self._agents_plan()[0] == "remove":
             lines.append(str(self.agents_folder()))
         return lines
 
@@ -1448,16 +1504,52 @@ class Setup:
         with tempfile.TemporaryDirectory(prefix="foundry-down-") as empty:
             return self.machine.run([self.machine.which("docker") or "docker", "compose", "-p", self.project(), "down", "-v", "--remove-orphans"], cwd=Path(empty), log=log, timeout=300)
 
-    def _agents_folder_is_ours(self) -> bool:
-        # Switch names the folder after the server's port, so a port in the state file proves nothing alone. This clone's own Switch settings, which setup wrote, must say the same port.
+    def _agents_root(self) -> Path:
+        return self.machine.home() / ".switch" / "agents"
+
+    def _agents_proof(self) -> str:
+        """Whether the folder is the one this clone's port names: "unsafe" when it is not even a folder of that name directly under the agents' root, or when the port in the state file differs from this clone's own Switch settings, which setup wrote. "unproven" when those settings are gone or don't say."""
         port = self.ports["api"]
-        root = self.machine.home() / ".switch" / "agents"
         folder = self.agents_folder()
+        if folder.name != f"127.0.0.1-{port}" or Path(os.path.realpath(folder)) != Path(os.path.realpath(self._agents_root())) / folder.name:
+            return "unsafe"
         try:
             written = self._env_values(self.switch_env_file).get("API_HOST_PORT")
         except Failure:
-            return False
-        return written == str(port) and folder.name == f"127.0.0.1-{port}" and Path(os.path.realpath(folder)) == Path(os.path.realpath(root)) / folder.name
+            return "unproven"
+        if written is None:
+            return "unproven"
+        return "ours" if written == str(port) else "unsafe"
+
+    def _agents_plan(self) -> tuple[str, str]:
+        """What reset does with the agents' folder, and why when it leaves it: "none" (nothing of setup's there), "remove", "leave" or "unsafe". It goes only when setup made it, this clone's own mark is in it, and no other clone's is."""
+        if "ports" not in self.state or not self.state.get("created", {}).get("agents_folder") or not self.agents_folder().exists():
+            return "none", ""
+        proof = self._agents_proof()
+        if proof == "unsafe":
+            return "unsafe", ""
+        folder = self.agents_folder()
+        if proof == "unproven":
+            return "leave", AGENTS_NO_ENV.format(path=folder)
+        try:
+            if not self._mark().is_file():
+                return "leave", AGENTS_NO_MARK.format(path=folder)
+            if [entry for entry in folder.iterdir() if entry.name.startswith(OWNER_PREFIX) and entry.name != self._mark().name]:
+                return "leave", AGENTS_SHARED.format(path=folder)
+        except OSError:
+            return "leave", AGENTS_NO_MARK.format(path=folder)
+        return "remove", ""
+
+    def _drop_mark(self) -> None:
+        # Only this clone's own mark, and only where it sits below the agents' root.
+        if "ports" not in self.state:
+            return
+        try:
+            mark = self._mark()
+            if mark.is_file() and is_inside(mark, self._agents_root()):
+                mark.unlink()
+        except OSError:
+            pass
 
     def _unsafe_removals(self) -> list[str]:
         """What reset would remove that is not where setup puts it, which only an edited state file or a link can cause. Looked at before anything is removed."""
@@ -1466,7 +1558,7 @@ class Setup:
         unsafe = [str(self.home / name) for name in OWN_IN_HOME if name not in before and (self.home / name).exists() and not is_inside(self.home / name, self.home)]
         if created.get("venv") and (self.repo / ".venv").exists() and not is_inside(self.repo / ".venv", self.repo):
             unsafe.append(str(self.repo / ".venv"))
-        if created.get("agents_folder") and "ports" in self.state and self.agents_folder().exists() and not self._agents_folder_is_ours():
+        if self._agents_plan()[0] == "unsafe":
             unsafe.append(str(self.agents_folder()))
         return unsafe
 
@@ -1493,11 +1585,15 @@ class Setup:
             self.ui.say(FAIL_RESET_NO_DOCKER)
             return 1
         kept = self._kept()
+        # Decided now, while Switch's settings that prove it are still there.
+        agents, agents_why = self._agents_plan()
         self.ui.say("This removes what setup recorded making, and nothing else:")
         for line in self._removals():
             self.ui.say(f"  - {line}")
         if kept:
             self.ui.say(f"These were not made by setup, so they stay: {', '.join(kept)}.")
+        if agents_why:
+            self.ui.say(agents_why)
         answer = "yes" if self.yes else self.ui.ask("Type yes to remove all of it:")
         if answer is None:
             self.ui.say("Nobody is here to answer, so nothing was removed. To say yes in advance, add --yes.")
@@ -1515,8 +1611,10 @@ class Setup:
         docker = self.machine.which("docker") or "docker"
         # Never with force, so an image another container has come to use stays.
         images_left = [image for image in self.state.get("pulled_images", []) if self.machine.run([docker, "image", "rm", image], timeout=120).code != 0]
-        if created.get("agents_folder") and "ports" in self.state and self.agents_folder().exists():
-            self._remove_below(self.agents_folder(), self.machine.home() / ".switch" / "agents")
+        if agents == "remove":
+            self._remove_below(self.agents_folder(), self._agents_root())
+        else:
+            self._drop_mark()
         if created.get("env"):
             self.env_file.unlink(missing_ok=True)
             self.env_file.with_name(".env.tmp").unlink(missing_ok=True)
@@ -1529,6 +1627,8 @@ class Setup:
             self.ui.say(f"Docker kept {len(images_left)} of the images setup downloaded, because something else uses them.")
         if kept:
             self.ui.say(f"Kept, because setup did not make them: {', '.join(kept)}.")
+        if agents_why:
+            self.ui.say(agents_why)
         return 0
 
     def _remove_own_folder(self) -> None:
