@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -50,6 +51,7 @@ SWITCH_SECRETS = ("DB_PASSWORD", "DB_OWNER_PASSWORD", "AGENT_REGISTRATION_TOKEN"
 # What is never to reach the screen from Foundry's own .env.
 FOUNDRY_SECRETS = ("SWITCH_PASSWORD", "MATTERMOST_ADMIN_PASSWORD", "FOUNDRY_DESK_KEY", "FOUNDRY_DEMO_PASSWORD", "FOUNDRY_DASHBOARD_SECRET")
 PORT_NAMES = {"api": "Switch API", "mattermost": "Mattermost", "gateway": "Switch gateway", "postgres": "Postgres", "dashboard": "Foundry dashboard"}
+WINDOWS_TIME = re.compile(r"\d{4}-\d\d-\d\dT[\d:.]+Z")
 DEFAULT_PORTS = {"api": 8000, "mattermost": 8065, "gateway": 3000, "postgres": 5432, "dashboard": 8100}
 PORT_SETTINGS = {"api": "API_HOST_PORT", "mattermost": "MATTERMOST_HOST_PORT", "gateway": "GATEWAY_HOST_PORT", "postgres": "POSTGRES_HOST_PORT"}
 # The console's own package.json asks for it, and for pnpm 10.28, which corepack gets from the same file.
@@ -100,6 +102,11 @@ FAIL_PORT_REFUSED = "Port {port} for the {service} is in use, and setup can't go
 FAIL_PORT_NOBODY = "Port {port} for the {service} is in use. Nobody is here to ask, so nothing was changed. To use {alternative} instead, run this with --yes."
 FAIL_UNKNOWN_DEMO = "There is no demo called {demo}. The demos are {demos}."
 RUN_AGAIN = "When that is fixed, run this again. It carries on from here."
+STOPPED = "stopped"
+NOT_RUNNING = "was not running"
+NOT_CONFIRMED = "left alone, because process {pid} can't be confirmed as the one setup started"
+WOULD_NOT_STOP = "would not stop (process {pid}). Close it yourself and run this again"
+MAKERS_LEFT = "  {count} of the makers' tool servers from this folder are still running (process {pids}). Setup can't prove they are its own, so it left them. To close them, close the agent sessions using them or end those process numbers yourself."
 UNEXPECTED = "Something unexpected stopped this step. The details are in {log}."
 
 
@@ -220,24 +227,48 @@ class Machine:
                     process = subprocess.Popen(words, creationflags=flags, **options)
             else:
                 process = subprocess.Popen(words, start_new_session=True, **options)
-        return Process(process.pid, self._started(process.pid))
+        return Process(process.pid, self.started(process.pid) or "")
 
     def alive(self, process: Process) -> bool:
-        return bool(process.started) and self._started(process.pid) == process.started
+        return bool(process.started) and self.started(process.pid) == process.started
+
+    def gone(self, process: Process) -> bool:
+        # Nothing has that number now. Not being able to ask is a different answer, and never counts as gone.
+        return self.started(process.pid) == ""
 
     def kill(self, process: Process) -> None:
-        if os.name == "nt":
-            self.run(["taskkill", "/PID", process.pid, "/T", "/F"])
+        # The one way anything is stopped: its number and its start time must still match what was recorded, and only then does what it started go with it.
+        if not self.alive(process):
             return
+        family = [pid for pid in family_of(self._process_table(), process.pid) if pid != os.getpid()]
+        if os.name == "nt":
+            self.run(["taskkill", "/F", *(word for pid in reversed(family) for word in ("/PID", pid))])
+            return
+        self._signal(process.pid, family, signal.SIGTERM)
+        for _ in range(10):
+            if not self.alive(process):
+                return
+            self.sleep(0.5)
+        self._signal(process.pid, family, signal.SIGKILL)
+
+    @staticmethod
+    def _signal(leader: int, family: list[int], sent: int) -> None:
+        # Setup started its processes each in a group of its own, which also reaches a child whose parent has gone. Try mode's is not a leader, so it gets only the signal to its own number.
         try:
-            os.killpg(process.pid, 15)
+            if os.getpgid(leader) == leader:
+                os.killpg(leader, sent)
         except OSError:
             pass
+        for pid in family:
+            try:
+                os.kill(pid, sent)
+            except OSError:
+                pass
 
     def leftovers(self, repo: Path) -> list[int]:
-        # Anything still running from this folder's own controller or tool servers, found by the folder's path on its command line, because a session can outlive the process that started it.
-        marks = (str(repo / ".foundry"), f"--directory {repo} run python -m foundry.tools")
-        return [pid for pid, line in _processes(self) if pid != os.getpid() and any(mark in line for mark in marks)]
+        # Only ever said out loud, never stopped: a maker's tool server from this folder whose line back to the controller is broken, as a session can outlive what started it. A person running one by hand looks exactly the same.
+        wanted = _fold(f"--directory {repo} run python -m foundry.tools.")
+        return [pid for pid, line in _processes(self) if pid != os.getpid() and wanted in _fold(line)]
 
     def remove_tree(self, path: Path) -> None:
         # A package folder goes deeper than Windows' usual path limit, and git keeps its files read-only.
@@ -260,23 +291,75 @@ class Machine:
                     raise
                 time.sleep(2)
 
-    def _started(self, pid: int) -> str:
+    def started(self, pid: int) -> str | None:
+        """When the process with this number started, which no later process with the same number can share. "" when nothing has that number, and None when it couldn't be found out."""
         if os.name == "nt":
-            shown = self.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", f'(Get-CimInstance Win32_Process -Filter "ProcessId={pid}").CreationDate.ToString("o")'], timeout=30)
+            shown = self.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", f'Get-CimInstance Win32_Process -Filter "ProcessId={int(pid)}" | ForEach-Object {{ $_.CreationDate.ToUniversalTime().ToString("o") }}'], timeout=30)
+            if shown.code != 0:
+                return None
+            found = WINDOWS_TIME.search(shown.output)
+            return found.group() if found else ("" if not shown.output.strip() else None)
+        return self._started_posix(pid)
+
+    def _started_posix(self, pid: int) -> str | None:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return ""
+        except OSError:
+            pass
+        # Linux keeps it in ticks since boot, which never moves. What ps prints there is worked out from the clock and can differ by a second between two asks.
+        try:
+            fields = Path(f"/proc/{int(pid)}/stat").read_text(encoding="ascii", errors="replace").rpartition(")")[2].split()
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+            return "" if fields[0] == "Z" else f"{boot}:{fields[19]}"
+        except (OSError, IndexError):
+            pass
+        shown = self.run(["ps", "-o", "stat=,lstart=", "-p", pid], env={**os.environ, "LC_ALL": "C", "TZ": "UTC"}, timeout=10)
+        state, _, when = shown.output.strip().partition(" ")
+        if shown.code != 0 or not when:
+            return None
+        return "" if state.startswith("Z") else when.strip()
+
+    def _process_table(self) -> dict[int, tuple[int, str]]:
+        # Each process's parent, and when it started where a number can outlive its process as someone's parent.
+        rows: dict[int, tuple[int, str]] = {}
+        if os.name == "nt":
+            shown = self.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.CreationDate.ToUniversalTime().ToString(\'o\'))" }'], timeout=60)
         else:
-            shown = self.run(["ps", "-o", "lstart=", "-p", pid], timeout=10)
-        return shown.output.strip() if shown.code == 0 else ""
+            shown = self.run(["ps", "-A", "-o", "pid=", "-o", "ppid="], timeout=30)
+        for line in shown.output.splitlines():
+            words = line.split()
+            if len(words) >= 2 and words[0].isdigit() and words[1].isdigit():
+                rows[int(words[0])] = (int(words[1]), words[2] if len(words) > 2 else "")
+        return rows
+
+
+def family_of(rows: Mapping[int, tuple[int, str]], root: int) -> list[int]:
+    """The process and everything it started, parents first. On Windows a dead parent's number stays on its children and can be reused, so a process older than its supposed parent is not its child. On macOS and Linux an orphan moves to another parent, so this never comes up there."""
+    family = [root]
+    for parent in family:
+        for pid, (ppid, started) in rows.items():
+            if ppid == parent and pid not in family and parent in rows and started >= rows[parent][1]:
+                family.append(pid)
+    return family
 
 
 def _powershell() -> str:
     return shutil.which("powershell") or shutil.which("pwsh") or "powershell"
 
 
+def _fold(line: str) -> str:
+    # Windows quotes a word with a space in it, and doesn't care about case in a path.
+    return line.replace('"', "").casefold() if os.name == "nt" else line
+
+
 def _processes(machine: Machine) -> list[tuple[int, str]]:
     if os.name == "nt":
         shown = machine.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.CommandLine)\" }"], timeout=60)
     else:
-        shown = machine.run(["ps", "-eo", "pid=,args="], timeout=30)
+        # Twice wide, because macOS cuts a line to fit otherwise.
+        shown = machine.run(["ps", "-A", "-ww", "-o", "pid=", "-o", "args="], timeout=30)
     rows = []
     for line in shown.output.splitlines():
         number, _, words = line.strip().partition(" ")
@@ -639,11 +722,15 @@ class Setup:
         ]
 
     def _service_rows(self) -> list[dict]:
+        return self._asked_rows() or []
+
+    def _asked_rows(self) -> list[dict] | None:
+        # None when Docker couldn't say, which isn't the same as there being nothing.
         if not self.images_file.exists():
             return []
         shown = self.machine.run(self.compose("ps", "-a", "--format", "json"), timeout=60)
         if shown.code != 0:
-            return []
+            return None
         text = shown.output.strip()
         if text.startswith("["):
             return _json(text.encode()) or []
@@ -929,14 +1016,35 @@ class Setup:
         self.state.setdefault("processes", {})[name] = dataclasses.asdict(process)
         self._save_state()
 
-    def _stop_one(self, name: str) -> bool:
+    def _stop_one(self, name: str) -> str:
+        """Stops a process this setup started, if it can still show it is that process, and says what happened in a few words."""
         process = self._record(name)
-        stopped = process is not None and self.machine.alive(process)
-        if stopped:
-            self.machine.kill(process)
-        self.state.get("processes", {}).pop(name, None)
-        self._save_state()
-        return stopped
+        said = self._end(process) if process else NOT_RUNNING
+        if not said.startswith("would not"):
+            self.state.get("processes", {}).pop(name, None)
+            self._save_state()
+        return said
+
+    def _end(self, process: Process) -> str:
+        if not self.machine.alive(process):
+            return NOT_RUNNING if self.machine.gone(process) else NOT_CONFIRMED.format(pid=process.pid)
+        self.machine.kill(process)
+        if self._waited(lambda: not self.machine.alive(process), 10, 0.5):
+            return STOPPED
+        return WOULD_NOT_STOP.format(pid=process.pid)
+
+    def _stop_processes(self) -> bool:
+        had_controller = self._record("controller") is not None
+        fine = True
+        for name in ("dashboard", "desk", "controller"):
+            said = self._stop_one(name)
+            self.ui.say(f"  {name}: {said}")
+            fine = fine and not said.startswith("would not")
+        if had_controller:
+            strays = self.machine.leftovers(self.repo)
+            if strays:
+                self.ui.say(MAKERS_LEFT.format(count=len(strays), pids=", ".join(str(pid) for pid in strays)))
+        return fine
 
     def _rooms_mark(self) -> str:
         values = self._env_values(self.env_file)
@@ -1002,10 +1110,11 @@ class Setup:
         if not self.state.get("ports"):
             self.ui.say("Foundry has not been set up here yet. Run this with no options to set it up, or with --try to look around with made-up data.")
             return 0
-        rows = {row.get("Service"): row for row in self._service_rows()}
+        asked = self._asked_rows()
+        rows = {row.get("Service"): row for row in asked or []}
         self.ui.say(f"Foundry in {self.repo}, Docker project {self.project()}")
         for service in LONG_RUNNING:
-            shown = rows.get(service, {}).get("State") or "not created"
+            shown = "Docker is not answering" if asked is None else rows.get(service, {}).get("State") or "not created"
             self.ui.say(f"  {service:<12}{shown}")
         for name in ("controller", "desk", "dashboard"):
             self.ui.say(f"  {name:<12}{'running' if self._alive(name) else 'stopped'}")
@@ -1018,19 +1127,19 @@ class Setup:
         return 0
 
     def stop(self, closing: str = "Stopped what setup started. Run this again to start it all back up.") -> int:
-        if not self.state:
+        if not self.state.get("processes") and not self.state.get("stack_started"):
             self.ui.say("Nothing to stop. Setup has not started anything here.")
             return 0
-        for name in ("dashboard", "desk", "controller"):
-            self.ui.say(f"  {name}: {'stopped' if self._stop_one(name) else 'was not running'}")
-        for pid in self.machine.leftovers(self.repo):
-            self.machine.kill(Process(pid, ""))
+        fine = self._stop_processes()
         if self.state.get("stack_started") and self.images_file.exists():
-            self.machine.run(self.compose("stop"), log=self._log("switch"), timeout=300)
-            self.ui.say("  Switch's containers: stopped")
-        if closing:
+            if self.machine.run(self.compose("stop"), log=self._log("switch"), timeout=300).code == 0:
+                self.ui.say("  Switch's containers: stopped")
+            else:
+                fine = False
+                self.ui.say(f"  Switch's containers: Docker could not stop them, so they may still be running. Start Docker if it is off and run this again. The details are in {self._shown(self._log('switch'))}.")
+        if fine and closing:
             self.ui.say(closing)
-        return 0
+        return 0 if fine else 1
 
     def _removals(self) -> list[str]:
         created = self.state.get("created", {})
