@@ -43,7 +43,7 @@ from foundry.log import Entry, Log, Writer
 from foundry.reading import Reading, asks_for_status, is_short_ask, might_be_status, read_message
 from foundry.switch_client import DESK_NAME, Outcome, SwitchClient
 from foundry.tables import TABLE_KINDS, is_file_answer, job_folder, read_file, safe_name
-from foundry.text import CUT_SHORT, headline, no_controls, quiet, shown_name
+from foundry.text import CUT_SHORT, MOST_TITLE_CHARS, headline, no_controls, quiet, shown_name
 from foundry.tools.layout import MakerError
 
 if TYPE_CHECKING:
@@ -118,6 +118,8 @@ NO_REMINDER_WENT = "Foundry sent no reminder."
 REMINDER_SKIPPED = "No reminder was sent to {owner} for {input} before the due time."
 NOBODY_TO_REMIND = "No reminder was sent for {input} before the due time, because nobody is named for it."
 STATUS_NO_REMINDER = "Foundry can't send {names} a reminder, because their last message on WhatsApp was over 24 hours ago"
+STILL_OWED = "Still waiting on {what}. Exact measure: {measure}. Reply with it, or press a button on the reminder."
+REMINDER_CLOSED = "I closed the reminder for {title}, because your answer came in."
 DUE_CLOSED = "Nothing the card for {title} listed is waiting on anyone now, so I closed it."
 WHO_INSTEAD = "Who should I ask instead of {owner} for {what}? Write their name here."
 WITHOUT_NOTED = "Going without {what}."
@@ -775,13 +777,16 @@ class Coordinator:
                     logger.warning("Could not close the due card %s: %s", card.request_id, error)
             self.cards.finish(card.request_id, CLOSED)
 
-    def _settle_cards(self, item: Item, *triggers: Trigger) -> None:
+    def _settle_cards(self, item: Item, *triggers: Trigger, say: str = "") -> None:
         # A reminder or an "Already told" card for an item that has closed is about nothing, and would only hold up the person's next card.
+        # Switch marks a closed card "Cancelled", so an answer that closes one says why.
         for trigger in triggers:
             for card in self.cards.about_item(item.id, trigger, OPEN, QUEUED, IN_ROUTINE):
                 if card.state == OPEN:
                     try:
                         self.client.close_card(card.request_id)
+                        if say and trigger is Trigger.REMINDER:
+                            self.client.post_message(card.room_id, say.format(title=quiet(_one_line(item.input))))
                     except httpx.HTTPError as error:
                         logger.warning("Could not close the card %s: %s", card.request_id, error)
                 self.cards.finish(card.request_id, CLOSED)
@@ -808,7 +813,8 @@ class Coordinator:
         # What goes back to the asker of a job that makes nothing, built by code from the list, and the files that go with it. An input handed to someone else is said under them.
         items = owed_items(self.items.for_job(job.id))
         got = [item for item in items if item.state in IN and item.answer is not None]
-        lines, files = [self._title(job), *([] if got else [NOTHING_CAME_BACK])], []
+        title = headline(job.brief or "this job", MOST_TITLE_CHARS)
+        lines, files = [quiet(title if title.endswith(CUT_SHORT) else title.removesuffix(".")), *([] if got else [NOTHING_CAME_BACK])], []
         for item in items:
             owner = quiet(_one_line(self._owner_name(item))) or NOBODY
             what = quiet(_one_line(item.input))
@@ -1038,6 +1044,17 @@ class Coordinator:
         handlers = {"answer": self._answer, "reason": self._reason, "passed_on": self._passed_on, "unavailable": self._away, "replace": self._replace, "status": self._status}
         handler = handlers.get(reading.kind)
         return handler is not None and handler(_Heard(burst, bucket, reading, own, open_here, bool(earlier), text))
+
+    def still_owed(self, burst: Burst) -> bool:
+        # A word that is no answer, from someone who owes something here, is told what is still owed. It is not asked what they want made.
+        if not self.settings.is_internal(burst.room_id):
+            return False
+        owed = self.items.open_for(burst.sender, self.settings.bucket_for(burst.room_id))
+        if not owed:
+            return False
+        item = owed[0]
+        self.client.post_message(burst.room_id, STILL_OWED.format(what=quiet(_one_line(item.input)), measure=quiet(_one_line(item.measure))))
+        return True
 
     def tell_stage(self, burst: Burst) -> bool:
         # A client who asks where their work is gets its stage and nothing else, read by code. No model sees an agency room's messages for this.
@@ -1489,7 +1506,7 @@ class Coordinator:
         # Every answer that closes an item, or hands it on, comes through here, so closing a job's inputs has one place to hang off.
         self.items.save(item)
         if item.state is not ItemState.OPEN:
-            self._settle_cards(item, Trigger.REMINDER, Trigger.ALREADY_TOLD)
+            self._settle_cards(item, Trigger.REMINDER, Trigger.ALREADY_TOLD, say=REMINDER_CLOSED if item.state in IN and item.answer is not None else "")
         job = self._job_of(item)
         if job is not None:
             self.close_if_done(job)

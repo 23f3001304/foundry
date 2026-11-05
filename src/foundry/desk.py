@@ -1818,7 +1818,7 @@ class Desk:
             self._sticker(burst.room_id, "brief_received")
             self._ask_for_brief(job)
             self.store.save(job)
-        elif kind is Kind.UNSURE:
+        elif kind is Kind.UNSURE and not self.coordinator.still_owed(burst):
             self.client.post_message(burst.room_id, ASK_WHAT_THEY_NEED)
 
     def _take_answer(self, job: Job, burst: Burst) -> None:
