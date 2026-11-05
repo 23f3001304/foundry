@@ -23,7 +23,7 @@ from foundry.log import Entry, Log
 from foundry.tables import Row, Table, address, column_named, is_file_answer, is_under, job_folder, read_file, squash, words
 from foundry.text import quiet
 from foundry.tools import confine
-from foundry.tools.layout import MakerError, check_font_can_draw, figure_text, load_font, mix
+from foundry.tools.layout import NOT_RECEIVED, MakerError, check_font_can_draw, figure_text, load_font, mix
 from foundry.tools.log_server import _job, _path
 
 mcp = MCPServer("foundry-data")
@@ -85,6 +85,8 @@ CHART_EMPTY = "A chart needs at least one label and value."
 CHART_TOO_MANY = "A chart can show at most {most} points, and this has {count}."
 CHART_NOT_NUMBERS = "A chart's values must be ordinary numbers."
 CHART_NEGATIVE = "A pie chart cannot show a negative value."
+CHART_NO_FIGURES = "A chart needs at least one figure, and every value here is null."
+CHART_PIE_GAP = "A pie chart cannot show a share of a figure nobody sent, because the whole is not known. Use a bar chart, or a table."
 CHART_NOTHING = "A pie chart whose values add up to nothing has no slices to draw."
 CHART_TOO_LONG = "The {what} is too long to fit on a chart ({limit} characters at most): {text}..."
 CHART_PNG = "A chart is saved as a .png, so out_path must end in .png, not {suffix!r}."
@@ -566,7 +568,7 @@ def _slice_colours(brand: Brand, count: int) -> list[str]:
     return [(palette + tints)[at % 7] for at in range(count)]
 
 
-def _check(brand: Brand, title: str, labels: list[str], values: list[float], kind: str) -> None:
+def _check(brand: Brand, title: str, labels: list[str], values: list[float | None], kind: str) -> None:
     if kind not in CHART_KINDS:
         raise MakerError(CHART_KIND.format(kinds=", ".join(CHART_KINDS), kind=kind))
     if len(labels) != len(values):
@@ -575,11 +577,16 @@ def _check(brand: Brand, title: str, labels: list[str], values: list[float], kin
         raise MakerError(CHART_EMPTY)
     if len(labels) > MOST_POINTS:
         raise MakerError(CHART_TOO_MANY.format(most=MOST_POINTS, count=len(labels)))
-    if not all(math.isfinite(value) for value in values):
+    figures = [value for value in values if value is not None]
+    if not figures:
+        raise MakerError(CHART_NO_FIGURES)
+    if not all(math.isfinite(value) for value in figures):
         raise MakerError(CHART_NOT_NUMBERS)
-    if kind == "pie" and any(value < 0 for value in values):
+    if kind == "pie" and len(figures) < len(values):
+        raise MakerError(CHART_PIE_GAP)
+    if kind == "pie" and any(value < 0 for value in figures):
         raise MakerError(CHART_NEGATIVE)
-    if kind == "pie" and not sum(values):
+    if kind == "pie" and not sum(figures):
         raise MakerError(CHART_NOTHING)
     for what, text, limit in [("title", title, MOST_TITLE_CHARS), *(("label", label, MOST_LABEL_CHARS) for label in labels)]:
         if len(text) > limit:
@@ -588,21 +595,27 @@ def _check(brand: Brand, title: str, labels: list[str], values: list[float], kin
     check_font_can_draw(" ".join(labels), load_font(brand.font_file("body"), 24), "body")
 
 
-def _bars(axes, brand: Brand, labels: list[str], values: list[float], shown: list[str], kind: str) -> None:
+def _bars(axes, brand: Brand, labels: list[str], values: list[float | None], shown: list[str], kind: str) -> None:
     ink, body = brand.colors["ink"], _font(brand, "body")
     places = list(range(len(values)))
+    known = [place for place in places if values[place] is not None]
+    figures = [values[place] for place in known]
     if kind == "bar":
-        bars = axes.bar(places, values, color=brand.colors["primary"], width=0.6)
-        axes.bar_label(bars, labels=shown, padding=4, color=ink, fontproperties=body, size=12)
+        bars = axes.bar(known, figures, color=brand.colors["primary"], width=0.6)
+        axes.bar_label(bars, labels=[shown[place] for place in known], padding=4, color=ink, fontproperties=body, size=12)
     else:
-        axes.plot(places, values, color=brand.colors["primary"], linewidth=3, marker="o", markersize=9, markerfacecolor=brand.colors["accent"], markeredgecolor=brand.colors["primary"])
-        for place, value, text in zip(places, values, shown):
+        # A figure nobody sent is a gap in the line, because a line drawn across it would claim a value there.
+        axes.plot(places, [math.nan if value is None else value for value in values], color=brand.colors["primary"], linewidth=3, marker="o", markersize=9, markerfacecolor=brand.colors["accent"], markeredgecolor=brand.colors["primary"])
+        for place, value, text in ((place, values[place], shown[place]) for place in known):
             # On the paper colour, so the line does not run through the figure, and under the point when it is below zero, so the figure is not on the zero line.
             axes.annotate(
                 text, (place, value), textcoords="offset points", xytext=(0, 12 if value >= 0 else -12), ha="center", va="bottom" if value >= 0 else "top", color=ink,
                 fontproperties=body, size=12, bbox={"facecolor": brand.colors["paper"], "edgecolor": "none", "pad": 1.5},
             )
         axes.margins(x=0.08, y=0.2)
+    for place in (place for place in places if values[place] is None):
+        # The words stand where its mark would be, on the zero line, with no mark at all. Upright when many places leave no room across.
+        axes.annotate(NOT_RECEIVED, (place, 0), textcoords="offset points", xytext=(0, 6), ha="center", va="bottom", color=ink, fontproperties=body, size=12, rotation=90 if len(values) > 8 else 0)
     turned = len(labels) > 6 or max(map(len, labels)) > 10
     axes.set_xticks(places, labels=labels, rotation=30 if turned else 0, ha="right" if turned else "center")
     for tick in axes.get_xticklabels():
@@ -613,7 +626,7 @@ def _bars(axes, brand: Brand, labels: list[str], values: list[float], shown: lis
     axes.get_yaxis().set_visible(False)
     axes.tick_params(axis="x", length=0, pad=8)
     sides = ("top", "right", "left")
-    if min(values) < 0:
+    if min(figures) < 0:
         # Bars stand on zero, with room under the lowest for its figure, and the names stay below all of them.
         axes.axhline(0, color=ink, linewidth=1.2)
         axes.margins(y=0.2)
@@ -623,7 +636,7 @@ def _bars(axes, brand: Brand, labels: list[str], values: list[float], shown: lis
     axes.spines["bottom"].set_color(ink)
 
 
-def _draw(brand: Brand, title: str, labels: list[str], values: list[float], shown: list[str], kind: str) -> Figure:
+def _draw(brand: Brand, title: str, labels: list[str], values: list[float | None], shown: list[str], kind: str) -> Figure:
     paper = brand.colors["paper"]
     # Whatever is written on a chart is words. A $ in it must never start a formula that turns "($M) vs costs ($M)" into italics.
     with rc_context(NO_MATH):
@@ -648,13 +661,15 @@ def _draw(brand: Brand, title: str, labels: list[str], values: list[float], show
 
 
 @mcp.tool()
-def draw_chart(brand_dir: str, title: str, labels: list[str], values: list[float], kind: str, out_path: str) -> str:
+def draw_chart(brand_dir: str, title: str, labels: list[str], values: list[float | None], kind: str, out_path: str) -> str:
     """Draw an on-brand chart as a .png and return its absolute path.
 
     kind is bar, line or pie. labels and values are the same length, at most 24 of them, and each value is written on its mark.
     Take the values from calculate or from job_facts, never from your own sums. A pie cannot show a negative value.
+    A value is null when nobody sent that figure. Its label stays, it says "not received", and it has no number and no mark. A pie cannot have one.
     Colours and fonts come from the brand kit. A title or label the brand's fonts cannot draw raises an error.
-    Put the chart on a slide with build_deck's picture layout, or deliver the .png itself.
+    This is for delivering a chart on its own as a .png. On a slide, use build_deck's big_number or chart layout, which light the one figure that matters.
+    A chart with a negative value goes on a slide through build_deck's picture layout.
     """
     brand = load_brand_dir(brand_dir)
     kind = kind.strip().lower()
@@ -663,7 +678,7 @@ def draw_chart(brand_dir: str, title: str, labels: list[str], values: list[float
         raise MakerError(CHART_PNG.format(suffix=Path(out_path).suffix))
     # A client's own makers write only in their own folder.
     path = confine.output(out_path)
-    shown = [figure_text(value) for value in values]
+    shown = [NOT_RECEIVED if value is None else figure_text(value) for value in values]
     canvas = _draw(brand, title, labels, values, shown, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
     with rc_context(NO_MATH):
