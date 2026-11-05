@@ -77,7 +77,7 @@ from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, par
 from foundry.intake import Kind, classify
 from foundry.items import OWES_FORMAT, ItemStore
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
-from foundry.log import DESIGN_STYLE, Entry, Log
+from foundry.log import DESIGN_STYLE, NEVER_A_SOURCE, Entry, Log
 from foundry.pack import Pack, PackError, load_pack
 from foundry.stickers import branded_sticker, sticker_for
 from foundry.switch_client import Outcome, SwitchClient
@@ -839,8 +839,7 @@ class Desk:
         if not links:
             # Most files have none, and nothing else is looked up for them.
             return []
-        # A maker writes its own style line, so a figure in it is the maker's own word and never a source.
-        visible = {entry.id: entry for entry in visible_entries(self.log, job, self.clock()) if entry.kind != DESIGN_STYLE}
+        visible = {entry.id: entry for entry in visible_entries(self.log, job, self.clock()) if entry.kind not in NEVER_A_SOURCE}
         known = names(self.log, job.bucket)
         checked = []
         for link in links:

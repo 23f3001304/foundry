@@ -14,6 +14,8 @@ KINDS = (
 )
 # The one line a maker says about the style it chose. It is a kind of its own, because neither the number check nor anyone's words should read it.
 DESIGN_STYLE = "design_style"
+# Agents' own words, which can quote anything, so a figure in them is never sourced by them. A file's name is one too, because a maker chooses it.
+NEVER_A_SOURCE = (DESIGN_STYLE, "agent_marker", "review", "file_made")
 # What a person wrote or said in a room. Only these show that Foundry can reach them there.
 WRITTEN = ("message", "voice_heard")
 # The log only grows, so when a demo's rooms or bridge change, the seed tool says where a seeded person is now with one of these, at the time of their line. It isn't something they wrote. Its ref is the id they had before.
