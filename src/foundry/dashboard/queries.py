@@ -35,6 +35,10 @@ MEDIA = {
 PICTURES = (".png", ".jpg", ".jpeg")
 # Two names that start the same for this long are the same name to a reader.
 SAME_START = 24
+# A picture of a deck's slide sits beside the deck as <deck>-slide-<number>.png, counting from 1.
+DECK = ".pptx"
+SLIDE_PICTURE = "{stem}-slide-{number}.png"
+MOST_SLIDES = 200
 
 STAGES = {
     State.RECEIVED: ("Drafting the brief", "apprentice"),
@@ -457,12 +461,26 @@ class Flagged:
 
 
 @dataclass
+class Viewed:
+    """A work file for the viewer page: what it is, and what can be shown of it here."""
+
+    entry_id: int
+    name: str
+    job_id: str
+    job_title: str
+    picture: bool
+    here: bool
+    slides: int
+
+
+@dataclass
 class ChainPage:
     flagged: Flagged
     steps: list[Step]
     job_id: str
     job_title: str
     via_dashboard: bool
+    file_id: int = 0
 
     @property
     def job_is_named(self) -> bool:
@@ -621,6 +639,10 @@ def flag_words(text: str) -> str:
     # A flag says what was flagged and in which file. Words that are how the file's own name starts are the file, so its name says both, once.
     what, separator, where = text.rpartition(" in ")
     return f"Flagged {where}" if separator and Path(where).suffix and where.casefold().startswith(what.removeprefix("Flagged ").casefold()) else text
+
+
+def _slide(path: Path, number: int) -> Path:
+    return path.with_name(SLIDE_PICTURE.format(stem=path.stem, number=number))
 
 
 def is_made_file(entry: Entry) -> bool:
@@ -1067,16 +1089,41 @@ class Reader:
             found.append(WorkJob(job.id, bucket_name(job.bucket), title_of(job), stage, files, tone_of(job), family_of(tone_of(job), STEP_OF.get(job.state, ""))))
         return found
 
-    def file_for(self, user: User, entry_id: int) -> tuple[Path, str] | None:
+    def _newest_made(self, user: User, entry_id: int) -> Entry | None:
         # Only the newest copy of a file a maker made for one of this login's clients, and only the kinds the desk delivers.
         entry = self.log.find(entry_id)
-        if entry is None or entry.bucket not in user.businesses or not is_made_file(entry):
-            return None
-        path = Path(entry.ref)
-        if path.suffix.lower() not in MEDIA or not path.is_file():
+        if entry is None or entry.bucket not in user.businesses or not is_made_file(entry) or Path(entry.ref).suffix.lower() not in MEDIA:
             return None
         copies = [other for other in self.log.for_job(entry.bucket, entry.job_id) if other.ref == entry.ref and other.kind == "file_made"] if entry.job_id else [entry]
-        return (path, path.name) if max(other.id for other in copies) == entry.id else None
+        return entry if max(other.id for other in copies) == entry.id else None
+
+    def file_for(self, user: User, entry_id: int) -> tuple[Path, str] | None:
+        entry = self._newest_made(user, entry_id)
+        path = Path(entry.ref) if entry else None
+        return (path, path.name) if path and path.is_file() else None
+
+    def viewed(self, user: User, entry_id: int) -> Viewed | None:
+        # The same file the raw address would serve, and one it would serve but for having gone from this machine, so that can be said on the page.
+        entry = self._newest_made(user, entry_id)
+        if entry is None:
+            return None
+        path = Path(entry.ref)
+        job = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", entry.job_id or "")
+        here = path.is_file()
+        return Viewed(entry.id, path.name, entry.job_id or "", title_of(_job(job[0])) if job else NO_BRIEF, path.suffix.lower() in PICTURES, here, self._slides(path) if here else 0)
+
+    def slide_for(self, user: User, entry_id: int, number: int) -> Path | None:
+        # The address names only the file's entry and a whole number, so it can't reach anything but this deck's own pictures.
+        found = self.file_for(user, entry_id)
+        if found is None or not 1 <= number <= self._slides(found[0]):
+            return None
+        return _slide(found[0], number)
+
+    def _slides(self, path: Path) -> int:
+        # They count up from 1 and stop at the first one missing, so a gap can't show a stray picture as the wrong slide.
+        if path.suffix.lower() != DECK:
+            return 0
+        return next((number for number in range(MOST_SLIDES) if not _slide(path, number + 1).is_file()), MOST_SLIDES)
 
     # Action log
 
@@ -1129,7 +1176,9 @@ class Reader:
         job = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", entry.job_id or "")
         via = any(other.ref == str(entry.id) for other in self.log.of_kind(entry.bucket, "dashboard_action"))
         flagged = Flagged(entry.id, entry.text, name_of(entry, known), self.when(entry.at), bucket_name(entry.bucket), entry.job_id or "")
-        return ChainPage(flagged, steps, entry.job_id or "", title_of(_job(job[0])) if job else NO_BRIEF, via)
+        target = (entry.ref or "").removeprefix("file:").removeprefix("text:")
+        files = [other.id for other in self.log.for_job(entry.bucket, entry.job_id) if is_made_file(other) and target.startswith(other.ref)] if entry.job_id else []
+        return ChainPage(flagged, steps, entry.job_id or "", title_of(_job(job[0])) if job else NO_BRIEF, via, max(files, default=0))
 
     # Connections
 

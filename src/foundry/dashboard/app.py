@@ -3,6 +3,7 @@
 import inspect
 import logging
 import os
+import re
 import secrets
 import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
@@ -66,6 +67,10 @@ MOST_LOGIN_BODY = 20_000
 # More digits than this is not a number a form could mean, and is cheap to refuse before it is read as one.
 MOST_DIGITS = 9
 MOST_NAME = 80
+# The pages a person opens a file from, for its way back.
+BACK_PATHS = re.compile(r"/(work|jobs|log|responses)?|/jobs/[\w-]+|/log/flagged/\d+")
+DEFAULT_BACK = "/work"
+MOST_BACK = 500
 NEEDS_NAME = "Give the connection a name."
 NAME_TOO_LONG = f"Use a name of {MOST_NAME} letters or fewer."
 CONFIRM_FIRST = "Open the warning for this connection first. Nothing was deleted."
@@ -90,11 +95,20 @@ def link(path: str, **query: str) -> str:
     return f"{path}?{urlencode(kept)}" if kept else path
 
 
+def back_from(value: object) -> str:
+    # Where a page's Close goes, from its address, so only a page of this dashboard people come to a file from. Anything else goes to Generated work.
+    text = str(value or "")
+    if len(text) > MOST_BACK or any(ord(letter) < 32 or letter == "\\" for letter in text):
+        return DEFAULT_BACK
+    parts = urlsplit(text)
+    return text if not parts.scheme and not parts.netloc and BACK_PATHS.fullmatch(parts.path) else DEFAULT_BACK
+
+
 def render(request: Request, name: str, user: User | None = None, status: int = 200, **context) -> Response:
     found = find_session(request)
     # A page reached some other way than a signed-in handler, like an address that isn't here, shows no counts.
     counts = getattr(request.state, "counts", None) or NavCounts()
-    return request.app.state.templates.TemplateResponse(request, name, {"user": user, "csrf": found[1].csrf if found else "", "counts": counts, **context}, status_code=status)
+    return request.app.state.templates.TemplateResponse(request, name, {"user": user, "csrf": found[1].csrf if found else "", "counts": counts, "here": f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path, **context}, status_code=status)
 
 
 def check_body(request: Request, most: int) -> None:
@@ -503,6 +517,23 @@ def work_file(request: Request, user: User) -> Response:
 
 
 @signed_in
+def work_view(request: Request, user: User) -> Response:
+    # A page of its own for a work file, with a way back. It shows what the raw address would serve, to whoever it would serve it to.
+    found = request.app.state.reader.viewed(user, request.path_params["entry_id"])
+    if found is None:
+        raise HTTPException(404)
+    return render(request, "viewer.html", user, 200 if found.here else 404, title=found.name, focus=True, file=found, back=back_from(request.query_params.get("back")))
+
+
+@signed_in
+def work_slide(request: Request, user: User) -> Response:
+    path = request.app.state.reader.slide_for(user, request.path_params["entry_id"], request.path_params["number"])
+    if path is None:
+        raise HTTPException(404)
+    return FileResponse(path, media_type=MEDIA[path.suffix.lower()], filename=path.name, content_disposition_type="inline")
+
+
+@signed_in
 def responses(request: Request, user: User) -> Response:
     cards, hidden = request.app.state.reader.card_rows(user)
     return render(request, "responses.html", user, title="Responses", page="responses", cards=cards, hidden=hidden, recent=recent(request, user))
@@ -616,6 +647,8 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
         Route("/jobs/{job_id}/answer", job_answer, methods=["POST"]),
         Route("/work", work),
         Route("/work/files/{entry_id:int}", work_file),
+        Route("/work/view/{entry_id:int}", work_view),
+        Route("/work/view/{entry_id:int}/slides/{number:int}", work_slide),
         Route("/responses", responses),
         Route("/responses/answer", responses_answer, methods=["POST"]),
         Route("/log", action_log),

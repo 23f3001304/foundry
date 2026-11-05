@@ -192,6 +192,8 @@
   --logo-nudge: -1.6px;
   --rail: 280px;
   --content: 1440px;
+  --viewer-head: 64px;
+  --viewer-slide: 960px;
   --measure: 720px;
   --form: 544px;
   --sign-in: 400px;
@@ -594,6 +596,7 @@ main > .section-foot { margin-top: var(--gap); }
 
 .icon { display: block; flex: none; width: var(--size-16); height: var(--size-16); background: currentColor; mask-repeat: no-repeat; mask-size: 100%; }
 .icon-overview { mask-image: url(icons/overview.svg); }
+.icon-close { mask-image: url(icons/close.svg); }
 .icon-jobs { mask-image: url(icons/jobs.svg); }
 .icon-responses { mask-image: url(icons/responses.svg); }
 .icon-work { mask-image: url(icons/work.svg); }
@@ -985,6 +988,26 @@ ol.chain > li.unsure::after { width: var(--space-8); height: var(--space-8); bac
 .chain-source p { margin: 0; }
 .chain-source .small { margin-top: var(--space-4); }
 
+/* The viewer: a page of its own for one work file. A head with the way back, stuck to the top, and the file on a calm ground. */
+
+.viewer-body { display: flex; flex-direction: column; min-height: var(--screen); }
+.viewer-body main { display: flex; flex: 1 1 auto; flex-direction: column; width: 100%; max-width: none; padding: 0; }
+.viewer-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); min-height: var(--viewer-head); padding: var(--space-8) var(--gutter); background: var(--paper); border-bottom: 1px solid var(--rule); }
+.viewer-names { flex: 1 1 auto; min-width: 0; }
+.viewer-names h1 { font-size: var(--text-16); line-height: var(--line-16); }
+.viewer-names .small { margin: 0; overflow: hidden; color: var(--ink-faint); text-overflow: ellipsis; white-space: nowrap; }
+.viewer-names a { color: inherit; }
+.viewer-actions { display: flex; flex: none; align-items: center; gap: var(--space-8); }
+.viewer-stage { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; margin: 0; padding: var(--space-32) var(--gutter); background: var(--sunken); }
+/* A picture's own size is the most it gets, so it is never blown up past crisp, and it is cut down to fit whole. */
+.viewer-picture { display: block; width: auto; height: auto; max-width: 100%; max-height: calc(var(--screen) - var(--viewer-head) - 2 * var(--space-32)); background: var(--panel); border-radius: var(--radius-8); }
+.viewer-stage-words { flex-direction: column; gap: var(--space-16); }
+.viewer-plain { margin: 0; color: var(--ink-soft); text-align: center; }
+.viewer-slides { flex-direction: column; justify-content: flex-start; gap: var(--space-32); list-style: none; }
+.viewer-slides li { width: 100%; max-width: var(--viewer-slide); }
+.viewer-slides .small { margin: 0 0 var(--space-8); color: var(--ink-faint); }
+.viewer-slide { display: block; width: auto; height: auto; max-width: 100%; margin-inline: auto; background: var(--panel); border-radius: var(--radius-8); }
+
 /* Forms */
 
 .stack { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-12); max-width: var(--form); margin: var(--space-12) 0; }
@@ -1249,6 +1272,13 @@ form.panel { gap: var(--space-16); margin: 0; }
   .banner-words { flex: none; padding-inline: var(--space-8); }
   .banner-go { width: 100%; justify-content: center; min-height: var(--control-40); }
   .sign-in { padding: var(--space-24); }
+  :root { --viewer-head: 112px; }
+  .viewer-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-8) var(--space-12); }
+  .viewer-actions { display: contents; }
+  .viewer-download { grid-row: 2; grid-column: 1 / -1; }
+  .viewer-head:has(+ .viewer-stage-words) .viewer-download { display: none; }
+  .viewer-stage { padding: var(--space-16) var(--gutter); }
+  .viewer-picture { max-height: calc(var(--screen) - var(--viewer-head) - 2 * var(--space-16)); }
   .empty-state { flex-direction: column; align-items: stretch; gap: var(--space-16); padding: var(--space-16) 0 0 var(--space-16); }
   .empty-state > .sprite { margin-bottom: 0; }
 

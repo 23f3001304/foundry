@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block main %}
+{% set download = "/work/files/" ~ file.entry_id ~ "?download=1" %}
+<header class="viewer-head">
+  <div class="viewer-names">
+    <h1>{{ file.name|shortened }}</h1>
+    {% if file.job_id %}<p class="small"><a href="/jobs/{{ file.job_id }}">{{ file.job_title|shortened }}</a></p>{% endif %}
+  </div>
+  <div class="viewer-actions">
+    {% if file.here %}<a class="button viewer-download" href="{{ download }}">Download</a>{% endif %}
+    <a class="button viewer-close" href="{{ back }}"><span class="icon icon-close" aria-hidden="true"></span>Close</a>
+  </div>
+</header>
+{% if not file.here %}
+<div class="viewer-stage"><p class="viewer-plain" role="alert">The file is no longer on this machine.</p></div>
+{% elif file.picture %}
+<div class="viewer-stage"><img class="viewer-picture" src="/work/files/{{ file.entry_id }}" alt="{{ file.name }}"></div>
+{% elif file.slides %}
+<ol class="viewer-stage viewer-slides">
+  {% for number in range(1, file.slides + 1) %}
+  <li>
+    <p class="small">Slide {{ number }} of {{ file.slides }}</p>
+    <img class="viewer-slide" src="/work/view/{{ file.entry_id }}/slides/{{ number }}" alt="Slide {{ number }} of {{ file.name }}" loading="lazy">
+  </li>
+  {% endfor %}
+</ol>
+{% else %}
+<div class="viewer-stage viewer-stage-words">
+  <p class="viewer-plain">This kind of file opens after downloading.</p>
+  <a class="button primary" href="{{ download }}">Download</a>
+</div>
+{% endif %}
+{% endblock %}

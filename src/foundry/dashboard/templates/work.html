@@ -38,8 +38,8 @@
       <tr>
         {% if loop.first %}
         <td class="title-cell" rowspan="{{ file.versions|length }}">
-          <span class="file-name">{{ file.name|shortened }}</span>
-          {% if file.picture and version.served %}<a class="preview-link" href="/work/files/{{ version.entry_id }}"><img src="/work/files/{{ version.entry_id }}" class="preview" alt="Preview of {{ file.name }}"></a>{% endif %}
+          {% if version.served %}<a class="file-name" href="{{ link('/work/view/' ~ version.entry_id, back=here) }}">{{ file.name|shortened }}</a>{% else %}<span class="file-name">{{ file.name|shortened }}</span>{% endif %}
+          {% if file.picture and version.served %}<a class="preview-link" href="{{ link('/work/view/' ~ version.entry_id, back=here) }}" tabindex="-1" aria-hidden="true"><img src="/work/files/{{ version.entry_id }}" class="preview" alt="Preview of {{ file.name }}"></a>{% endif %}
         </td>
         {% endif %}
         <td class="version-cell">Version {{ version.number }}</td>

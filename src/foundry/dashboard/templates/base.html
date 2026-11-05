@@ -30,10 +30,11 @@
   <button class="quiet" type="submit">Sign out</button>
 </form>
 {% endmacro %}
-<body class="{{ 'shell' if user else 'bare' }}{% if page %} page-{{ page }}{% endif %}">
+<body class="{{ 'viewer-body' if focus else 'shell' if user else 'bare' }}{% if page %} page-{{ page }}{% endif %}">
 <a class="skip" href="#main">Skip to the page</a>
 {{ shapes.defs() }}
-{% if user %}
+{% if focus %}
+{% elif user %}
 <input class="side-toggle" type="checkbox" id="side-toggle" aria-label="Fold the side bar">
 <aside class="side">
   <div class="side-top">
@@ -66,7 +67,7 @@
 <main id="main">
 {% block main %}{% endblock %}
 </main>
-{% if user %}
+{% if user and not focus %}
 <nav class="tabbar" aria-label="Pages">
   {{ tab("overview", link("/", business=business), "Overview") }}
   {{ tab("jobs", link("/jobs", business=business), "Jobs", "", counts.stuck, "stuck") }}

@@ -152,7 +152,7 @@
   <ul class="rows file-rows">
     {% for file in job.files %}
     <li>
-      <span class="file-name">{{ file.name|shortened }}</span>
+      <a class="file-name" href="{{ link('/work/view/' ~ file.entry_id, back=here) }}">{{ file.name|shortened }}</a>
       {% if job.can_flag %}
       <details class="flag-fold">
         <summary>Flag something in this file</summary>

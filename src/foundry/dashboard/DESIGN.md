@@ -50,7 +50,7 @@ Drawn in `shapes.py` as our own paths, in one family each. `shapes.defs()` puts 
 | Radius | `--radius-` 4 (chip, and a row in a small menu), 8 (control), 16 (panel, banner, card, the hero's dark bar), 24 (hero and sign-in) |
 | Control height | `--control-` 24 (a button in a table), 28 (a row in the side bar), 32, 36, 40 |
 | Icons and sprites | `--size-` 16, 24, 32, 48, 64, 96 |
-| Layout | `--gutter`, `--gap`, `--section`, `--sidebar`, `--side-folded`, `--logo-nudge`, `--rail`, `--content`, `--measure`, `--form`, `--sign-in`, `--sign-in-art`, `--hero`, `--hero-shape`, `--col-*`, `--step`, `--tabbar` |
+| Layout | `--gutter`, `--gap`, `--section`, `--sidebar`, `--side-folded`, `--logo-nudge`, `--viewer-head`, `--viewer-slide`, `--rail`, `--content`, `--measure`, `--form`, `--sign-in`, `--sign-in-art`, `--hero`, `--hero-shape`, `--col-*`, `--step`, `--tabbar` |
 | Motion | `--dur-fast` 120ms, `--dur-base` 200ms, `--dur-slow` 320ms, `--dur-reveal` 640ms, `--frame` 120ms, `--frame-slow` 320ms, `--ease-out` |
 | Neutrals | `--paper --panel --sunken --hover --current --rule --rule-strong --field --ink --ink-soft --ink-faint --ink-quiet`, leaning very slightly toward the logo's olive |
 | Accent and focus | `--primary --primary-hover --primary-ink --focus` |
@@ -118,6 +118,7 @@ Each has one definition, with its states: rest, hover, focus (one shared ring), 
 | Status mark | `.stage` with `.done .working .waiting .idle .stuck .trouble` | A soft fill and matching words, and a dot, diamond, ring, dash, square or triangle. Drawn with borders alone. `.trouble` is a connection that isn't working, which is not a stuck job |
 | Alert | `.alert` `.alert-done` | Marked with `!` and a border |
 | Avatar | `avatar()`, `.avatar` | Initials in a quiet circle. No colour, because no person is ever ranked or marked |
+| Viewer | `viewer.html`, `.viewer-head`, `.viewer-stage` | A page of its own for a work file, with no side bar. The name, its job and Download, with Close at the top right going back where the person came from. A picture is fitted whole on a calm ground and never blown up. A deck shows its slide pictures if they sit beside it as `<deck>-slide-<number>.png`, and anything else says it opens after downloading |
 | Empty state | `empty_state()` | A grid tile, a character at rest, what is true and the next step |
 | Sprite | `sprite()` | See below |
 

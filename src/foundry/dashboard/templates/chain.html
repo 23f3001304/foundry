@@ -16,7 +16,7 @@
 {% endif %}
 <div class="flag-head">
   <h2>{{ chain.flagged.shown|shortened }}</h2>
-  <p class="lead">By {{ chain.flagged.who|shortened }}{% if chain.via_dashboard %} on the dashboard{% endif %}, {{ chain.flagged.at }}{% if chain.job_id and not chain.job_is_named %}, on <a href="/jobs/{{ chain.job_id }}">{{ chain.job_title|shortened }}</a>{% endif %}.{% if chain.steps|length > 1 %} This is everyone and every agent behind this one thing, and nothing else.{% endif %}</p>
+  <p class="lead">By {{ chain.flagged.who|shortened }}{% if chain.via_dashboard %} on the dashboard{% endif %}, {{ chain.flagged.at }}{% if chain.job_id and not chain.job_is_named %}, on <a href="/jobs/{{ chain.job_id }}">{{ chain.job_title|shortened }}</a>{% endif %}.{% if chain.file_id %} <a href="{{ link('/work/view/' ~ chain.file_id, back=here) }}">Open the file</a>.{% endif %}{% if chain.steps|length > 1 %} This is everyone and every agent behind this one thing, and nothing else.{% endif %}</p>
 </div>
 {% if chain.steps %}
 <div class="chain-head" aria-hidden="true"><span>When</span><span>Who and what</span><span>Source</span></div>
