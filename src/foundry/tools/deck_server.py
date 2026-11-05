@@ -847,7 +847,7 @@ def _number_alone(deck: Presentation, brand: Brand, spec: dict, title: str) -> N
     look = _look(brand, loud=True)
     slide = _new_slide(deck, brand, look)
     _title(slide, brand, look, (look.left, TITLE_TOP, SIDE_RIGHT - look.left, TITLE_HEIGHT), title, 36, 16)
-    point = Point("", None if missing else 1, written, "")
+    point = Point("", None if missing else 1, written, "" if missing else _words_of_field(spec, "unit"))
     size = _size_to_fit(brand, point, look.right - look.left, ALONE_LARGEST, HERO_LEAST)
     _lit_figure(slide, brand, look, point, look.left, 360, size)
     if spec.get("caption"):
