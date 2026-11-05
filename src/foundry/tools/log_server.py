@@ -45,7 +45,7 @@ def _job(token: str) -> Job:
     job = JobStore(_path("FOUNDRY_JOBS_DB")).by_token(token)
     pinned = pinned_folder()
     # A client's own makers are pinned to its brand folder, which is named for its bucket. A token for another client's job gets the words for a token that is nobody's.
-    if job is None or (pinned is not None and job.bucket != pinned.name):
+    if job is None or (pinned is not None and job.bucket.casefold() != pinned.name.casefold()):
         # A ToolError is shown to the agent as written. Any other error would reach it only as "Error executing tool".
         raise ToolError(UNKNOWN_TOKEN)
     return job
