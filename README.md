@@ -294,7 +294,7 @@ uv run pytest
 
 ## Art and credits
 
-Team sprites, stickers, logos, photos and the banner were generated with Gemini on Vertex AI and then cut to a pixel grid or to size in code, as `tools/gen_assets.py` shows. They are AI-generated, not hand-drawn, and show original characters and fictional businesses. Brand stickers are recoloured from those sprites in code, and the hard hat and cup are drawn in code. The fonts are open fonts, with their licences beside them in each brand's `fonts` folder.
+Team sprites, stickers, the fictional businesses' logos and photos were generated with Gemini on Vertex AI and then cut to a pixel grid or to size in code, as `tools/gen_assets.py` shows. Foundry's own logo, wordmark and banner were drawn in code, with the wordmark's letters in Archivo Black under the SIL Open Font License, and the banner shows the generated team sprites. They are AI-generated, not hand-drawn, and show original characters and fictional businesses. Brand stickers are recoloured from those sprites in code, and the hard hat and cup are drawn in code. The fonts are open fonts, with their licences beside them in each brand's `fonts` folder.
 
 The Kasauti Capital Partners logo is not generated. `tools/draw_kasauti_logo.py` draws it in code, in the two colours of the firm's kit, and its fonts are copies of the open fonts the other brands use.
 

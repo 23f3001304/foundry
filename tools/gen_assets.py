@@ -81,19 +81,6 @@ ASSETS = {
         }
         for state, pose in POSES.items()
     },
-    "foundry-logo": {
-        "prompt": LOGO_STYLE + " The emblem shows a crucible pouring a single stream of molten orange metal into a square "
-        "mould, in charcoal #2B2D33 and molten orange #FF6A1A. No text.",
-        "out": "assets/foundry-logo.png",
-        "cut": "logo",
-    },
-    "readme-banner": {
-        "prompt": "A wide banner illustration: a stream of tangled, scribbled chat bubbles on the left flows into a glowing "
-        "crucible in the centre, and clean finished slides and posters come out on the right. Flat vector, charcoal "
-        "#2B2D33 background, molten orange #FF6A1A and warm yellow #FFC24A highlights. No text, letters or logos.",
-        "aspect": "21:9",
-        "out": "assets/readme-banner.png",
-    },
     "lalten-cafe-logo": {
         "prompt": LOGO_STYLE + " The emblem shows a small hanging lantern with a coffee cup as its flame window, in deep "
         "brown #7A3E1D and warm cream. The words 'LALTEN CAFE' run once along the top of the circle in a friendly serif. The bottom of the circle has only a small plain ornament, and no other words appear anywhere.",
