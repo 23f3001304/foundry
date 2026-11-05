@@ -49,6 +49,9 @@ def main(mode: str, name: str, slug: str) -> None:
         online = next((machine for machine in gateway.get("/management/controllers").json() if machine["state"] == "online"), None)
         if online is None:
             raise SystemExit("No agent controller is online, so no rooms were made. Start it as in step 2 of the README, then run this again.")
+        # Switch puts every agent in a chat it hasn't seen, and each would say hello.
+        for bridge in gateway.get("/collaborations").json():
+            gateway.patch(f"/collaborations/{bridge['bridge_id']}", json={"agent_greetings_enabled": False}).raise_for_status()
         existing = {agent["name"] for agent in gateway.get("/management/agents").json()}
         if REVIEWER + ending not in existing and not os.environ.get("FOUNDRY_REVIEWER_PROVIDER"):
             print(NEW_REVIEWER.format(name=REVIEWER + ending))
