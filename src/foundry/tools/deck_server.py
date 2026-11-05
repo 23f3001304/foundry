@@ -92,6 +92,7 @@ NOTHING_TO_SHOW = "A big_number slide needs its number, or its labels and values
 NEGATIVE_STROKE = "A stroke cannot show {label}'s negative figure. Use draw_chart's bar kind and build_deck's picture layout for figures below zero."
 TOO_MANY_STROKES = "A {layout} slide can show at most {most} figures, and this has {count}. Use a table for more."
 NO_LABEL = "Every label on a chart needs its words."
+FIGURE_TOO_WIDE = "This figure is too wide to fit on the slide: {figure}... Shorten it or its unit, say the rest in the caption, or use a table."
 LABEL_TOO_LONG = "This label is too long to fit: {label}..."
 HIGHLIGHT_A_LABEL = "On a {layout} slide the highlight must be one of the labels, which is the one that gets lit: {labels}. {highlight!r} is not."
 NO_SOURCE_FOR_NOTHING = "A figure nobody sent has no source. Leave it out of sources."
@@ -705,7 +706,7 @@ class Point:
 def _chart_value(value: object, label: str) -> float | None:
     if value is None or (isinstance(value, str) and value.strip().casefold() == NOT_RECEIVED):
         return None
-    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+    if not _is_figure(value):
         raise MakerError(NOT_A_FIGURE.format(label=label, value=value))
     if value < 0:
         raise MakerError(NEGATIVE_STROKE.format(label=label))
@@ -786,7 +787,10 @@ def _shown_width(brand: Brand, point: Point, size: float) -> float:
 
 
 def _size_to_fit(brand: Brand, point: Point, width: float, largest: int, least: int) -> int:
-    return next((size for size in range(largest, least - 1, -1) if _shown_width(brand, point, size) <= width), least)
+    size = next((size for size in range(largest, least - 1, -1) if _shown_width(brand, point, size) <= width), None)
+    if size is None:
+        raise MakerError(FIGURE_TOO_WIDE.format(figure=point.shown[:40]))
+    return size
 
 
 def _clear_of_stroke(size: int) -> float:
@@ -840,7 +844,7 @@ def _written_number(number: str | float) -> str:
 
 def _number_alone(deck: Presentation, brand: Brand, spec: dict, title: str) -> None:
     number = spec["number"]
-    if isinstance(number, bool) or not (number is None or isinstance(number, str) or (isinstance(number, int | float) and math.isfinite(number))):
+    if not (number is None or isinstance(number, str) or _is_figure(number)):
         raise MakerError(NOT_A_NUMBER.format(value=number))
     missing = number is None or (isinstance(number, str) and number.strip().casefold() == NOT_RECEIVED)
     written = NOT_RECEIVED if missing else _written_number(number)
@@ -880,6 +884,9 @@ def _number_over_strokes(deck: Presentation, brand: Brand, spec: dict, title: st
     # One scale for every stroke, as long as it can be with each figure still on the slide after its stroke.
     most = max((point.value for point in points if point.value), default=1)
     room = look.right - plot_left
+    for point in points:
+        if point is not lit and point.value is not None and _shown_width(brand, point, row_figure) >= room - 10:
+            raise MakerError(FIGURE_TOO_WIDE.format(figure=point.shown[:40]))
     scale = min([room / most, *((room - 10 - _shown_width(brand, point, row_figure)) / point.value for point in points if point.value and point is not lit)])
     for at, point in enumerate(points):
         top = plot_top + at * (thick + gap)
@@ -986,7 +993,8 @@ def _data_words(spec: dict) -> list[str]:
 
 
 def _is_figure(value: object) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+    # Any whole number is a figure, even one too long for a float to hold.
+    return not isinstance(value, bool) and (isinstance(value, int) or (isinstance(value, float) and math.isfinite(value)))
 
 
 def _chart_slide_words(spec: dict) -> list[str]:

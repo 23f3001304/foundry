@@ -93,6 +93,8 @@ def with_commas(text: str) -> str:
 
 
 def figure_text(value: float) -> str:
-    # Written so that numbers_in reads it back as the number it was given: digits, with commas between the thousands.
+    # Written so that numbers_in reads it back as the number it was given: digits, with commas between the thousands. A whole number keeps every digit, where a float would change it beyond 15.
+    if isinstance(value, int):
+        return f"{value:,}"
     text = f"{Decimal(format(value, '.15g')):,f}"
     return text.rstrip("0").rstrip(".") if "." in text else text
