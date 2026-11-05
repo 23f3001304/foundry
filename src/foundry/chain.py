@@ -138,6 +138,12 @@ def _ids(ref: str | None) -> list[int]:
     return [number for part in (ref or "").split(",") if (number := _number(part.strip())) is not None]
 
 
+def worked_out_from_file(entry: Entry) -> int | None:
+    # The log entry of the file someone sent that a calculation was worked out from. None for a calculation over the answers or a client's own document, which name no such entry.
+    kind, _, places = (entry.ref or "").partition(" ")
+    return _number(places.partition(SENT_IN)[2]) if entry.kind == CALCULATION and kind == ROWS else None
+
+
 def _same_value(first: str, second: str) -> bool:
     # Two short values, one from a maker and one from the person who flagged, that may be written differently.
     return carries(first, second) or carries(second, first)

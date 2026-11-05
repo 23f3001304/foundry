@@ -19,7 +19,7 @@ import httpx
 
 from foundry.buffer import Burst, MessageBuffer
 from foundry.cards import ANSWERED, APPROVE_CLEAN, CLOSED, EXPIRED, HOLDS_JOB, IN_ROUTINE, ITEMS, ONE_BY_ONE, OPEN, QUEUED, RIGHT, SHOW_NEEDS, VOICE_CARD_TITLE, WRONG, Card, CardQueue, Trigger
-from foundry.chain import Link, carries, flag, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines
+from foundry.chain import Link, carries, flag, link_ref, name_of, names, plain, read_links, visible_entries, without_times_in_source_lines, worked_out_from_file
 from foundry.checks import calculations, entry_words, file_text, needs_attention, people_words, shown_words, unsourced_numbers
 from foundry.cleanup import CleanupFailed, clean_note, format_date
 from foundry.brand import HEX_COLOUR
@@ -233,7 +233,7 @@ def _flat(text: str) -> str:
 
 class CheckedLink(NamedTuple):
     link: Link
-    # The entry the link names, or None when the link counts for nothing.
+    # The entry that gives the value, or None when the link counts for nothing. It is the entry the link names, or for a figure worked out from a file the link names, that calculation.
     entry: Entry | None
     # The name job_facts shows for that entry, which the link's label had to hold.
     who: str
@@ -835,7 +835,7 @@ class Desk:
         return [LOG_TOKEN.format(token=job.token), *([GIVE_SOURCES] if self.items.for_job(job.id) else [])]
 
     def _check_links(self, job: Job, path: str) -> list[CheckedLink]:
-        # A link counts when its entry is one the maker could have been shown for this job, that entry gives the value, and the label names who said it. Anything else is no entry of this job's.
+        # A link counts when its entry is one the maker could have been shown for this job, that entry gives the value or this job worked the value out from it, and the label names who said it. Anything else is no entry of this job's.
         links = read_links(path)
         if not links:
             # Most files have none, and nothing else is looked up for them.
@@ -847,9 +847,15 @@ class Desk:
             entry = visible.get(link.entry)
             who = name_of(entry, known) if entry is not None else ""
             # The entry's words are the file's cells for a file sent as an answer, and the figures for a calculation.
-            counts = entry is not None and carries(entry_words(entry, self.settings.inputs_dir) or "", link.value) and bool(plain(who)) and plain(who) in plain(link.label)
-            checked.append(CheckedLink(link, entry if counts else None, who if counts else ""))
+            given = entry if entry is not None and carries(entry_words(entry, self.settings.inputs_dir) or "", link.value) else self._worked_out_from(link, visible)
+            counts = given is not None and bool(plain(who)) and plain(who) in plain(link.label)
+            checked.append(CheckedLink(link, given if counts else None, who if counts else ""))
         return checked
+
+    def _worked_out_from(self, link: Link, visible: dict[int, Entry]) -> Entry | None:
+        # A total is in no cell of the file it came from, and the log records which file code worked it out from. The newest such figure of this job that equals the value, and nothing else: a number made up and linked to a real file has none.
+        worked = (entry for entry in reversed(visible.values()) if worked_out_from_file(entry) == link.entry)
+        return next((entry for entry in worked if carries(entry_words(entry) or "", link.value)), None)
 
     def _log_links(self, job: Job, payload: dict, paths: list[str]) -> None:
         room, at = self.settings.workrooms_for(job.room_id).studio, self._sent_at(payload)
