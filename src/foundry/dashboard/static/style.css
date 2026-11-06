@@ -220,6 +220,7 @@
   --dur-base: 200ms;
   --dur-slow: 320ms;
   --dur-reveal: 640ms;
+  --stagger: 40ms;
   --frame: 120ms;
   --frame-slow: 320ms;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
@@ -388,7 +389,7 @@ pre.text {
 .prose strong { color: var(--ink); font-weight: 650; }
 .prose ul, .prose ol { padding-left: var(--space-20); }
 .prose li + li { margin-top: var(--space-4); }
-.prose code { font-family: var(--font-mono); font-size: 0.92em; padding: 0 var(--space-4); border-radius: var(--radius-4); background: var(--paper, transparent); }
+.prose code { font-family: var(--font-mono); font-size: var(--text-13); padding: 0 var(--space-4); border-radius: var(--radius-4); background: var(--paper, transparent); }
 .prose pre { padding: var(--space-12); border-radius: var(--radius-8); background: var(--paper, transparent); overflow-x: auto; }
 .prose pre code { padding: 0; }
 .prose table { border-collapse: collapse; }
@@ -1389,6 +1390,77 @@ form.panel { gap: var(--space-16); margin: 0; }
   .icon { forced-color-adjust: none; background: CanvasText; }
   .banner { border: 1px solid CanvasText; }
   .tile { background: Canvas; }
+}
+
+/* Motion. Pages slide into each other, a page's parts rise in on arrival, numbers that change on a live refresh pulse once,
+   folds open smoothly, and anything pressed gives a little. Arrival motion plays once per visit: html.settled stops it after
+   the first paint, so a live refresh swaps parts in quietly. */
+
+@view-transition { navigation: auto; }
+.side-nav { view-transition-name: side-nav; }
+.tabbar { view-transition-name: tabbar; }
+main { view-transition-name: page; }
+::view-transition-old(page) { animation: page-out var(--dur-base) var(--ease-out) both; }
+::view-transition-new(page) { animation: page-in var(--dur-slow) var(--ease-out) both; }
+::view-transition-group(side-nav), ::view-transition-group(tabbar) { animation: none; }
+html.live-swap::view-transition-old(page) { animation: fade-out var(--dur-base) var(--ease-out) both; }
+html.live-swap::view-transition-new(page) { animation: fade-in var(--dur-base) var(--ease-out) both; }
+@keyframes fade-out { to { opacity: .4; } }
+
+html:not(.settled) main > * { animation: rise var(--dur-slow) var(--ease-out) both; }
+html:not(.settled) main > :nth-child(2) { animation-delay: calc(1 * var(--stagger)); }
+html:not(.settled) main > :nth-child(3) { animation-delay: calc(2 * var(--stagger)); }
+html:not(.settled) main > :nth-child(4) { animation-delay: calc(3 * var(--stagger)); }
+html:not(.settled) main > :nth-child(5) { animation-delay: calc(4 * var(--stagger)); }
+html:not(.settled) main > :nth-child(n + 6) { animation-delay: calc(5 * var(--stagger)); }
+html:not(.settled) table.list tbody tr { animation: rise var(--dur-slow) var(--ease-out) both; }
+html:not(.settled) table.list tbody tr:nth-child(2) { animation-delay: calc(0.75 * var(--stagger)); }
+html:not(.settled) table.list tbody tr:nth-child(3) { animation-delay: calc(1.5 * var(--stagger)); }
+html:not(.settled) table.list tbody tr:nth-child(4) { animation-delay: calc(2.25 * var(--stagger)); }
+html:not(.settled) table.list tbody tr:nth-child(5) { animation-delay: calc(3 * var(--stagger)); }
+html:not(.settled) table.list tbody tr:nth-child(n + 6) { animation-delay: calc(3.75 * var(--stagger)); }
+html:not(.settled) .figures > * { animation: rise var(--dur-slow) var(--ease-out) both; }
+html:not(.settled) .figures > :nth-child(2) { animation-delay: calc(1.5 * var(--stagger)); }
+html:not(.settled) .figures > :nth-child(3) { animation-delay: calc(3 * var(--stagger)); }
+html:not(.settled) .figures > :nth-child(4) { animation-delay: calc(4.5 * var(--stagger)); }
+
+/* Charts drawn on arrival stay drawn when a refresh swaps them in. */
+html.settled .area-plot, html.settled .bar, html.settled .stage-bar, html.settled .meter .meter-fill { animation: none; }
+
+/* A number that changed on a refresh. */
+.bumped { animation: bump var(--dur-reveal) var(--ease-out); border-radius: var(--radius-4); }
+@keyframes bump {
+  0% { background-color: color-mix(in srgb, var(--field, currentColor) 28%, transparent); scale: 1.08; }
+  100% { background-color: transparent; scale: 1; }
+}
+.live-in { animation: fade-in var(--dur-slow) var(--ease-out); }
+@keyframes fade-in { from { opacity: .4; } }
+@keyframes page-out { to { opacity: 0; translate: 0 calc(-1 * var(--space-8)); } }
+@keyframes page-in { from { opacity: 0; translate: 0 var(--space-12); } }
+
+/* Folds open by sliding, not by jumping. */
+:root { interpolate-size: allow-keywords; }
+/* Only folds that open in place. The switcher and the More menu float over the page, so clipping them would hide them. */
+:is(.fold, .flag-fold, .response-fold)::details-content { block-size: 0; overflow: clip; transition: block-size var(--dur-slow) var(--ease-out), content-visibility var(--dur-slow) allow-discrete; }
+:is(.fold, .flag-fold, .response-fold)[open]::details-content { block-size: auto; }
+:is(.fold, .flag-fold, .response-fold)[open] > :not(summary) { animation: rise var(--dur-slow) var(--ease-out); }
+details.more[open] > :not(summary) { transform-origin: bottom; animation: swell var(--dur-base) var(--ease-out); }
+
+/* Things you press give a little, and links that lead somewhere lean in. */
+button, .primary, .quiet, .danger, .small, .chip-link, .hero-go, .banner-go, .need, .nav-item, .tabs a, .switcher-item {
+  transition-property: background-color, border-color, color, scale, translate;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-out);
+}
+button:active, .primary:active, .quiet:active, .danger:active, .small:active, .chip-link:active, .hero-go:active, .banner-go:active { scale: .97; }
+.nav-item:hover, .switcher-item:hover { translate: var(--hair) 0; }
+.need:hover, .stage-link:hover { translate: 0 calc(-1 * var(--hair)); }
+.state-pill, .tile, .figure, .stage-link { transition: background-color var(--dur-base) var(--ease-out), color var(--dur-base) var(--ease-out), border-color var(--dur-base) var(--ease-out), translate var(--dur-fast) var(--ease-out); }
+.switcher-menu { transform-origin: top; animation: swell var(--dur-base) var(--ease-out); }
+
+@media (prefers-reduced-motion: reduce) {
+  @view-transition { navigation: none; }
+  :is(.fold, .flag-fold, .response-fold)::details-content { transition: none; }
 }
 
 /* With motion turned off, nothing moves and every character stands at its still. */
