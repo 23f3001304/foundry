@@ -62,6 +62,8 @@ class Log:
                     job_id TEXT, item_id TEXT, ref TEXT, seeded INTEGER NOT NULL)"""
             )
             db.execute("CREATE INDEX IF NOT EXISTS entries_by_time ON entries (bucket, at)")
+            # Names learned from a chat app's directory, for people who have not written yet, so a page can say who they are.
+            db.execute("CREATE TABLE IF NOT EXISTS people (bucket TEXT NOT NULL, sender TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY (bucket, sender))")
             db.execute("CREATE INDEX IF NOT EXISTS entries_by_job ON entries (bucket, job_id)")
             for change in ("UPDATE", "DELETE"):
                 db.execute(f"CREATE TRIGGER IF NOT EXISTS entries_no_{change.lower()} BEFORE {change} ON entries BEGIN SELECT RAISE(ABORT, 'The log only grows.'); END")
@@ -95,6 +97,18 @@ class Log:
             clause += " AND room_id = ?"
             values.append(room_id)
         return self._select(f"{clause} ORDER BY at, id", *values)
+
+    def name_person(self, bucket: str, sender: str, name: str) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute("INSERT INTO people VALUES (?, ?, ?) ON CONFLICT (bucket, sender) DO UPDATE SET name = excluded.name", (bucket, sender, name))
+
+    def people_named(self, bucket: str) -> dict[str, str]:
+        with closing(self._connect()) as db:
+            try:
+                return dict(db.execute("SELECT sender, name FROM people WHERE bucket = ?", (bucket,)).fetchall())
+            except sqlite3.OperationalError:
+                # A log made before names were kept has no such table, and a reader can't add it.
+                return {}
 
     def writers(self, bucket: str, excluding: Collection[str] = ()) -> list[Writer]:
         # Rooms left out are ones Foundry can't ask in, so a person's room is their newest message outside them.

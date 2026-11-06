@@ -136,7 +136,8 @@ class Target:
 
 def names(log: Log, bucket: str) -> dict[str, str]:
     # The name each sender last wrote under in this bucket. Some entries, such as an answered card, are logged with the sender's id and no name.
-    return {writer.sender: shown_name(writer.sender_name, writer.sender) for writer in log.writers(bucket) if writer.sender_name}
+    named = log.people_named(bucket)
+    return named | {writer.sender: shown_name(writer.sender_name, writer.sender) for writer in log.writers(bucket) if writer.sender_name and writer.sender not in named}
 
 
 def name_of(entry: Entry, known: dict[str, str]) -> str:

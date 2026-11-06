@@ -6,6 +6,7 @@ so a tag reads as the person it is, and the person's Switch id can be made the w
 
 import logging
 import os
+from difflib import SequenceMatcher
 import re
 import time
 from collections.abc import Iterator
@@ -28,6 +29,24 @@ class Person:
     username: str
     external_id: str
     sender: str
+
+
+WORD = re.compile(r"[^\W\d_]{3,}")
+# How alike a word has to be to a name to count as it, so "girsih" is Girish and "gary" is not.
+CLOSE_ENOUGH = 0.8
+# Words in a name that say nothing about who it is.
+COMMON = {"the", "and", "mr", "mrs", "ms", "dr", "team", "from", "for", "with", "our"}
+
+
+def mentioned(text: str, everyone: list[Person]) -> list[Person]:
+    """The people a message names, by any part of their name, spelt right or nearly so."""
+    words = {word.casefold() for word in WORD.findall(text)}
+    found = []
+    for person in everyone:
+        parts = {part.casefold() for part in WORD.findall(person.name)} - COMMON
+        if any(word == part or (len(part) >= 4 and SequenceMatcher(None, word, part).ratio() >= CLOSE_ENOUGH) for word in words for part in parts):
+            found.append(person)
+    return found
 
 
 class People:

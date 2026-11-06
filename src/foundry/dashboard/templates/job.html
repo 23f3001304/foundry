@@ -141,12 +141,12 @@
 
 {% if job.brief %}
 {% call fold("", "brief", "lime", "What was asked for") %}
-  <pre class="text">{{ job.brief }}</pre>
+  <div class="prose">{{ job.brief|md }}</div>
 {% endcall %}
 {% endif %}
 {% if job.report %}
 {% call fold("report", "brief", "orchid", "Report") %}
-  <pre class="text">{{ job.report }}</pre>
+  <div class="prose">{{ job.report|md }}</div>
 {% endcall %}
 {% endif %}
 

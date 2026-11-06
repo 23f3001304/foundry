@@ -10,7 +10,7 @@
     {% if more %}<span class="icon icon-chevron" aria-hidden="true"></span>{% endif %}
   {% if more %}</summary>
   <div class="response-body">
-    {% if card.detail %}<pre class="text">{{ card.detail }}</pre>{% endif %}
+    {% if card.detail %}<div class="prose">{{ card.detail|md }}</div>{% endif %}
     {% if card.offer.buttons or card.offer.changes %}
     <form class="stack" method="post" action="/responses/answer">
       <input type="hidden" name="csrf" value="{{ csrf }}">

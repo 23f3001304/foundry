@@ -27,6 +27,8 @@ from starlette.convertors import IntegerConvertor, register_url_convertor
 from starlette.responses import FileResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
+
+from foundry.dashboard.markdown import render as render_markdown
 from starlette.templating import Jinja2Templates
 
 from foundry.chain import SAID
@@ -905,6 +907,7 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
     environment = jinja2.Environment(loader=jinja2.FileSystemLoader(HERE / "templates"), autoescape=True)
     environment.filters["when"] = reader.when
     environment.filters["client"] = bucket_name
+    environment.filters["md"] = render_markdown
     environment.globals["charts"] = charts
     environment.globals["shapes"] = shapes
     environment.globals["families"] = STEP_FAMILIES
