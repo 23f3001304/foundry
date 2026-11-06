@@ -2,31 +2,26 @@
 {% from "_ui.html" import page_title, job_tabs, empty_state, tile %}
 {% macro timeline(job) %}
   {% if job.moments %}
-  <div class="scroll">
-  <table class="list log-table">
-    <thead><tr><th>When</th><th>Who</th><th>What</th><th>Flag</th></tr></thead>
-    <tbody>
+  <ol class="trail">
     {% for moment in job.moments %}
-    <tr>
-      <td data-label="When">{{ moment.at }}</td>
-      <td data-label="Who">{{ moment.who }}</td>
-      <td data-label="What"><span class="strong">{{ moment.what }}</span>{% if moment.text %} {{ moment.text }}{% endif %}</td>
-      <td data-label="Flag">
-        {%- if moment.target -%}
-        <form method="post" action="/log/flag">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <input type="hidden" name="job_id" value="{{ job.id }}">
-          <input type="hidden" name="what" value="{{ moment.target[0] }}">
-          <input type="hidden" name="{{ moment.target[0] }}" value="{{ moment.target[1] }}">
-          <button class="small" type="submit">Flag</button>
-        </form>
-        {%- endif -%}
-      </td>
-    </tr>
+    <li class="fam-{{ moment.family }}{% if moment.open %} is-open{% endif %}">
+      <span class="trail-dot" aria-hidden="true"></span>
+      <div class="trail-body">
+        <p class="trail-line"><time class="trail-when">{{ moment.at }}</time> <span class="trail-who">{{ moment.who }}</span> <span class="trail-what">{{ moment.what }}</span></p>
+        {% if moment.text %}<p class="trail-text">{{ moment.text }}</p>{% endif %}
+      </div>
+      {%- if moment.target -%}
+      <form class="trail-flag" method="post" action="/log/flag">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="job_id" value="{{ job.id }}">
+        <input type="hidden" name="what" value="{{ moment.target[0] }}">
+        <input type="hidden" name="{{ moment.target[0] }}" value="{{ moment.target[1] }}">
+        <button class="small" type="submit">Flag</button>
+      </form>
+      {%- endif -%}
+    </li>
     {% endfor %}
-    </tbody>
-  </table>
-  </div>
+  </ol>
   {% endif %}
   {% if job.can_flag and job.files %}<p class="small section-foot">To flag one number or statement in a file, <a href="/jobs/{{ job.id }}">open the job</a>.</p>{% endif %}
 {% endmacro %}

@@ -93,6 +93,16 @@ EVENTS = {
     "revision_notes": "asked for changes",
 }
 MOST_TEXT = 240
+# The colour of each moment's dot on the timeline, by the family DESIGN.md gives that kind of work. A hollow dot is a question still open.
+MOMENT_FAMILIES = {
+    "job_opened": "sun", "item_asked": "sun", "item_reminded": "sun", "availability": "sun",
+    "file_made": "azure", "agent_marker": "azure", "review": "azure", "note_cleaned": "azure", "voice_heard": "azure",
+    "message": "orchid", "card_opened": "orchid", "card_answered": "orchid", "revision_notes": "orchid", "dashboard_action": "orchid",
+    "item_answer": "orchid", "item_reason": "orchid", "item_passed_on": "orchid", "voice_confirmed": "orchid", "voice_corrected": "orchid",
+    "delivered": "lime", "report_approved": "lime",
+    "flag": "orchid",
+}
+OPEN_MOMENTS = {"card_opened", "item_asked", "item_reminded"}
 TONES = {
     State.RECEIVED: "working",
     State.MAKING: "working",
@@ -431,6 +441,8 @@ class Moment:
     what: str
     text: str
     target: tuple[str, int] | None
+    family: str = "none"
+    open: bool = False
 
 
 @dataclass
@@ -1169,7 +1181,7 @@ class Reader:
         words = squeeze(shown_words(entry, self.settings.inputs_dir))
         # A flag's entry opens with the word this line already gives it.
         words = flag_words(words, entry.ref).removeprefix("Flagged ") if entry.kind == "flag" else words
-        return Moment(self.when(entry.at), name_of(entry, known), EVENTS.get(entry.kind, entry.kind.replace("_", " ")), words, target)
+        return Moment(self.when(entry.at), name_of(entry, known), EVENTS.get(entry.kind, entry.kind.replace("_", " ")), words, target, MOMENT_FAMILIES.get(entry.kind, "none"), entry.kind in OPEN_MOMENTS)
 
     def flagged(self, user: User) -> list[Flagged]:
         known = self._names(user)

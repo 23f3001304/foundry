@@ -975,6 +975,25 @@ table.list .link-row:hover .go-cell { color: var(--ink); }
 .data-table th:nth-child(3) { width: var(--col-160); }
 
 /* The action log's list of jobs: each a row, and its timeline opens under it */
+/* The timeline: one dot per moment on a dotted rail, in the colour of what happened. A hollow dot is a question still open, and the newest dot wears a halo. */
+ol.trail { position: relative; margin: 0; padding: var(--space-4) 0; list-style: none; }
+ol.trail::before { content: ""; position: absolute; top: var(--space-24); bottom: var(--space-24); left: calc(var(--space-16) + var(--space-8) - var(--hair)); border-left: 2px dotted var(--rule-strong); }
+ol.trail > li { position: relative; display: grid; grid-template-columns: var(--space-32) minmax(0, 1fr) auto; gap: 0 var(--space-12); align-items: start; padding: var(--space-8) var(--space-16) var(--space-8) var(--space-8); border-radius: var(--radius-8); }
+ol.trail > li:hover { background: var(--fam-wash); }
+.trail-dot { position: relative; justify-self: center; width: var(--space-12); height: var(--space-12); margin-top: var(--space-4); background: var(--fam-dot, var(--field)); border: 2px solid var(--fam-dot, var(--field)); border-radius: 50%; outline: var(--space-4) solid var(--paper); forced-color-adjust: none; }
+ol.trail > li:hover .trail-dot { outline-color: var(--fam-wash); }
+ol.trail > li.is-open .trail-dot { background: var(--paper); }
+ol.trail > li:last-child .trail-dot { outline-color: var(--fam-line, var(--rule-strong)); }
+.trail-body { min-width: 0; }
+.trail-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-4) var(--space-8); margin: 0; }
+.trail-who { font-weight: 600; color: var(--ink); }
+.trail-what { padding: 0 var(--space-8); color: var(--fam-text, var(--ink-soft)); font-size: var(--text-12); line-height: var(--line-20); font-weight: 600; background: var(--fam-wash, var(--hover)); border-radius: var(--radius-16); }
+.trail-when { order: 1; margin-left: auto; color: var(--ink-faint); font-size: var(--text-12); font-variant-numeric: tabular-nums; }
+.trail-text { margin: var(--space-4) 0 0; color: var(--ink-soft); overflow-wrap: anywhere; }
+.trail-flag { margin: 0; }
+@media (max-width: 640px) { .trail-when { order: 0; flex-basis: 100%; margin-left: 0; } }
+.flagged-row .title-cell a::before { content: ""; display: inline-block; width: var(--space-8); height: var(--space-8); margin-right: var(--space-8); vertical-align: middle; background: var(--orchid-mark); border-radius: 50%; }
+
 .log-jobs-head { margin-top: var(--section); }
 .log-jobs { margin-top: 0; }
 .log-jobs > section { margin: 0; }
