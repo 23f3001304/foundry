@@ -178,7 +178,9 @@
   </ul>
   {% if b.needs_more %}<p class="section-foot"><a href="/responses">{{ b.needs_more }} more</a></p>{% endif %}
   {% else %}
-  {{ empty_state("smith", "Nothing is stuck, and no card is waiting for you.", link("/jobs", business=own), "See the jobs") }}
+  {# The top counts every card in the business. Here only the viewer's own count, so a card waiting on someone else is said to be theirs. #}
+  {% set others = f.waiting %}
+  {{ empty_state("smith", "Nothing is waiting on you. " ~ others ~ (" card is" if others == 1 else " cards are") ~ " waiting on other people." if others else "Nothing is stuck, and no card is waiting for you.", link("/responses", business=own) if others else link("/jobs", business=own), "See the cards" if others else "See the jobs") }}
   {% endif %}
 </section>
 {% endfor %}
