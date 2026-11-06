@@ -15,6 +15,6 @@ stickers: subtle
 voice: Plain and direct. Short sentences, real numbers, no hype.
 design_style: Clean modern with bold shapes
 ---
-SomeCorp is a fictional company, made up for this demo. It is not a real company. Its logo is a placeholder mark until a real one is chosen.
+SomeCorp is a fictional company, made up for this demo. It is not a real company, and it has no logo yet.
 
 Use the paper colour for backgrounds and the ink colour for text. Keep the navy for headings and large shapes, and use the orange once on a page, for the one thing that matters most.

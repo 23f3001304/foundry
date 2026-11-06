@@ -326,6 +326,8 @@ def _plate_mask(art: Image.Image, pad: int) -> Image.Image:
 
 def place_logo(canvas: Image.Image, brand: Brand, ground: str, side: int, right: int, bottom: int) -> dict:
     """Puts the logo's visible edge on this right and bottom, within a square of this side. Returns what the tests read back."""
+    if not brand.has_logo:
+        return {"logo": None, "plate": None, "logo_file": ""}
     path, plated = logo_for(brand, ground)
     with Image.open(path) as logo:
         art = logo.convert("RGBA")

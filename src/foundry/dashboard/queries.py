@@ -199,6 +199,11 @@ class NavCounts:
     stuck: int = 0
     # The stuck jobs of each business, so the switcher can say which one has them.
     stuck_in: dict[str, int] = field(default_factory=dict)
+    waiting_in: dict[str, int] = field(default_factory=dict)
+
+    def only(self, buckets: Collection[str]) -> "NavCounts":
+        buckets = set(buckets)
+        return NavCounts(sum(n for b, n in self.waiting_in.items() if b in buckets), sum(n for b, n in self.stuck_in.items() if b in buckets), self.stuck_in, self.waiting_in)
 
 
 @dataclass
@@ -774,7 +779,7 @@ class Reader:
             stuck = counted(self.settings.jobs_path, f"SELECT bucket, COUNT(*) FROM jobs WHERE bucket IN ({marks}) AND state = ? GROUP BY bucket", State.BLOCKED.value)
         except sqlite3.OperationalError:
             return NavCounts()
-        return NavCounts(sum(waiting.values()), sum(stuck.values()), stuck)
+        return NavCounts(sum(waiting.values()), sum(stuck.values()), stuck, waiting)
 
     def job_nav(self, user: User, job_id: str) -> JobNav | None:
         job = self.job_of(user, job_id)

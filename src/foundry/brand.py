@@ -71,6 +71,10 @@ class Brand:
     stickers: str = ""
 
     @property
+    def has_logo(self) -> bool:
+        return self.logo_path.is_file()
+
+    @property
     def logo_on_dark(self) -> Path | None:
         path = self.logo_path.parent / LOGO_ON_DARK
         return path if path.exists() else None
@@ -124,9 +128,8 @@ def load_brand(text: str, assets_dir: Path) -> Brand:
     stickers = "off" if data.get("stickers") is False else "" if data.get("stickers") is None else _words(data["stickers"], "stickers")
     if stickers and stickers not in STICKER_MODES:
         raise BrandError(f"The brand kit's stickers must be one of {', '.join(STICKER_MODES)}.")
+    # A logo is an asset like any other, and a business without one yet works the same. Its work just goes out with no logo on it.
     logo_path = Path(assets_dir) / LOGO
-    if not logo_path.exists():
-        raise BrandError(f"The brand kit has no {LOGO} in its folder.")
     return Brand(name, colours, fonts, voice, logo_path, guidance.strip(), style, business_type, design_style, stickers)
 
 

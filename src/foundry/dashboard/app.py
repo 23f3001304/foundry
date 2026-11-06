@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
 import httpx
+from foundry.brand import STICKER_MODES, load_brand_dir
 import jinja2
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
@@ -124,7 +125,7 @@ def render(request: Request, name: str, user: User | None = None, status: int = 
     found = find_session(request)
     # A page reached some other way than a signed-in handler, like an address that isn't here, shows no counts.
     counts = getattr(request.state, "counts", None) or NavCounts()
-    return request.app.state.templates.TemplateResponse(request, name, {"user": user, "csrf": found[1].csrf if found else "", "counts": counts, "here": f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path, "theme": DARK if request.cookies.get(THEME_COOKIE) == DARK else LIGHT, **context}, status_code=status)
+    return request.app.state.templates.TemplateResponse(request, name, {"user": user, "csrf": found[1].csrf if found else "", "counts": counts, "here": f"{request.url.path}?{request.url.query}" if request.url.query else request.url.path, "theme": DARK if request.cookies.get(THEME_COOKIE) == DARK else LIGHT, "picked": in_view(request, user)[1] if user else "", **context}, status_code=status)
 
 
 def check_body(request: Request, most: int) -> None:
@@ -153,27 +154,45 @@ def signed_in(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
             if not csrf_ok(request, form.get("csrf")):
                 raise HTTPException(403, FORM_EXPIRED)
             arguments = (request, user, form)
-        request.state.counts = await run_in_threadpool(request.app.state.reader.nav_counts, user)
+        # The numbers beside the navigation are the business on screen, as the overview shows one at a time. The switcher still says which other business has stuck jobs.
+        shown, _ = (one_business if request.url.path == "/" else in_view)(request, user)
+        counts = await run_in_threadpool(request.app.state.reader.nav_counts, user)
+        request.state.counts = counts.only(shown.businesses)
         # A handler that waits on Switch is async and runs on the loop. The rest are plain functions that read SQLite or files, so they run in the thread pool and not on the event loop.
         if inspect.iscoroutinefunction(handler):
-            return await handler(*arguments)
-        return await run_in_threadpool(handler, *arguments)
+            response = await handler(*arguments)
+        else:
+            response = await run_in_threadpool(handler, *arguments)
+        if (picked := request.query_params.get("business")) and (picked == ALL_BUSINESSES or picked in user.businesses):
+            response.set_cookie(BUSINESS_COOKIE, picked, max_age=60 * 60 * 24 * 365, httponly=True, samesite="lax")
+        return response
 
     return guarded
 
 
 def in_view(request: Request, user: User) -> tuple[User, str]:
     # The login with only the business the address names. A name that isn't one of theirs shows them all, the same as any filter nobody knows.
-    wanted = request.query_params.get("business", "")
+    wanted = chosen_business(request)
     if len(user.businesses) > 1 and wanted in user.businesses:
         return User(user.login, {wanted: user.businesses[wanted]}), wanted
     return user, ""
 
 
+BUSINESS_COOKIE = "foundry_business"
+ALL_BUSINESSES = "all"
+
+
+def chosen_business(request: Request) -> str:
+    # The business picked in the switcher stays picked on every page, until another is picked. "all" is a choice too.
+    if "business" in request.query_params:
+        return request.query_params["business"]
+    return request.cookies.get(BUSINESS_COOKIE, "")
+
+
 def one_business(request: Request, user: User) -> tuple[User, str]:
-    # The overview shows one business at a time, so someone with several starts on their first and moves with the switcher.
+    # The overview starts on the first business for someone who has picked nothing yet, and shows them all once they pick All businesses.
     shown, business = in_view(request, user)
-    if len(shown.businesses) > 1:
+    if len(shown.businesses) > 1 and chosen_business(request) != ALL_BUSINESSES:
         business = next(iter(shown.businesses))
         return User(user.login, {business: user.businesses[business]}), business
     return shown, business
@@ -333,7 +352,42 @@ async def settings_page(request: Request, user: User, problem: str = "", status:
         except gateway.SwitchProblem as found:
             trouble = found.message
     notice = "Saved. Restart Foundry for it to take effect." if request.query_params.get("saved") else "Project made. Restart Foundry for it to start listening there." if request.query_params.get("made") else ""
-    return render(request, "settings.html", user, status, title="Settings", page="settings", rows=rows, trouble=trouble, problem=problem, notice=notice, **settings_view(request.app.state.env_path, request.app.state.settings))
+    notice = "Sticker setting saved. Foundry uses it from the next message." if request.query_params.get("stickers") else notice
+    return render(request, "settings.html", user, status, title="Settings", page="settings", rows=rows, trouble=trouble, problem=problem, notice=notice, stickers=sticker_rows(request), sticker_modes=STICKER_MODES, **settings_view(request.app.state.env_path, request.app.state.settings))
+
+
+STICKER_LINE = re.compile(r"^stickers:.*$", re.MULTILINE)
+
+
+def sticker_rows(request: Request) -> dict[str, str]:
+    # Each business's sticker setting, read from its brand kit, which is where the desk reads it for every sticker it sends.
+    used = sorted(set(request.app.state.settings.brands.values())) or brand_folders()
+    rows = {}
+    for slug in used:
+        try:
+            rows[slug] = load_brand_dir(REPO / "brands" / slug).stickers or "subtle"
+        except Exception:
+            continue
+    return rows
+
+
+@signed_in
+async def stickers_save(request: Request, user: User, form: FormData) -> Response:
+    if request.app.state.env_path is None:
+        raise HTTPException(403)
+    slug, mode = str(form.get("brand") or ""), str(form.get("stickers") or "")
+    if slug not in sticker_rows(request) or mode not in STICKER_MODES:
+        raise HTTPException(400)
+    kit = REPO / "brands" / slug / "kit.md"
+    text = kit.read_text(encoding="utf-8")
+    # The setting goes in the kit's front matter, replacing the line that is there or added at its end.
+    head = text.partition("---")[2].partition("---")[0]
+    if STICKER_LINE.search(head):
+        text = text.replace(head, STICKER_LINE.sub(f"stickers: {mode}", head), 1)
+    else:
+        text = text.replace(head, head.rstrip("\n") + f"\nstickers: {mode}\n", 1)
+    await run_in_threadpool(kit.write_text, text, "utf-8")
+    return RedirectResponse("/settings?stickers=1", 303)
 
 
 @signed_in
@@ -678,7 +732,8 @@ def work(request: Request, user: User) -> Response:
     tabs = reader.job_nav(user, only) if only else None
     if only and tabs is None:
         raise HTTPException(404)
-    return render(request, "work.html", user, title=tabs.title if tabs else "Generated work", page="jobs" if tabs else "work", jobs=reader.work(user, only), tabs=tabs)
+    shown = user if only else in_view(request, user)[0]
+    return render(request, "work.html", user, title=tabs.title if tabs else "Generated work", page="jobs" if tabs else "work", jobs=reader.work(shown, only), tabs=tabs)
 
 
 @signed_in
@@ -711,7 +766,7 @@ def work_slide(request: Request, user: User) -> Response:
 
 @signed_in
 def responses(request: Request, user: User) -> Response:
-    cards, hidden = request.app.state.reader.card_rows(user)
+    cards, hidden = request.app.state.reader.card_rows(in_view(request, user)[0])
     return render(request, "responses.html", user, title="Responses", page="responses", cards=cards, hidden=hidden, recent=recent(request, user))
 
 
@@ -733,10 +788,11 @@ def responses_answer(request: Request, user: User, form: FormData) -> Response:
 @signed_in
 def action_log(request: Request, user: User) -> Response:
     reader, only = request.app.state.reader, request.query_params.get("job")
-    timelines, more = reader.job_logs(user, only)
+    shown = user if only else in_view(request, user)[0]
+    timelines, more = reader.job_logs(shown, only)
     if only and not timelines:
         raise HTTPException(404)
-    flagged = reader.flagged(user)
+    flagged = reader.flagged(shown)
     # A job's timeline is one of that job's pages, so what it lists is that job's.
     tabs = reader.job_nav(user, only) if only else None
     if tabs:
@@ -811,6 +867,7 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
         Route("/settings", settings_page),
         Route("/settings", settings_save, methods=["POST"]),
         Route("/settings/project", project_add, methods=["POST"]),
+        Route("/settings/stickers", stickers_save, methods=["POST"]),
         Route("/connections", connections),
         Route("/connections/add", connection_add_page),
         Route("/connections/add", connection_add, methods=["POST"]),

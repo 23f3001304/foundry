@@ -5,8 +5,8 @@
   {{ page_title([], "Jobs") }}
   {% if board.yours %}<a class="button primary" href="/responses">{{ board.yours }} {{ "job needs" if board.yours == 1 else "jobs need" }} you</a>{% endif %}
 </header>
-{% set elsewhere = counts.stuck - counts.stuck_in.get(business, 0) if business else 0 %}
-{% if elsewhere > 0 %}<p class="small section-note">{{ elsewhere }} more stuck in {{ "another business" if elsewhere == 1 else "other businesses" }}. <a href="/jobs">See all businesses</a></p>{% endif %}
+{% set elsewhere = (counts.stuck_in.values()|sum) - counts.stuck_in.get(business, 0) if business else 0 %}
+{% if elsewhere > 0 %}<p class="small section-note">{{ elsewhere }} more stuck in {{ "another business" if elsewhere == 1 else "other businesses" }}. <a href="/jobs?business=all">See all businesses</a></p>{% endif %}
 {% if not board.total %}
 {{ empty_state("apprentice", "No jobs yet. A job starts when someone asks for something in a room Foundry works in.", "/connections", "See the connections") }}
 {% else %}

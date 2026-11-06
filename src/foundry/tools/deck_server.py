@@ -280,6 +280,8 @@ def _title(slide, brand: Brand, look: Look, box: tuple[int, int, int, int], text
 
 def _logo_picture(slide, brand: Brand, ground: str, side: int, right: int, bottom: int) -> None:
     # What the logo draws ends on this right and bottom. It goes straight on the ground in whichever version reads there, and only with neither on a plate following its outline, so a client's logo is never recoloured.
+    if not brand.has_logo:
+        return
     path, plated = compositions.logo_for(brand, ground)
     if plated:
         art = compositions.plated_logo(brand, side * PLATE_PIXELS_PER_POINT)
@@ -319,7 +321,8 @@ def _accent_rule(slide, brand: Brand, left: int, top: int) -> None:
 def _stone_cover(deck: Presentation, brand: Brand, look: Look, title: str, subtitle: str, highlight: str) -> None:
     # The firm's mark and name at the top, the title large, and one rub of metal after its last line.
     slide = _new_slide(deck, brand, look)
-    slide.shapes.add_picture(str(brand.logo_path), Pt(look.left), Pt(34), width=Pt(COVER_LOGO_SIZE)).name = "Logo"
+    if brand.has_logo:
+        slide.shapes.add_picture(str(brand.logo_path), Pt(look.left), Pt(34), width=Pt(COVER_LOGO_SIZE)).name = "Logo"
     _line(slide, brand, look, "body", look.soft, (look.left + COVER_LOGO_SIZE + 10, 34, 500, COVER_LOGO_SIZE), brand.name, 15, name="Firm")
     together = _periods_together(title)
     box = (look.left, 150, SIDE_RIGHT - look.left, 280)

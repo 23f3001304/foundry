@@ -7,10 +7,11 @@ from contextlib import suppress
 from pathlib import Path
 
 import httpx
+from foundry.adopt import adopt
 from foundry.daily import check_packs
 from foundry.desk import SHARED_AGENTS, Desk, Settings, run
 from foundry.gates import QueuedCardGate
-from foundry.intake import default_llm
+from foundry.intake import chat_llm, default_llm
 from foundry.jobs import JobStore
 from foundry.pack import PackError
 from foundry.switch_client import SwitchClient
@@ -32,6 +33,10 @@ def rooms_in_env_file() -> dict[str, str]:
 async def until_rooms_change(seen: dict[str, str]) -> None:
     while True:
         await asyncio.sleep(ROOM_CHECK_SECONDS)
+        try:
+            await asyncio.to_thread(adopt, ENV_FILE)
+        except httpx.HTTPError as error:
+            logging.warning("Could not look for chats Foundry was added to: %s", error)
         now = rooms_in_env_file()
         if now and now != {key: seen[key] for key in now}:
             os.environ.update(now)
@@ -76,7 +81,7 @@ def start_desk() -> bool:
     cleanup_llm = default_llm(os.environ.get("FOUNDRY_CLEANUP_MODEL", "claude-sonnet-5-5"))
     # Each kind of work gets the model it needs: quick sorting of every message, and a stronger one for judgement calls.
     deep_llm = default_llm(os.environ.get("FOUNDRY_DEEP_MODEL") or "claude-opus-5-5")
-    desk = Desk(client, store, QueuedCardGate(client), default_llm(), settings, cleanup_llm=cleanup_llm, deep_llm=deep_llm)
+    desk = Desk(client, store, QueuedCardGate(client), default_llm(), settings, cleanup_llm=cleanup_llm, deep_llm=deep_llm, chat_llm=chat_llm(os.environ.get("FOUNDRY_CHAT_MODEL") or None))
     try:
         return asyncio.run(run_until_rooms_change(desk, settings.all_rooms()))
     except httpx.HTTPStatusError as error:

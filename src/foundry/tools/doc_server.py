@@ -138,6 +138,8 @@ def _box(figure: Figure, colour: str, x: float, top: float, width: float, height
 
 
 def _logo(figure: Figure, brand: Brand, x: float, top: float, side: float) -> None:
+    if not brand.has_logo:
+        return
     with Image.open(brand.logo_path) as logo:
         small = logo.convert("RGBA").resize((LOGO_PIXELS, LOGO_PIXELS), Image.LANCZOS)
     axes = figure.add_axes(_fraction(x, top, side, side))

@@ -11,7 +11,7 @@ from foundry.brand import Brand, load_brand_dir
 
 STICKERS = Path(__file__).resolve().parents[2] / "stickers"
 MADE_STICKERS = Path(tempfile.gettempdir()) / "foundry-stickers"
-EVENTS = {"brief_received", "working", "needs_input", "approved", "shipped", "revise", "blocked", "celebrate"}
+EVENTS = {"brief_received", "working", "needs_input", "approved", "shipped", "revise", "blocked", "celebrate", "wave"}
 SUBTLE = {"needs_input", "approved", "shipped", "blocked"}
 ACCESSORY_WORDS = {"builder": "hard_hat", "construction": "hard_hat", "cafe": "cup", "café": "cup", "restaurant": "cup"}
 OUTLINE = (32, 12, 4)

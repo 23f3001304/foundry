@@ -77,3 +77,24 @@ def claude_llm(model: str | None = None) -> Callable[[str], str]:
         return "".join(block.text for block in response.content if block.type == "text")
 
     return call
+
+
+def chat_llm(model: str | None = None) -> Callable[[str], str]:
+    """For talk addressed to Foundry. With an API key it can search the web, so a question like today's weather gets a real answer."""
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return cli_llm(model)
+    client = anthropic.Anthropic()
+    model = model or os.environ.get("FOUNDRY_CLASSIFIER_MODEL", "claude-sonnet-5-5")
+
+    def call(prompt: str) -> str:
+        response = client.messages.create(
+            model=model,
+            max_tokens=2048,
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
+            messages=[{"role": "user", "content": prompt}],
+        )
+        # Only the last text block is the answer. The ones before it are the model saying what it is looking up.
+        texts = [block.text for block in response.content if block.type == "text"]
+        return texts[-1] if texts else ""
+
+    return call

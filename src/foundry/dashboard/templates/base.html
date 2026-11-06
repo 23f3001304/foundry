@@ -41,7 +41,7 @@
   <div class="side-top">
     <div class="brand">
       <a class="mark" href="{{ link('/', business=business) }}"><img class="logo" src="/static/logo.svg" alt="Foundry"><span class="mark-word" aria-hidden="true">Foundry</span></a>
-      {{ switcher(user, business or (job.row.bucket if job else ""), "/jobs" if page == "jobs" else "/", stage if page == "jobs" else "", counts.stuck_in, page == "jobs") }}
+      {{ switcher(user, business or picked or (job.row.bucket if job else ""), {"jobs": "/jobs", "responses": "/responses", "work": "/work", "log": "/log"}.get(page, "/"), stage if page == "jobs" else "", counts.stuck_in) }}
     </div>
     <label class="side-fold" for="side-toggle" title="Fold the side bar"><span class="icon icon-panel" aria-hidden="true"></span></label>
   </div>
