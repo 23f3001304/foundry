@@ -904,7 +904,8 @@ class Desk:
     def warn_of_rooms_without_the_guide(self) -> None:
         # Rooms made before the guide carry on without it and nothing else says so. A room that can't be read is not guessed at. An agent's instructions can't be read from here at all.
         missing = []
-        for room in sorted(self.settings.inside_rooms()):
+        # A private room with one person holds no work, so it needs no guide.
+        for room in sorted(self.settings.inside_rooms() - set(self.settings.private_rooms.values())):
             try:
                 if GUIDE_DOCUMENT not in self.client.room_documents(room):
                     missing.append(room)
@@ -2000,7 +2001,10 @@ class Desk:
         # People named in the message who have never written here are found in the chat app's directory, so they are reminded too.
         if self.people is not None and SOUNDS_LIKE_A_MEETING.search(burst.text):
             try:
-                names |= {person.sender: person.name for person in self.people.on(burst.room_id) if person.name.casefold() in burst.text.casefold()}
+                everyone = self.people.on(burst.room_id)
+                # The name people go by on the chat app, not their username, wherever the app knows it.
+                names |= {person.sender: person.name for person in everyone if person.sender in names}
+                names |= {person.sender: person.name for person in everyone if person.name.casefold() in burst.text.casefold()}
             except Exception as error:
                 logger.warning("Could not read the chat app's directory: %s", error)
         now = self.clock()
@@ -2015,7 +2019,7 @@ class Desk:
         by_name = {name.casefold(): sender for sender, name in names.items()}
         senders = list(dict.fromkeys(sender for name in people if (sender := by_name.get(name.casefold()))))
         self.meetings.add(burst.room_id, at, what, people, senders)
-        said = MEETING_SET.format(what=what, when=meeting_when(at, now), people=joined(people), before=int(REMIND_BEFORE.total_seconds() // 60))
+        said = MEETING_SET.format(what=what[:1].upper() + what[1:], when=meeting_when(at, now), people=joined(people), before=int(REMIND_BEFORE.total_seconds() // 60))
         # A meeting is personal, so each person hears it in their private room with Foundry. The group only hears it when nobody can be reached there.
         rooms = [room for sender in dict.fromkeys([burst.sender, *senders]) if (room := self._private_room(burst.room_id, sender))]
         for room in rooms or [burst.room_id]:
