@@ -21,8 +21,10 @@ from foundry.tools import confine
 REPO = Path(__file__).resolve().parents[3]
 # Parallel calls hit the service's rate limit, so one picture is drawn at a time, in this process.
 ONE_AT_A_TIME = threading.Lock()
-# A slide is wider than it is tall, and this is the shape a picture on one fits best.
+# A slide is wider than it is tall, and this is the shape a picture on one fits best. A logo or an icon is square.
 ASPECT = "16:9"
+ASPECTS = ("16:9", "1:1", "4:3", "3:4", "9:16")
+NOT_A_SHAPE = "aspect is one of " + ", ".join(ASPECTS) + ", not {aspect!r}."
 # Only a .png, because a .png can carry the note that a model drew it, and every file this tool makes carries it.
 PICTURE_KIND = ".png"
 SWITCH_NAME = "FOUNDRY_IMAGES"
@@ -38,7 +40,8 @@ NO_PROMPT = "Say what the picture shows in the prompt."
 # What the model is told besides the maker's words. The kit's colours and kind of business steer it, and nothing may be written in the picture.
 STYLE = (
     "{prompt}\n\nPalette for the picture: {primary}, {accent}, {ink} and {paper}. It is for a {business}. "
-    "An original picture only: no text, letters or numbers anywhere in it, no logos, no brand names and no real people."
+    "An original picture only: no text, letters or numbers anywhere in it, no other company's logo or brand name, and no real people. "
+    "An original mark or emblem for this business is fine when that is what is asked for."
 )
 MADE_BY_A_MODEL = "AI-generated picture, drawn by an image model on Vertex AI. It should hold no words or figures."
 # The picture's own file says so too, so it is not passed on as drawn by a person.
@@ -59,7 +62,7 @@ def gen_assets():
     return sys.modules["gen_assets"]
 
 
-def _draw(prompt: str) -> bytes:
+def _draw(prompt: str, aspect: str = ASPECT) -> bytes:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
     if not project:
         raise ToolError(NO_PROJECT)
@@ -69,7 +72,7 @@ def _draw(prompt: str) -> bytes:
     except (subprocess.CalledProcessError, OSError, KeyError):
         # What went wrong is left out, because the tool's own words are all a maker is shown and a failed sign-in may print a secret.
         raise ToolError(NO_SIGN_IN) from None
-    spec = {"prompt": prompt, "aspect": ASPECT}
+    spec = {"prompt": prompt, "aspect": aspect}
     try:
         # That script prints what it is doing, and a tool's output is its protocol, so it prints to the error stream here.
         with ONE_AT_A_TIME, contextlib.redirect_stdout(sys.stderr):
@@ -85,17 +88,20 @@ def _draw(prompt: str) -> bytes:
         raise ToolError(NO_PICTURE) from None
 
 
-def generate_image(brand_dir: str, prompt: str, out_path: str) -> str:
+def generate_image(brand_dir: str, prompt: str, out_path: str, aspect: str = ASPECT) -> str:
     """Draw a picture and return its absolute path. A model draws it, and it is saved with a note saying so.
 
     brand_dir is the brand folder named in the business pack. Its colours and kind of business steer the picture.
-    prompt says what the picture shows. The picture never holds words, numbers or logos, so write none into it.
-    out_path ends in .png. Make at most two pictures for a job, one after the other.
+    prompt says what the picture shows. The picture never holds words or numbers, so write none into it. It can be an original logo mark, emblem or icon for this business, in any art style.
+    out_path ends in .png. aspect is 16:9 for a slide or banner, 1:1 for a logo or icon, or 4:3, 3:4 or 9:16.
+    Make at most two pictures for a job, one after the other, unless the brief asks for a set of options, such as one logo per art style: then one per option, up to six.
     """
     if not images_on():
         raise ToolError(SWITCHED_OFF)
     if not prompt.strip():
         raise ToolError(NO_PROMPT)
+    if aspect not in ASPECTS:
+        raise ToolError(NOT_A_SHAPE.format(aspect=aspect))
     if Path(out_path).suffix.lower() != PICTURE_KIND:
         raise ToolError(NOT_A_PICTURE_FILE.format(suffix=Path(out_path).suffix))
     # A client's own makers write only in their own folder, and that is settled before the service is asked, so a refused place costs no picture.
@@ -103,7 +109,7 @@ def generate_image(brand_dir: str, prompt: str, out_path: str) -> str:
     brand = load_brand_dir(brand_dir)
     colours = brand.colors
     words = STYLE.format(prompt=prompt.strip(), business=brand.business_type or "business", **{name: colours[name] for name in ("primary", "accent", "ink", "paper")})
-    raw = _draw(words)
+    raw = _draw(words, aspect)
     try:
         picture = Image.open(io.BytesIO(raw)).convert("RGB")
     except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
