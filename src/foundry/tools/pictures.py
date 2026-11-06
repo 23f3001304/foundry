@@ -313,7 +313,7 @@ def soffice(deck: Path, folder: Path, seconds: float) -> bool:
 RENDERERS: tuple[Callable[[Path, Path, float], bool], ...] = (powerpoint, soffice)
 
 
-def _slide_count(deck: Path) -> int | None:
+def slide_count(deck: Path) -> int | None:
     # A file that is no deck is never shown to a renderer, where it could stop on a dialog until the timeout.
     try:
         return len(Presentation(str(deck)).slides)
@@ -391,7 +391,7 @@ def fresh_pictures(path: Path | str) -> Pictures:
             return Pictures()
         if kind in GRAPHIC_KINDS:
             return Pictures([str(file)])
-        count = _slide_count(file)
+        count = slide_count(file)
         if count and (paths := _stored(file.parent / LOOKS / file.stem, count, hashlib.sha256(file.read_bytes()).hexdigest())):
             return Pictures(paths)
     except Exception as error:
@@ -412,7 +412,7 @@ def pictures_of(path: Path | str, seconds: float = RENDER_SECONDS) -> Pictures:
             return Pictures()
         if os.environ.get(OFF, "").strip().casefold() == "off":
             return Pictures([], NO_RENDERER)
-        count = _slide_count(file)
+        count = slide_count(file)
         if not count:
             return Pictures([], COULD_NOT)
         folder = file.parent / LOOKS / file.stem

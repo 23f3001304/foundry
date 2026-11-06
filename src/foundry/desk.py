@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import threading
 import shutil
 import sqlite3
 import tempfile
@@ -76,6 +77,7 @@ from foundry.daily import REPORT_FIX_TOO_LATE, VOICE_UNCONFIRMED, DailyReports, 
 from foundry.delivery import DELIVERED, deliver, deliver_answers, deliver_report, post_answer_file, will_never_pass
 from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, parse_reply, resolve_approver, revise_notes
 from foundry.intake import Kind, classify
+from foundry.research import needs_research, research, research_file, save
 from foundry.people import People, mentioned
 from foundry.meetings import NOW as MEETING_NOW, NOW_YOURS as MEETING_NOW_YOURS, REMIND_BEFORE, SET as MEETING_SET, SOON as MEETING_SOON, SOON_YOURS as MEETING_SOON_YOURS, SOUNDS_LIKE_A_MEETING, MeetingStore, joined, read_meeting, when_words as meeting_when
 from foundry.items import MAKES_NOTHING, OWES_FORMAT, ItemStore
@@ -86,7 +88,7 @@ from foundry.stickers import EVENTS as STICKER_EVENTS, branded_sticker, mode_for
 from foundry.switch_client import Outcome, SwitchClient
 from foundry.tables import TABLE_KINDS, client_documents, is_file_answer, table_text
 from foundry.text import headline, no_controls, on_the_network, quiet
-from foundry.tools.pictures import LOOKS, NOT_MADE, Pictures, fresh_pictures
+from foundry.tools.pictures import LOOKS, NOT_MADE, Pictures, fresh_pictures, pictures_of, slide_count
 from foundry.voice import Transcript, VoiceError, speak, transcribe, translate
 
 logger = logging.getLogger(__name__)
@@ -130,7 +132,9 @@ IGNORED_LINK = "Ignored the source link for {values} in {name}, because no entry
 WORK_CHECK_LINE = re.compile("|".join(".+".join(map(re.escape, re.split(r"\{\w+\}", line))) for line in (NO_SOURCE, UNREADABLE, IGNORED_LINK)))
 # The card only holds so much, so a file with many unsourced numbers shows the first few.
 MOST_NUMBERS_LISTED = 8
-HOW_TO_RESTART = "Approve to try again, or ask for changes to give new notes."
+HOW_TO_RESTART = "Press Try again to have another go as it is, or Give notes to say what to change or send what's missing."
+RESEARCHED = "I looked up {count} public figures for this, each with its source and date, and gave them to the team."
+USE_RESEARCH = "Public figures Foundry looked up for this job, one a row with its source, link and publication date, are in {path}. Read them with the data tool's read_table. Show each figure's source and date where the figure appears, such as a line under the chart or table."
 NOT_SENT_FOR_REVIEW = "The work is made, but I could not send it to be checked."
 STUCK = f"This job has been through {MAX_REVISION_ROUNDS} rounds of changes, so it has stopped. {HOW_TO_RESTART}"
 MAKER_STUCK = "The team cannot finish this as asked."
@@ -607,6 +611,7 @@ class Desk:
         cleanup_llm: Callable[[str], str] | None = None,
         deep_llm: Callable[[str], str] | None = None,
         chat_llm: Callable[[str], str] | None = None,
+        research_llm: Callable[[str], str] | None = None,
         people: "People | None" = None,
         on_private_room: Callable[[dict[str, str]], None] | None = None,
         speaker: Callable[[str, str], bytes | None] = speak,
@@ -626,6 +631,7 @@ class Desk:
         self.on_private_room = on_private_room
         self._private = dict(settings.private_rooms)
         self.chat_llm = chat_llm
+        self.research_llm = research_llm
         self.speaker = speaker
         self.translator = translator
         self.buffer = MessageBuffer(settings.buffer_path, settings.quiet_seconds)
@@ -643,6 +649,10 @@ class Desk:
         self._half_made: dict[tuple[str, str], str] = {}
         # The jobs whose work could not be sent to the reviewer, and how many times that has been tried again. A restart forgets them, and a job's timeout then raises its card.
         self._review_owed: dict[str, int] = {}
+        # Decks whose pictures are being drawn before the reviewer sees them, by job.
+        self._drawing: dict[str, threading.Thread] = {}
+        # The running desk draws a deck's pictures before review. Off by default, so a desk built without a renderer never waits for one.
+        self.draw_before_review = False
         # Asked for the model and the clock each time, so a test that swaps either one reaches the coordinator too.
         self.coordinator = Coordinator(client, store, self.items, self.log, self.cards, settings, lambda prompt: self.llm(prompt), lambda: self.clock(), self._ask_makers, self._answers_in, self._answers_changed)
         # Combines the day's notes with the model that writes reports, and hands an approval to the desk like any other.
@@ -758,7 +768,11 @@ class Desk:
         elif marker == WORK_READY:
             self._take_work(job, payload, text)
         elif marker == WORK_BLOCKED:
-            if agent in job.waiting_on:
+            # A maker stuck for figures the web holds gets them looked up and goes again, before anyone is asked.
+            if agent in job.waiting_on and not self._researched(job) and self._research(job):
+                self._ask_makers(job, retry=True)
+                self.store.save(job)
+            elif agent in job.waiting_on:
                 self._stop(job, self._maker_said(job, text))
         elif job.pending_fix:
             # The reviewer looked at work made before the sender's fix, so a pass or a fail from them is no verdict on what the fix asks for.
@@ -914,6 +928,8 @@ class Desk:
         ]
         if inputs := self.coordinator.inputs_for(job):
             lines.append(inputs)
+        if self._researched(job):
+            lines.append(USE_RESEARCH.format(path=self._research_path(job)))
         if job.revision_notes:
             lines.append(f"Changes to make:\n{quiet(job.revision_notes)}")
         elif retry:
@@ -936,7 +952,8 @@ class Desk:
     def _send_to_reviewer(self, job: Job) -> None:
         # An agent's message comes once, so the WORK_READY that got here is not sent again. Whatever Switch says, the job moves on with its files, and the post is tried again like any other Switch would not take.
         try:
-            self._ask_reviewer(job)
+            if not self._ask_reviewer(job):
+                self._review_owed[job.id] = 0
         except Exception as error:
             logger.warning("Could not send job %s to the reviewer, so it is tried again on the next tick: %s", job.id, error)
             self._review_owed[job.id] = 0
@@ -949,7 +966,8 @@ class Desk:
                 del self._review_owed[job_id]
                 continue
             try:
-                self._ask_reviewer(job)
+                if not self._ask_reviewer(job):
+                    continue
                 del self._review_owed[job_id]
             except Exception as error:
                 if tries + 1 < MOST_BURST_TRIES:
@@ -971,7 +989,24 @@ class Desk:
             # Not saved and kept, so the card is tried again on the next tick, and the other jobs still get their turn.
             logger.exception("Could not raise a card for job %s, so it comes round again on the next tick.", job.id)
 
-    def _ask_reviewer(self, job: Job) -> None:
+    def _pictures_ready(self, job: Job) -> bool:
+        """Whether every deck of the job has pictures of this version. A deck without them is drawn on a thread of its own, so the loop goes on, and the reviewer is asked once it is done."""
+        # Only a file that opens as a deck is drawn: anything else would only sit in the renderer until it timed out.
+        missing = self.draw_before_review and [path for path in job.artifacts if Path(path).suffix.lower() == ".pptx" and fresh_pictures(path).why_none and slide_count(Path(path))]
+        drawing = self._drawing.get(job.id)
+        if not self.draw_before_review or not missing or (drawing is not None and not drawing.is_alive()):
+            # Drawn, or tried: a deck the renderer could not draw goes to the reviewer with the reason, as before.
+            self._drawing.pop(job.id, None)
+            return True
+        if drawing is None:
+            self._drawing[job.id] = threading.Thread(target=lambda: [pictures_of(path) for path in missing], daemon=True)
+            self._drawing[job.id].start()
+        return False
+
+    def _ask_reviewer(self, job: Job) -> bool:
+        """True once the reviewer has been asked. False while the pictures of the work are still being drawn."""
+        if not self._pictures_ready(job):
+            return False
         job.asked_at = self.clock().isoformat()
         tag = job.id[:6]
         files = "\n".join(job.artifacts)
@@ -981,10 +1016,11 @@ class Desk:
             self.settings.workrooms_for(job.room_id).review,
             no_controls(
                 f"@{self.settings.team_for(job.room_id).reviewer} Job #{tag}. Check this work against the approved brief and the brand kit.\n\n"
-                f"Start your reply with {REVIEW_PASS} #{tag} if it meets both, or with {REVIEW_FAIL} #{tag}, then notes a maker can act on.\n\n"
+                f"Start your reply with {REVIEW_PASS} #{tag} only if it meets both and there is nothing left you would change. Anything you would still ask a maker to fix, however small, is {REVIEW_FAIL} #{tag}, then notes a maker can act on.\n\n"
                 f"Brief:\n{quiet(job.brief)}\n\n{last_round}Files:\n{files}{self._pictures_for(job)}{self._style_for(job)}{self._inputs_for(job)}{self._files_given(job)}"
             ),
         )
+        return True
 
     def _pictures_for(self, job: Job) -> str:
         # The reviewer has no tools, so the desk names the pictures the maker made. It never makes any, because it does everything on one loop and a render would hold up every card and message.
@@ -1964,6 +2000,8 @@ class Desk:
             advance(job, "collect")
         elif event in ("brief_approved", "unblock"):
             self._sticker(self._approval_room(job), "working")
+            if not self._researched(job):
+                self._research(job)
             self._ask_makers(job, retry=event == "unblock")
         elif event == "signoff_revised":
             self._sticker(self._approval_room(job), "revise")
@@ -2018,6 +2056,24 @@ class Desk:
         elif self._talks_to_foundry(burst):
             self._chat(burst)
         # A message Foundry can't sort and that wasn't said to it is the team talking among themselves, so Foundry stays out of it.
+
+    def _research_path(self, job: Job) -> Path:
+        return research_file(self.settings.inputs_dir, job.bucket, job.id)
+
+    def _researched(self, job: Job) -> bool:
+        return self._research_path(job).exists()
+
+    def _research(self, job: Job) -> bool:
+        """Public figures the brief needs, looked up and kept with the job as a file a person might have sent. True when some were found."""
+        if self.research_llm is None or not job.brief or not needs_research(job.brief, self.llm):
+            return False
+        rows = research(job.brief, self.research_llm)
+        if not rows:
+            return False
+        path = save(rows, self._research_path(job))
+        self.log.add(self.clock(), job.bucket, job.room_id, DESK, "item_answer", str(path), sender_name="Foundry research", job_id=job.id)
+        self.client.post_message(self._approval_room(job), RESEARCHED.format(count=len(rows)))
+        return True
 
     def _same_as_waiting_job(self, burst: Burst, kind: Kind) -> bool:
         waiting = [job for job in self.store.in_room(burst.room_id) if job.kind == "work" and job.requester == burst.sender and job.state in (State.RECEIVED, State.BRIEF_PENDING)]

@@ -14,7 +14,7 @@ from pathlib import Path
 import httpx
 
 from foundry.log import Log
-from foundry.switch_client import DESK_NAME, SwitchClient
+from foundry.switch_client import DESK_NAME, STUCK_OPTIONS, SwitchClient
 
 logger = logging.getLogger(__name__)
 
@@ -444,7 +444,8 @@ class CardQueue:
             heading = {} if card.trigger is Trigger.QUESTION else {"title": card.title}
             self.client.open_question_card(card.room_id, card.request_id, detail or card.title, card.choices, **heading)
         else:
-            self.client.open_card(card.room_id, card.request_id, card.title, detail)
+            options = STUCK_OPTIONS if card.trigger is Trigger.STUCK else None
+            self.client.open_card(card.room_id, card.request_id, card.title, detail, **({"options": options} if options else {}))
         self._mark_open(card)
 
     def _detail_that_fits(self, card: Card) -> str:

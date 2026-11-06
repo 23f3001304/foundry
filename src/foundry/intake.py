@@ -81,7 +81,7 @@ def claude_llm(model: str | None = None) -> Callable[[str], str]:
     return call
 
 
-def chat_llm(model: str | None = None) -> Callable[[str], str]:
+def chat_llm(model: str | None = None, searches: int = 2, max_tokens: int = 2048) -> Callable[[str], str]:
     """For talk addressed to Foundry. With an API key it can search the web, so a question like today's weather gets a real answer."""
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return cli_llm(model)
@@ -91,8 +91,8 @@ def chat_llm(model: str | None = None) -> Callable[[str], str]:
     def call(prompt: str) -> str:
         response = client.messages.create(
             model=model,
-            max_tokens=2048,
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
+            max_tokens=max_tokens,
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": searches}],
             messages=[{"role": "user", "content": prompt}],
         )
         # The answer is every piece of text after the last search result: a cited answer comes in several pieces. What comes before is the model saying what it is looking up.

@@ -84,8 +84,10 @@ def start_desk() -> bool:
     # Each kind of work gets the model it needs: quick sorting of every message, and a stronger one for judgement calls.
     deep_llm = default_llm(os.environ.get("FOUNDRY_DEEP_MODEL") or "claude-opus-5-5")
     desk = Desk(client, store, QueuedCardGate(client), default_llm(), settings, cleanup_llm=cleanup_llm, deep_llm=deep_llm, chat_llm=chat_llm(os.environ.get("FOUNDRY_CHAT_MODEL") or None),
+                    research_llm=chat_llm(os.environ.get("FOUNDRY_CHAT_MODEL") or None, searches=10, max_tokens=8192) if os.environ.get("ANTHROPIC_API_KEY") else None,
                 people=People() if os.environ.get("SWITCH_EMAIL") else None,
                 on_private_room=lambda rooms: write_env(ENV_FILE, {PRIVATE_ROOMS_KEY: private_rooms_text(rooms)}))
+    desk.draw_before_review = True
     try:
         return asyncio.run(run_until_rooms_change(desk, settings.all_rooms()))
     except httpx.HTTPStatusError as error:

@@ -23,6 +23,11 @@ CARD_OPTIONS = [
     {"id": "approve", "label": "Approve", "decision": "accept"},
     {"id": "revise", "label": "Ask for changes", "decision": "decline"},
 ]
+# A stuck job is not waiting on a yes: the same two answers read as going again or saying what to change.
+STUCK_OPTIONS = [
+    {"id": "approve", "label": "Try again", "decision": "accept"},
+    {"id": "revise", "label": "Give notes", "decision": "decline"},
+]
 
 DESK_NAME = "foundry-desk"
 
@@ -107,14 +112,14 @@ class SwitchClient:
     def download(self, room_id: str, attachment: dict) -> bytes:
         return self._call("GET", f"/agents/{self.agent_id}/rooms/{room_id}/media", params={"mxc": attachment["mxc"]}).content
 
-    def open_card(self, room_id: str, request_id: str, title: str, detail: str) -> None:
+    def open_card(self, room_id: str, request_id: str, title: str, detail: str, options: list[dict] | None = None) -> None:
         self._call("POST", f"/agent-sessions/{self.session_id}/approvals", json={
             "request_id": request_id,
             "turn_id": request_id,
             "kind": "approval",
             "title": title[:MAX_TITLE_CHARS],
             "detail": detail[:MAX_DETAIL_CHARS],
-            "options": CARD_OPTIONS,
+            "options": options or CARD_OPTIONS,
             "questions": [],
             "room_id": room_id,
             "thread_id": None,
