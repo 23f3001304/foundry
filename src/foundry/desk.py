@@ -76,6 +76,7 @@ from foundry.daily import REPORT_FIX_TOO_LATE, VOICE_UNCONFIRMED, DailyReports, 
 from foundry.delivery import DELIVERED, deliver, deliver_answers, deliver_report, post_answer_file, will_never_pass
 from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, parse_reply, resolve_approver, revise_notes
 from foundry.intake import Kind, classify
+from foundry.people import People
 from foundry.meetings import NOW as MEETING_NOW, REMIND_BEFORE, SET as MEETING_SET, SOON as MEETING_SOON, MeetingStore, joined, read_meeting, when_words as meeting_when
 from foundry.items import MAKES_NOTHING, OWES_FORMAT, ItemStore
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
@@ -447,6 +448,8 @@ class Settings:
     commands_path: Path | str = ""
     # Where files people send as answers are kept, in a folder for each client and job.
     inputs_dir: Path | str = "foundry-inputs"
+    # Each person's private room with Foundry, by their Switch id.
+    private_rooms: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.commands_path:
@@ -468,7 +471,8 @@ class Settings:
         return [outside for outside, rooms in self.workrooms.items() if rooms.studio != rooms.review and not rooms.agents]
 
     def inside_rooms(self) -> set[str]:
-        return {room for rooms in self.workrooms.values() for room in (rooms.studio, rooms.review)}
+        # A private room with one person is Foundry's own, as the studio is: what is said there is an answer, never a new request.
+        return {room for rooms in self.workrooms.values() for room in (rooms.studio, rooms.review)} | set(self.private_rooms.values())
 
     def all_rooms(self) -> list[str]:
         return list(dict.fromkeys([*self.workrooms, *self.inside_rooms()]))
@@ -508,7 +512,20 @@ class Settings:
             jobs_path=os.environ.get("FOUNDRY_JOBS_DB", "foundry-jobs.db"),
             commands_path=os.environ.get("FOUNDRY_COMMANDS_DB", ""),
             inputs_dir=os.environ.get("FOUNDRY_INPUTS_DIR", "foundry-inputs"),
+            private_rooms=private_rooms_from(os.environ.get(PRIVATE_ROOMS_KEY, "")),
         )
+
+
+PRIVATE_ROOMS_KEY = "FOUNDRY_PRIVATE_ROOMS"
+
+
+def private_rooms_from(text: str) -> dict[str, str]:
+    # room|person pairs, comma-separated: a Switch id has colons in it, so each pair is split on a bar.
+    return {person: room for room, _, person in (pair.partition("|") for pair in text.split(",")) if room and person}
+
+
+def private_rooms_text(rooms: dict[str, str]) -> str:
+    return ",".join(f"{room}|{person}" for person, room in rooms.items())
 
 
 class RoomsError(PackError):
@@ -571,6 +588,8 @@ class Desk:
         cleanup_llm: Callable[[str], str] | None = None,
         deep_llm: Callable[[str], str] | None = None,
         chat_llm: Callable[[str], str] | None = None,
+        people: "People | None" = None,
+        on_private_room: Callable[[dict[str, str]], None] | None = None,
         speaker: Callable[[str, str], bytes | None] = speak,
         translator: Callable[[str, str], str] = translate,
     ) -> None:
@@ -584,6 +603,9 @@ class Desk:
         self.cleanup_llm = cleanup_llm
         # The model for judgement calls, such as whose yes starts the work. Quick sorting stays on self.llm.
         self.deep_llm = deep_llm
+        self.people = people
+        self.on_private_room = on_private_room
+        self._private = dict(settings.private_rooms)
         self.chat_llm = chat_llm
         self.speaker = speaker
         self.translator = translator
@@ -835,8 +857,28 @@ class Desk:
         return headline(job.brief or "this job")
 
     def _approval_room(self, job: Job) -> str:
-        # A named approver works inside, so a client never sees what they haven't been asked about.
-        return job.room_id if job.approver == job.requester else self.settings.workrooms_for(job.room_id).studio
+        # The approver is asked on their own, in a private room with Foundry, so a group never fills with someone else's approvals.
+        # Without one, a named approver works inside, so a client never sees what they haven't been asked about.
+        shared = job.room_id if job.approver == job.requester else self.settings.workrooms_for(job.room_id).studio
+        return self._private_room(job.room_id, job.approver) or shared
+
+    def _private_room(self, room_id: str, person: str) -> str | None:
+        if person in self._private:
+            return self._private[person]
+        if self.people is None:
+            return None
+        try:
+            username, bridge = self.people.username_of(room_id, person), self.people.bridge_of(room_id)
+            if not username:
+                return None
+            made = self.client.open_direct_room(bridge, username)
+        except Exception as error:
+            logger.warning("Could not open a private room with %s, so they are asked in the group: %s", person, error)
+            return None
+        self._private[person] = made
+        if self.on_private_room:
+            self.on_private_room(dict(self._private))
+        return made
 
     def _ask_makers(self, job: Job, retry: bool = False) -> None:
         makers = self.settings.team_for(job.room_id).makers
@@ -1929,6 +1971,11 @@ class Desk:
         # What people say back to the who-owes list, and a question about where the work is, before anything is sorted as a request.
         if self.coordinator.take(burst) or self.coordinator.tell_stage(burst):
             return
+        if self.people is not None:
+            try:
+                burst = replace(burst, text=self.people.named(burst.room_id, burst.text))
+            except Exception as error:
+                logger.warning("Could not read who was tagged: %s", error)
         if self._set_meeting(burst):
             return
         kind = classify(burst.text, self.llm, self.settings.pack_for(burst.room_id).update_rule)
@@ -2030,6 +2077,12 @@ class Desk:
         # Whose yes starts the work, read from what was said and not from an @: "Girish, can you do the logo?" is Girish's, and "cc Girish, we need a logo" stays with whoever asked.
         people = {writer.sender_name: writer.sender for writer in self.log.writers(self.settings.bucket_for(burst.room_id))
                   if writer.sender_name and writer.sender != burst.sender and not writer.sender.startswith(AGENT_SENDER_PREFIX)}
+        # Anyone the message names counts too, though they have never written here: the chat app's directory knows them.
+        if self.people is not None:
+            try:
+                people |= {person.name: person.sender for person in self.people.on(burst.room_id) if person.sender != burst.sender and person.name.casefold() in burst.text.casefold()}
+            except Exception as error:
+                logger.warning("Could not read the chat app's directory: %s", error)
         if not people:
             return None
         try:

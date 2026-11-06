@@ -82,6 +82,13 @@ class SwitchClient:
         entries = [entry for thread in timeline["threads"] for entry in [thread["root"], *thread["replies"]]]
         return "\n".join(f"{entry['sender_name']}: {entry['body']}" for entry in entries if entry["kind"] == "message" and entry["sender_name"] != DESK_NAME)
 
+    def open_direct_room(self, bridge_id: str, username: str) -> str:
+        """A room with Foundry and one person on their chat app, which Switch opens without them writing first. Its id."""
+        made = self._call("POST", f"/agents/{self.agent_id}/ops/create_room", headers=self._session_headers(), json={
+            "name": f"Foundry and {username}", "agent_names": [DESK_NAME], "user_names": [username], "channel_type": "direct", "bridge_id": bridge_id,
+        }).json()["result"]
+        return made["id"]
+
     def room_documents(self, room_id: str) -> list[str]:
         """The names of the documents a room gives its members."""
         room = self._call("POST", f"/agents/{self.agent_id}/ops/connect_to_room", headers=self._session_headers(),

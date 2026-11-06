@@ -9,7 +9,9 @@ from pathlib import Path
 import httpx
 from foundry.adopt import adopt
 from foundry.daily import check_packs
-from foundry.desk import SHARED_AGENTS, Desk, Settings, run
+from foundry.adopt import write_env
+from foundry.desk import PRIVATE_ROOMS_KEY, SHARED_AGENTS, Desk, Settings, private_rooms_text, run
+from foundry.people import People
 from foundry.gates import QueuedCardGate
 from foundry.intake import chat_llm, default_llm
 from foundry.jobs import JobStore
@@ -19,7 +21,7 @@ from foundry.switch_client import SwitchClient
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 # The rooms a desk follows. A business added on the dashboard writes them here, and the desk starts following them without a restart.
-ROOM_KEYS = ("FOUNDRY_ROOMS", "FOUNDRY_PACKS")
+ROOM_KEYS = ("FOUNDRY_ROOMS", "FOUNDRY_PACKS", PRIVATE_ROOMS_KEY)
 ROOM_CHECK_SECONDS = 30
 
 
@@ -81,7 +83,9 @@ def start_desk() -> bool:
     cleanup_llm = default_llm(os.environ.get("FOUNDRY_CLEANUP_MODEL", "claude-sonnet-5-5"))
     # Each kind of work gets the model it needs: quick sorting of every message, and a stronger one for judgement calls.
     deep_llm = default_llm(os.environ.get("FOUNDRY_DEEP_MODEL") or "claude-opus-5-5")
-    desk = Desk(client, store, QueuedCardGate(client), default_llm(), settings, cleanup_llm=cleanup_llm, deep_llm=deep_llm, chat_llm=chat_llm(os.environ.get("FOUNDRY_CHAT_MODEL") or None))
+    desk = Desk(client, store, QueuedCardGate(client), default_llm(), settings, cleanup_llm=cleanup_llm, deep_llm=deep_llm, chat_llm=chat_llm(os.environ.get("FOUNDRY_CHAT_MODEL") or None),
+                people=People() if os.environ.get("SWITCH_EMAIL") else None,
+                on_private_room=lambda rooms: write_env(ENV_FILE, {PRIVATE_ROOMS_KEY: private_rooms_text(rooms)}))
     try:
         return asyncio.run(run_until_rooms_change(desk, settings.all_rooms()))
     except httpx.HTTPStatusError as error:
