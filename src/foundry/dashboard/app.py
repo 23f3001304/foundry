@@ -273,7 +273,10 @@ async def connections_and_unset(request: Request, user: User, timeout: float) ->
         rooms = await gateway.rooms(switch)
     rows = request.app.state.reader.connections(user, bridges, rooms)
     shown = {row.id for row in rows}
-    return rows, [bridge for bridge in bridges if bridge.id not in shown]
+    # Never one with a room of any business on it: that one is theirs, not new.
+    known = request.app.state.reader.settings
+    taken = {room.bridge_id for room in rooms if room.id in {*known.brands, *known.packs, *known.all_rooms()}}
+    return rows, [bridge for bridge in bridges if bridge.id not in shown and bridge.id not in taken]
 
 
 async def own_connection(request: Request, user: User, bridge_id: str) -> ConnectionRow | None:
