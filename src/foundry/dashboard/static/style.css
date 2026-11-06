@@ -994,6 +994,9 @@ ol.trail > li:last-child .trail-dot { outline-color: var(--fam-line, var(--rule-
 @media (max-width: 640px) { .trail-when { order: 0; flex-basis: 100%; margin-left: 0; } }
 .flagged-row .title-cell a::before { content: ""; display: inline-block; width: var(--space-8); height: var(--space-8); margin-right: var(--space-8); vertical-align: middle; background: var(--orchid-mark); border-radius: 50%; }
 
+/* The code a person posts from their chat account to link it. Big enough to read off one screen and type on another. */
+.code-big { margin: 0; font-size: var(--text-32); line-height: var(--line-32); font-weight: 700; }
+
 .log-jobs-head { margin-top: var(--section); }
 .log-jobs { margin-top: 0; }
 .log-jobs > section { margin: 0; }

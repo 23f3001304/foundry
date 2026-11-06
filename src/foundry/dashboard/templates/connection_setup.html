@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% from "_ui.html" import page_title %}
+{% block head %}{% if code %}<meta http-equiv="refresh" content="5;url=/connections/{{ bridge_id }}/setup">{% endif %}{% endblock %}
+{% block main %}
+<header class="page-head">
+  {{ page_title([("Connections", "/connections")], "Set up a business") }}
+  {% if connection %}<p class="lead">On {{ connection.name }}. Link your own account there once, then name the business, and Foundry makes its rooms and starts answering in them.</p>{% endif %}
+</header>
+{% if problem %}<p class="alert" role="alert">{{ problem }}</p>{% endif %}
+{% if connection %}
+<ol class="stepper-named setup-steps">
+  <li class="{{ 'step-past' if linked else 'step-now' }}">Link your account</li>
+  <li class="{{ 'step-now' if linked else '' }}">Make the business's rooms</li>
+</ol>
+{% if code %}
+<section class="panel stack">
+  <h2>Post this code from your account</h2>
+  <p class="code-big mono">{{ code[0] }}</p>
+  <div class="small">{{ code[1] }}</div>
+  <p class="small">This page checks every few seconds and moves on once the code arrives.</p>
+</section>
+{% elif not linked %}
+<section class="panel stack">
+  <h2>Which account is yours?</h2>
+  <form class="inline-field" method="get" action="/connections/{{ bridge_id }}/setup">
+    <label for="q">Your name or username</label>
+    <input id="q" name="q" type="search" value="{{ query }}" placeholder="Your name or username" required>
+    <button type="submit">Find me</button>
+  </form>
+  {% if note %}<p class="small">{{ note }}</p>{% endif %}
+  {% if query and not people %}<p class="note">Nobody by that name. On an app that cannot list its people, write anything to Foundry there first, then search again.</p>{% endif %}
+  {% if people %}
+  <ul class="rows">
+    {% for person in people %}
+    <li>
+      <form class="buttons" method="post" action="/connections/{{ bridge_id }}/link">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="external_user_id" value="{{ person.external_user_id }}">
+        <input type="hidden" name="username" value="{{ person.username }}">
+        <span class="strong">{{ person.display_name }}</span>{% if person.username and person.username != person.display_name %} <span class="small">{{ person.username }}</span>{% endif %}
+        <button class="small" type="submit">This is me</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% else %}
+<form class="stack panel" method="post" action="/connections/{{ bridge_id }}/business" autocomplete="off">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <h2>Name the business</h2>
+  <div class="field">
+    <label for="business">Business name</label>
+    <span class="small">Lowercase letters, digits and dashes.</span>
+    <input id="business" name="business" type="text" maxlength="40" placeholder="somecorp" required>
+  </div>
+  <div class="field">
+    <label for="brand">Brand kit</label>
+    <select id="brand" name="brand" required>{% for brand in brands %}<option value="{{ brand }}">{{ brand }}</option>{% endfor %}</select>
+  </div>
+  <div class="field">
+    <label for="business_kind">Kind</label>
+    <select id="business_kind" name="business_kind"><option value="internal">A business or department of our own</option><option value="agency">An agency client with agents of its own</option></select>
+  </div>
+  <div class="buttons"><button class="primary" type="submit">Make the rooms</button></div>
+  <p class="small">This takes up to a minute. Foundry makes the rooms on {{ connection.name }}, puts you in them, and starts following them on its own.</p>
+</form>
+{% endif %}
+{% endif %}
+{% endblock %}

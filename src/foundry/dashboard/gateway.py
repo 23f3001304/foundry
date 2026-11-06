@@ -260,9 +260,50 @@ def configuration(kind: BridgeType, form: Mapping) -> tuple[dict, list[str], lis
     return config, missing, secrets
 
 
-async def add_bridge(switch: httpx.AsyncClient, kind: BridgeType, name: str, config: dict, secrets: Sequence[str]) -> None:
+async def add_bridge(switch: httpx.AsyncClient, kind: BridgeType, name: str, config: dict, secrets: Sequence[str]) -> str:
+    # The new connection's id, so the dashboard can go straight on to setting a business up on it. Empty if Switch didn't say.
     body = {"bridge_type": kind.key, "display_name": name, "connection_config": config, "set_as_default": False, "channel_creation_enabled": kind.channels}
-    await ask(switch, "POST", "/collaborations", secrets, trouble=ADD_TROUBLE, lost=ADD_LOST, json=body)
+    answer = await ask(switch, "POST", "/collaborations", secrets, trouble=ADD_TROUBLE, lost=ADD_LOST, json=body)
+    try:
+        found = answer.json()
+    except ValueError:
+        return ""
+    return str(found.get("bridge_id") or found.get("id") or "") if isinstance(found, dict) else ""
+
+
+@dataclass(frozen=True)
+class Person:
+    external_user_id: str
+    username: str
+    display_name: str
+
+
+async def linked_on(switch: httpx.AsyncClient, bridge_id: str) -> bool:
+    # Whether this login's chat account on the connection is linked and confirmed, which Switch needs before it makes rooms there for it.
+    return any(isinstance(item, dict) and item.get("bridge_id") == bridge_id and item.get("verified") for item in await listed(switch, "/auth/me/identities"))
+
+
+async def find_people(switch: httpx.AsyncClient, bridge_id: str, query: str) -> tuple[list[Person], str]:
+    # The chat app's own member list where it has one. Telegram has none, so it is the people who have already written to Foundry, and the note says so.
+    answer = await ask(switch, "GET", f"/collaborations/{quote(bridge_id, safe='')}/directory", params={"query": query})
+    try:
+        found = answer.json()
+    except ValueError:
+        raise SwitchProblem(502, TROUBLE) from None
+    people = [Person(str(item.get("external_user_id")), str(item.get("username") or ""), str(item.get("display_name") or item.get("username") or ""))
+              for item in found.get("users", []) if isinstance(item, dict) and item.get("external_user_id")]
+    note = str(found.get("note") or "") if found.get("source") == "known" else ""
+    return people, note
+
+
+async def claim(switch: httpx.AsyncClient, bridge_id: str, person: Person) -> tuple[str, str]:
+    # The one-time code and where to post it. Posting it from that account is what proves the account is yours.
+    answer = await ask(switch, "POST", f"/collaborations/{quote(bridge_id, safe='')}/identities", json={"external_user_id": person.external_user_id, "username": person.username, "expects_confirmation": True})
+    try:
+        code = (answer.json().get("link_request") or {}).get("code") or {}
+    except (ValueError, AttributeError):
+        raise SwitchProblem(502, TROUBLE) from None
+    return str(code.get("code") or ""), str(code.get("instructions") or "")
 
 
 async def delete_bridge(switch: httpx.AsyncClient, bridge_id: str) -> None:

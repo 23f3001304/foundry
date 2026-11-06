@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{% if try_mode %}Made-up data: {% endif %}{{ title }} - Foundry</title>
 <link rel="stylesheet" href="/static/style.css">
+{% block head %}{% endblock %}
 </head>
 {% from "_ui.html" import switcher, avatar %}
 {% macro nav_item(key, href, name, family, count=0, says="waiting") %}

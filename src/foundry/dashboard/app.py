@@ -6,6 +6,8 @@ import os
 import re
 import secrets
 import sqlite3
+import subprocess
+import sys
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -82,6 +84,7 @@ CONFIRM_FIRST = "Open the warning for this connection first. Nothing was deleted
 ROOMS_CHANGED = "The rooms on this connection changed since you looked, so nothing was deleted. Read the warning again and confirm."
 NOTICES = {
     "added": "The connection was added. It has no rooms yet, so it shows in this list once a room of yours uses it.",
+    "rooms": "The business's rooms were made. Foundry starts following them within a minute, so write to it there.",
     "removed": "The connection and the rooms on it were deleted.",
     "saved": "Saved. The new file is used straight away, including on jobs already running. The agents' copy of the brand kit in Switch is not changed by this.",
 }
@@ -352,6 +355,37 @@ def add_page(request: Request, user: User, kinds: list[gateway.BridgeType], chos
     return render(request, "connection_add.html", user, status, title="Add a connection", page="connections", kinds=kinds, chosen=chosen, problem=problem, unsure=unsure, gateway_link=connections_link(request))
 
 
+REPO = Path(__file__).resolve().parents[3]
+BUSINESS_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+ROOMS_NOT_MADE = "The rooms were not made. {why}"
+NO_CODE = "Switch did not give a code for that account. Pick it again."
+BAD_BUSINESS = "A business name is lowercase letters, digits and dashes, like somecorp, and it needs a brand kit."
+
+
+def brand_folders() -> list[str]:
+    # A business is made from one of the kits in brands/.
+    folder = REPO / "brands"
+    return sorted(kit.name for kit in folder.iterdir() if (kit / "kit.md").is_file()) if folder.is_dir() else []
+
+
+def business_wanted(form: FormData) -> tuple[str, str, str]:
+    name, brand = str(form.get("business") or "").strip().lower(), str(form.get("brand") or "")
+    mode = "agency" if form.get("business_kind") == "agency" else "internal"
+    if not BUSINESS_NAME.fullmatch(name) or brand not in brand_folders():
+        raise ValueError(BAD_BUSINESS)
+    return mode, name, brand
+
+
+def make_rooms(mode: str, name: str, brand: str, connection: str) -> str:
+    # The same tool a person runs by hand. It writes the rooms into .env, and the desk picks them up from there. Its last line says what went wrong, if anything did.
+    done = subprocess.run([sys.executable, str(REPO / "tools" / "create_rooms.py"), mode, name, brand, "--outside-bridge", connection],
+                          cwd=REPO, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600)
+    if done.returncode == 0:
+        return ""
+    lines = [line for line in (done.stderr + done.stdout).splitlines() if line.strip() and not line.startswith(("HTTP Request", " ", "Traceback"))]
+    return lines[-1] if lines else "The room tool stopped without saying why."
+
+
 @signed_in
 async def connection_add_page(request: Request, user: User) -> Response:
     if not user.businesses:
@@ -393,14 +427,78 @@ async def connection_add(request: Request, user: User, form: FormData) -> Respon
             config, missing, secrets_typed = gateway.configuration(chosen, form)
             if problem := add_problem(name, missing):
                 return add_page(request, user, kinds, chosen, problem, 400)
-            await gateway.add_bridge(switch, chosen, name, config, secrets_typed)
+            bridge_id = await gateway.add_bridge(switch, chosen, name, config, secrets_typed)
     except gateway.SwitchProblem as trouble:
         if trouble.unsure:
             note_connection(request, user, list(user.businesses), "added", name, chosen.key, sure=False)
         return add_page(request, user, kinds, chosen, trouble.message, trouble.status, trouble.unsure)
     logger.info("%s added a %s connection.", user.login, chosen.key)
     note_connection(request, user, list(user.businesses), "added", name, chosen.key)
-    return RedirectResponse("/connections?done=added", 303)
+    # Straight on to setting a business up on it, the step that makes it useful.
+    return RedirectResponse(f"/connections/{bridge_id}/setup" if bridge_id else "/connections?done=added", 303)
+
+
+async def setup_page(request: Request, user: User, bridge_id: str, problem: str = "", code: tuple[str, str] | None = None, status: int = 200) -> Response:
+    query = " ".join(str(request.query_params.get("q") or "").split())[:80]
+    connection, linked, people, note = None, False, [], ""
+    try:
+        async with gateway.open_gateway(request, gateway.WRITE_TIMEOUT) as switch:
+            connection = next((bridge for bridge in await gateway.bridges(switch) if bridge.id == bridge_id), None)
+            if connection is None:
+                raise HTTPException(404)
+            linked = await gateway.linked_on(switch, bridge_id)
+            if not linked and query and code is None:
+                people, note = await gateway.find_people(switch, bridge_id, query)
+    except gateway.SwitchProblem as trouble:
+        problem, status = problem or trouble.message, trouble.status
+    return render(request, "connection_setup.html", user, status, title="Set up a business", page="connections", connection=connection, bridge_id=bridge_id,
+                  linked=linked, people=people, note=note, query=query, code=code, brands=brand_folders(), problem=problem)
+
+
+@signed_in
+async def connection_setup(request: Request, user: User) -> Response:
+    if not user.businesses:
+        raise HTTPException(403)
+    return await setup_page(request, user, request.path_params["bridge_id"])
+
+
+@signed_in
+async def connection_link(request: Request, user: User, form: FormData) -> Response:
+    # Picking yourself starts the link. It counts once the code is posted from that account, which the page checks every few seconds.
+    if not user.businesses:
+        raise HTTPException(403)
+    bridge_id = request.path_params["bridge_id"]
+    person = gateway.Person(str(form.get("external_user_id") or ""), str(form.get("username") or ""), "")
+    try:
+        async with gateway.open_gateway(request, gateway.WRITE_TIMEOUT) as switch:
+            code = await gateway.claim(switch, bridge_id, person)
+    except gateway.SwitchProblem as trouble:
+        return await setup_page(request, user, bridge_id, trouble.message, status=trouble.status)
+    if not code[0]:
+        return await setup_page(request, user, bridge_id, NO_CODE)
+    return await setup_page(request, user, bridge_id, code=code)
+
+
+@signed_in
+async def connection_business(request: Request, user: User, form: FormData) -> Response:
+    if not user.businesses:
+        raise HTTPException(403)
+    bridge_id = request.path_params["bridge_id"]
+    try:
+        business = business_wanted(form)
+    except ValueError as wrong:
+        return await setup_page(request, user, bridge_id, str(wrong), status=400)
+    try:
+        async with gateway.open_gateway(request, gateway.READ_TIMEOUT) as switch:
+            connection = next((bridge for bridge in await gateway.bridges(switch) if bridge.id == bridge_id), None)
+    except gateway.SwitchProblem as trouble:
+        return await setup_page(request, user, bridge_id, trouble.message, status=trouble.status)
+    if connection is None:
+        raise HTTPException(404)
+    if why := await run_in_threadpool(make_rooms, *business, connection.name):
+        return await setup_page(request, user, bridge_id, ROOMS_NOT_MADE.format(why=why))
+    logger.info("%s made the rooms of %s on %s.", user.login, business[1], connection.name)
+    return RedirectResponse("/connections?done=rooms", 303)
 
 
 def remove_page(request: Request, user: User, row: ConnectionRow | None, problem: str = "", status: int = 200, unsure: bool = False) -> Response:
@@ -706,6 +804,9 @@ def create_app(settings: Settings, switch_url: str, transport: httpx.AsyncBaseTr
         Route("/connections", connections),
         Route("/connections/add", connection_add_page),
         Route("/connections/add", connection_add, methods=["POST"]),
+        Route("/connections/{bridge_id}/setup", connection_setup),
+        Route("/connections/{bridge_id}/link", connection_link, methods=["POST"]),
+        Route("/connections/{bridge_id}/business", connection_business, methods=["POST"]),
         Route("/connections/{bridge_id}/remove", connection_remove_page),
         Route("/connections/{bridge_id}/remove", connection_remove, methods=["POST"]),
         Route("/data", data),

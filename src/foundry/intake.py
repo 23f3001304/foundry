@@ -46,7 +46,7 @@ def classify(text: str, llm: Callable[[str], str], update_rule: str = "") -> Kin
 
 def cli_llm(model: str | None = None) -> Callable[[str], str]:
     # For a team on a Claude subscription with no API key. No tools, because the prompt holds people's words.
-    model = model or os.environ.get("FOUNDRY_CLASSIFIER_MODEL", "claude-haiku-5-5")
+    model = model or os.environ.get("FOUNDRY_CLASSIFIER_MODEL", "claude-sonnet-5-5")
     command = ["claude", "-p", "--model", model, "--tools", "", "--no-session-persistence", "--strict-mcp-config", "--disable-slash-commands"]
 
     def call(prompt: str) -> str:
@@ -65,7 +65,7 @@ def default_llm(model: str | None = None) -> Callable[[str], str]:
 
 def claude_llm(model: str | None = None) -> Callable[[str], str]:
     client = anthropic.Anthropic()
-    model = model or os.environ.get("FOUNDRY_CLASSIFIER_MODEL", "claude-haiku-5-5")
+    model = model or os.environ.get("FOUNDRY_CLASSIFIER_MODEL", "claude-sonnet-5-5")
 
     def call(prompt: str) -> str:
         response = client.messages.create(
