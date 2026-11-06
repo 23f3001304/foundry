@@ -55,10 +55,10 @@ def deliver_answers(job: Job, client: SwitchClient, outside_room_id: str, save: 
         post_answer_file(job, client, outside_room_id, path, Path(path).name, path, save)
 
 
-def deliver(job: Job, client: SwitchClient, outside_room_id: str) -> None:
+def deliver(job: Job, client: SwitchClient, outside_room_id: str, words: str = DELIVERED) -> None:
     if job.state is not State.APPROVED:
         raise NotApproved(f"Job {job.id} is {job.state.value}, not approved.")
-    client.post_message(outside_room_id, DELIVERED)
+    client.post_message(outside_room_id, words)
     for path in job.artifacts:
         client.post_file(outside_room_id, path, Path(path).name)
     advance(job, "delivered")

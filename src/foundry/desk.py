@@ -133,6 +133,7 @@ WORK_CHECK_LINE = re.compile("|".join(".+".join(map(re.escape, re.split(r"\{\w+\
 # The card only holds so much, so a file with many unsourced numbers shows the first few.
 MOST_NUMBERS_LISTED = 8
 HOW_TO_RESTART = "Press Try again to have another go as it is, or Give notes to say what to change or send what's missing."
+DELIVERED_TO_YOU = "Here is your final work. It's only here with you, so share it with the group when you're ready."
 RESEARCHED = "I looked up {count} public figures for this, each with its source and date, and gave them to the team."
 USE_RESEARCH = "Public figures Foundry looked up for this job, one a row with its source, link and publication date, are in {path}. Read them with the data tool's read_table. Show each figure's source and date where the figure appears, such as a line under the chart or table."
 NOT_SENT_FOR_REVIEW = "The work is made, but I could not send it to be checked."
@@ -1239,13 +1240,17 @@ class Desk:
             self._deliver_report(job)
             return
         clean_run = job.revision_rounds == 0
-        self._sticker(job.room_id, "approved")
-        deliver(job, self.client, job.room_id)
-        self._reply_aloud(job, DELIVERED)
-        self.log.add(self.clock(), job.bucket, job.room_id, DESK, "delivered", ", ".join(Path(path).name for path in job.artifacts), job_id=job.id)
+        # Work someone was asked to do is theirs to share: it goes to them alone, and they pass it on when they choose. Work a person asked for themself comes back where they asked.
+        private = self._private_room(job.room_id, job.approver) if job.approver != job.requester else None
+        room = private or job.room_id
+        self._sticker(room, "approved")
+        deliver(job, self.client, room, DELIVERED_TO_YOU if private else DELIVERED)
+        if not private:
+            self._reply_aloud(job, DELIVERED)
+        self.log.add(self.clock(), job.bucket, room, DESK, "delivered", ", ".join(Path(path).name for path in job.artifacts), job_id=job.id)
         self._keep_in_kit(job)
         # One sticker to end on, and the better one if nothing had to go back.
-        self._sticker(job.room_id, "celebrate" if clean_run and self._sticker_path(job.room_id, "celebrate") else "shipped")
+        self._sticker(room, "celebrate" if clean_run and self._sticker_path(job.room_id, "celebrate") else "shipped")
 
     # A brief that asks for nothing to be made: once its items are closed, the answers go back to the asker and the job closes. No maker, no reviewer and no number check.
     # Each step below is saved before the next, and the tick finishes whatever is left, so a restart or a refused post carries on where it stopped.
