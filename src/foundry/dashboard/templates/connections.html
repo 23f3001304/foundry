@@ -39,4 +39,12 @@
 {% endif %}
 <p class="small section-foot">To see every connection, change one, or work with a connection that isn't listed here, use <a href="{{ gateway_link }}">Switch's Gateway</a>.</p>
 {% endif %}
+{% if unset %}
+<section>
+  <div class="section-head"><h2>Not set up yet</h2></div>
+  <ul class="rows">
+    {% for bridge in unset %}<li><span class="strong">{{ bridge.name }}</span> <span class="small">{{ bridge.type }}</span> <a class="button small" href="/connections/{{ bridge.id|urlencode }}/setup">Set up a business</a></li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
 {% endblock %}

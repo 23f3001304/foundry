@@ -280,7 +280,7 @@ class Person:
 
 async def linked_on(switch: httpx.AsyncClient, bridge_id: str) -> bool:
     # Whether this login's chat account on the connection is linked and confirmed, which Switch needs before it makes rooms there for it.
-    return any(isinstance(item, dict) and item.get("bridge_id") == bridge_id and item.get("verified") for item in await listed(switch, "/auth/me/identities"))
+    return any(isinstance(item, dict) and item.get("bridge_id") == bridge_id and item.get("verified") is not False for item in await listed(switch, "/auth/me/identities"))
 
 
 async def find_people(switch: httpx.AsyncClient, bridge_id: str, query: str) -> tuple[list[Person], str]:

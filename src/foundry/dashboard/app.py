@@ -263,10 +263,17 @@ def logout(request: Request, user: User, form: FormData) -> Response:
 
 async def connection_rows(request: Request, user: User, timeout: float) -> list[ConnectionRow]:
     # The connections this login may see, as Switch has them now.
+    return (await connections_and_unset(request, user, timeout))[0]
+
+
+async def connections_and_unset(request: Request, user: User, timeout: float) -> tuple[list[ConnectionRow], list[gateway.Bridge]]:
+    # Also the connections with no business on them yet, which is where a new one starts.
     async with gateway.open_gateway(request, timeout) as switch:
         bridges = await gateway.bridges(switch)
         rooms = await gateway.rooms(switch)
-    return request.app.state.reader.connections(user, bridges, rooms)
+    rows = request.app.state.reader.connections(user, bridges, rooms)
+    shown = {row.id for row in rows}
+    return rows, [bridge for bridge in bridges if bridge.id not in shown]
 
 
 async def own_connection(request: Request, user: User, bridge_id: str) -> ConnectionRow | None:
@@ -305,13 +312,13 @@ def connections_link(request: Request) -> str:
 
 @signed_in
 async def connections(request: Request, user: User) -> Response:
-    rows, problem, status = [], "", 200
+    rows, unset, problem, status = [], [], "", 200
     if user.businesses:
         try:
-            rows = await connection_rows(request, user, gateway.READ_TIMEOUT)
+            rows, unset = await connections_and_unset(request, user, gateway.READ_TIMEOUT)
         except gateway.SwitchProblem as trouble:
             problem, status = trouble.message, trouble.status
-    return render(request, "connections.html", user, status, title="Connections", page="connections", rows=rows, problem=problem, notice=NOTICES.get(request.query_params.get("done", "")), gateway_link=connections_link(request))
+    return render(request, "connections.html", user, status, title="Connections", page="connections", rows=rows, unset=unset, problem=problem, notice=NOTICES.get(request.query_params.get("done", "")), gateway_link=connections_link(request))
 
 
 @signed_in
