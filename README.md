@@ -1,32 +1,182 @@
-![Foundry](assets/readme-banner.png)
+<p align="center">
+  <img src="assets/readme-banner.png" alt="Foundry" width="100%">
+</p>
 
-# Foundry
+<h3 align="center">Ask for work in the chat you already use. Agents make it, a person signs it off.</h3>
 
-A business's team asks for work in the chat they already use, by text or voice note. Agents in [Switch](https://github.com/sandbox-quantum/switch) rooms draft a brief, make the deck and the graphic, and check each other's work. A person approves the brief and signs off the result before anything is delivered.
+<p align="center">
+  <a href="#try-it-in-30-seconds"><b>Try it in 30 seconds</b></a> &nbsp;·&nbsp;
+  <a href="#a-five-minute-tour-for-judges"><b>Judge's tour</b></a> &nbsp;·&nbsp;
+  <a href="#how-it-works"><b>How it works</b></a> &nbsp;·&nbsp;
+  <a href="#run-the-real-thing"><b>Run the real thing</b></a> &nbsp;·&nbsp;
+  <a href="#where-the-code-is"><b>Code map</b></a>
+</p>
 
-The same setup also turns a messy note from the field into a clean report, and shows the person signing it exactly which words changed and which document backs each change.
+<p align="center">
+  Built on <a href="https://github.com/sandbox-quantum/switch">Agent Switch</a> for <b>Flip the Switch, Track 01 (Best Business Workflow)</b>
+</p>
 
-Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shilagate Homes, Morpankh Systems, Kasauti Capital Partners, Bhorvela Studio, Phatakha Pop and Ambaryug Teas are fictional, and so is everything in their folders, including every figure. The dashboard pages in the demo film come from those live runs, with part of the 14-day chart history seeded.
+---
+
+## What it is
+
+Small teams run on chat. Someone asks for a deck in the group, three people owe numbers for it, and the work depends on whoever remembers to chase them. **Foundry** reads that chat through Switch and turns each request into a brief a person approves. It asks each person privately for what they owe and reminds them, has agents make the deck or graphic on the client's brand, has a separate agent check it, and delivers nothing until a person signs it off.
+
+It works in Slack, Telegram, Mattermost, Discord and Teams, by text or by voice note in Indian languages, Hinglish included. The same setup also turns a messy note from the field into a clean report, and shows the person signing it exactly which words changed and which document backs each change.
+
+<p align="center">
+  <img src="assets/readme/overview.png" alt="Foundry's dashboard overview: one job stuck, one card waiting, and the last 14 days" width="92%">
+</p>
+
+> Lalten Cafe, Shilagate Homes, Morpankh Systems, Kasauti Capital Partners, Bhorvela Studio, Phatakha Pop and Ambaryug Teas are fictional, and so is everything in their folders, including every figure. The dashboard pages in the demo film come from live runs, with part of the 14-day chart history seeded.
+
+## Contents
+
+- [What it is](#what-it-is)
+- [Try it in 30 seconds](#try-it-in-30-seconds)
+- [A five-minute tour for judges](#a-five-minute-tour-for-judges)
+- [What sets it apart](#what-sets-it-apart)
+- [How it works](#how-it-works)
+  - [How a job moves](#how-a-job-moves)
+  - [The agents connected to Switch](#the-agents-connected-to-switch)
+  - [The Switch pieces behind each feature](#the-switch-pieces-behind-each-feature)
+  - [How the chat channels are set up](#how-the-chat-channels-are-set-up)
+- [What has been run](#what-has-been-run)
+- [Run the real thing](#run-the-real-thing)
+- [Play the demos](#play-the-demos)
+- [Doing it by hand](#doing-it-by-hand)
+- [Where the code is](#where-the-code-is)
+- [Good to know](#good-to-know)
+- [Art and credits](#art-and-credits)
+- [Licence](#licence)
+
+## Try it in 30 seconds
+
+All you need is [uv](https://docs.astral.sh/uv/). This opens the real dashboard on made-up data, with no agents and no accounts.
+
+```bash
+git clone https://github.com/23f3001304/foundry && cd foundry
+./setup.sh --try
+```
+
+On Windows:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\setup.ps1 --try
+```
+
+It prints the dashboard's address. No agents run, pressing a button sends nothing anywhere, it opens no connection to anything outside this machine, it doesn't read or write a real `.env`, and every page has a banner that says the data is made up. It takes about half a minute: 28 seconds on a fast connection with uv fetching Python and the packages, and 20 seconds once it has them. Press Ctrl+C to stop it.
 
 ## A five-minute tour for judges
 
-1. Run `./setup.sh --try` (on Windows, `powershell -ExecutionPolicy Bypass -File .\setup.ps1 --try`). It needs only uv, and opens the real dashboard on made-up data.
-2. **Overview**: what's stuck, what waits on you, and the last 14 days. Switch businesses at the top.
-3. **Jobs**: open one to see its stage, who owes what, and who approves.
-4. **Work**: the decks and graphics the agents made, slide by slide.
-5. **Action log**: open a flagged figure to see everyone behind it, from the file it came in to the person who signed off.
-6. **Settings**: what's connected, keys and models, and a project per company.
-7. Then read the code from "Where the code is" below.
+| | Page | What to look at |
+|:-:|---|---|
+| 1 | **Overview** | What's stuck, what waits on you, and the last 14 days. Switch businesses at the top. |
+| 2 | **Jobs** | Open one to see its stage, who owes what, and who approves. |
+| 3 | **Generated work** | The decks and graphics the agents made, slide by slide. |
+| 4 | **Action log** | Open a flagged figure to see everyone behind it, from the file it came in to the person who signed off. |
+| 5 | **Settings** | What's connected, keys and models, and a project per company. |
+| 6 | **The code** | Start from [Where the code is](#where-the-code-is). |
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/readme/jobs.png" alt="Jobs page"><br><sub><b>Jobs:</b> each job's stage, who owes what and who approves</sub></td>
+    <td width="50%"><img src="assets/readme/log.png" alt="Action log page"><br><sub><b>Action log:</b> the chain behind every figure</sub></td>
+  </tr>
+</table>
 
 ## What sets it apart
 
-- **One setup across chat platforms.** A single Switch template creates the rooms, agents and documents, and names the chat platform as a setting. Foundry's code talks to Switch, not to a platform.
-- **A separate agent checks the work.** Claude writes and makes, and `foundry-reviewer` checks the result against the brief and the brand kit. It runs on Claude now, the same vendor as the makers, so those runs are not a check by another vendor. An earlier run through delivery had Codex, on an OpenAI model, in that seat, and the seat can still be set to another vendor.
-- **Voice notes in Indian languages.** Sarvam's Saaras model reads Hinglish as spoken, a plain "haan" counts as approval, and whoever sends a voice note hears questions, the report and the final reply in their language. Cards stay in English.
-- **Code holds the gates, not prompts.** Makers aren't called until a brief is approved, only the approver's answer counts, and nothing is delivered before sign-off. A named approver signs off inside, so the client sees nothing until then. Someone approving their own job sees the brief and the files on the way.
-- **A report can't quietly invent things.** The model proposes each change with its evidence. Code drops any change whose evidence isn't really in the named document, does all the date maths itself, and flags numbers it can't trace. It flags names too, unless one opens a sentence, where a capital says nothing.
+| | |
+|---|---|
+| **One setup across chat platforms** | A single Switch template creates the rooms, agents and documents, and names the chat platform as a setting. Foundry's code talks to Switch, not to a platform. |
+| **A separate agent checks the work** | Claude writes and makes, and `foundry-reviewer` checks the result against the brief and the brand kit, from pictures of every slide. It runs on Claude now, the same vendor as the makers, so those runs are not a check by another vendor. An earlier run through delivery had Codex, on an OpenAI model, in that seat, and the seat can still be set to another vendor. |
+| **Voice notes in Indian languages** | Sarvam's Saaras model reads Hinglish as spoken. Foundry asks the sender "I heard: ... Is that right?", then the request goes on like a typed one. A plain "haan" counts as approval. |
+| **Code holds the gates, not prompts** | Makers aren't called until a brief is approved, only the approver's answer counts, and nothing is delivered before sign-off. Work asked of someone else is delivered to them privately, to share when they choose. |
+| **Numbers can't be made up quietly** | Makers show only figures they can trace to an answer, a file or a public source with a link. Code does the date maths, flags numbers it can't trace, and names a figure far from its peers on the final card. |
+| **Who owes what, chased for you** | Each person is asked in their own room and reminded, and can say "can't today" or pass it on. The asker sees who answered and who didn't. |
 
-## What has actually been run
+## How it works
+
+### How a job moves
+
+```mermaid
+flowchart LR
+    A["Request or voice note<br/>in the team's chat"] --> D{{"foundry-desk<br/>sorts it"}}
+    D -- "ordinary chat" --> C["kept as context"]
+    D -- "request" --> B["foundry-brief<br/>drafts a brief"]
+    B --> P1(["Brief card:<br/>a person approves"])
+    P1 --> O["Who owes what:<br/>asked privately,<br/>reminded"]
+    O --> M["foundry-deck and<br/>foundry-visual<br/>make the files"]
+    M --> R["foundry-reviewer<br/>checks"]
+    R -- "notes, up to 3 rounds" --> M
+    R -- "passes" --> P2(["Sign-off card:<br/>a person signs off"])
+    P2 --> F["Final work posted,<br/>and nothing else"]
+```
+
+A report skips the brief and the makers. The desk writes it from the note, asks the sender if something is unclear, and the approver signs off once.
+
+A follow-up skips the makers too. When a brief carries `MAKES: nothing` beside its `OWES` lines, Foundry asks each person and reminds them, and once the items close the answers go back to the asker and the job closes, straight in the job's room when the asker is also the approver and after one card to the approver when not.
+
+### The agents connected to Switch
+
+| | Agent | Runs on | Job |
+|:-:|---|---|---|
+| <img src="assets/team/smith.png" width="56" alt=""> | `foundry-desk` | Foundry's own process | Reads every room, sorts messages, runs approvals, chases who owes what, delivers |
+| <img src="assets/team/apprentice.png" width="56" alt=""> | `foundry-brief` | Claude | Turns a request into a one-page brief |
+| <img src="assets/team/designer.png" width="56" alt=""> | `foundry-deck` | Claude, with the `build_deck`, `write_copy`, `render_pictures` and `check_design` tools | Makes on-brand slides and a branded PDF of written copy, looks at pictures of them and fixes what it sees |
+| <img src="assets/team/designer.png" width="56" alt=""> | `foundry-visual` | Claude, with the `render_graphic`, `render_pictures` and `check_design` tools | Makes on-brand graphics in a composition it chooses, looks at them and fixes what it sees |
+| <img src="assets/team/reviewer.png" width="56" alt=""> | `foundry-reviewer` | Set by `FOUNDRY_REVIEWER_PROVIDER`. Claude in the recent runs, Codex in an earlier one. OpenCode works too | Checks the work against the brief, the brand kit and the design guide, from pictures of every slide |
+
+Each agency client made from now on has its own set of these four, named with its own ending, such as `foundry-deck-phatakha`, each in its own folder, so one client's work stays out of another's. **Rooms already in your `.env` have no ending, so they keep the shared agents until their rooms are made again,** and the desk says so in its log at start. An internal company or department shares one set across its rooms. When `FOUNDRY_IMAGES=on`, both makers also get a `generate_image` tool that draws on Vertex.
+
+### The Switch pieces behind each feature
+
+| Feature | Switch piece |
+|---|---|
+| Rooms, agents and documents for one client from one file | `version: 2` room template, with `from-template-document` |
+| Agency or internal room tree from one setting | Template `if:` on `org_mode` |
+| An internal department reusing the same agents | Template `filled` and `allow_existing` |
+| An agency client with agents of its own | A template param, `agent_suffix`, that ends each agent's name, and a folder named for the agent |
+| Reading all chat without being mentioned | Agent event stream with `filter=all` |
+| Who may ask and who may answer | Agent addressing policies, then Foundry's own check in `gates.py` |
+| Approvals with buttons | Approval cards on an agent session |
+| Questions with their answers as choices | Question cards on an agent session |
+| Notes and answers on WhatsApp | The open adapter from sandbox-quantum/switch#1166 with our button and list cards, in `integrations/whatsapp` |
+| Brand kit, business pack and design guide | Room documents, in the inside rooms only |
+| Deck, graphic, copy, picture and design check tools | MCP servers in each maker's `.mcp.json` |
+| Sending files and stickers | Room media route |
+| Agents on a machine you control | Agent controller, and the `agent_management` flag |
+| Keeping clients out of the workrooms | Separate rooms grouped and linked by label, with the desk alone in both |
+
+### How the chat channels are set up
+
+One template gives every business three kinds of room:
+
+| Room | Who is in it | What happens there |
+|---|---|---|
+| **Outside room** | The business's people, or an agency's client | Requests, voice notes, brief and sign-off cards, the final work |
+| **Studio room** | The desk, `foundry-brief`, the makers, the approver | Briefs are drafted and files are made |
+| **Review room** | The desk, the makers, `foundry-reviewer` | The work is checked, with notes sent back up to three times |
+
+Rooms go on whichever chat apps the Switch account is linked on. The outside room takes Telegram first, then Mattermost, then any other, and the inside rooms take Mattermost if the account is linked there. `--outside-bridge <app>` picks the app for outside people. Each person who owes an input is asked in a private room of their own. Once it's running, **Settings** in the dashboard gives the steps for connecting Telegram, Slack and Mattermost. The full rules are under [Doing it by hand](#doing-it-by-hand), step 4.
+
+## What has been run
+
+| Area | Status |
+|---|---|
+| Request, brief, approval, deck and poster, review, sign-off, delivery | ✅ Run live on Mattermost with real agents |
+| Who owes what: private asks, reminders, reasons, due cards | ✅ Run live in the IT firm and investment firm scenes |
+| Note clean-up into a report | ✅ Run live on Mattermost |
+| Marketing agency with two clients, each with agents of its own | ✅ Run live, with a person's help twice |
+| Pictures and logo marks drawn on Vertex | ✅ Run live |
+| Voice notes on Sarvam, Hinglish | ✅ Run live |
+| Telegram, Slack, Discord, Teams | ✅ Run live |
+| WhatsApp cards | ⚠️ Run against a local stand-in for Meta's API, not Meta's real one |
+| WhatsApp voice notes and incoming files | ❌ Not run |
+
+<details>
+<summary><b>Every run in detail, with what needed help and what wasn't shown</b></summary>
 
 | What | Status |
 |---|---|
@@ -62,95 +212,21 @@ Built for Flip the Switch, Track 01 (Best Business Workflow). Lalten Cafe, Shila
 | WhatsApp voice notes and incoming files | Not run |
 | Classifier through an Anthropic API key | Run live, and so has the Claude Code login route |
 
-## How a job moves
+</details>
 
-```
-Outside room           Studio room                 Review room
-request or voice note
-   |  foundry-desk sorts it, and ordinary chat stays as context
-   +------------------> foundry-brief drafts
-brief card  <----------+
-   |  approver says yes
-   +------------------> foundry-deck and foundry-visual make the files
-                           +-----------------------> foundry-reviewer checks
-                           <--- notes, up to 3 rounds --+
-sign-off card, with the files  <------------------------+ passes
-   |  approver says yes
-final work, and nothing else, posted here
-```
-
-A report skips the brief and the makers. The desk writes it from the note, asks the sender if something is unclear, and the approver signs off once.
-
-A follow-up skips the makers too. When a brief carries `MAKES: nothing` beside its `OWES` lines, Foundry asks each person and reminds them, and once the items close the answers go back to the asker and the job closes, straight in the job's room when the asker is also the approver and after one card to the approver when not.
-
-## Where the code is
-
-Start with these. Most other files are pictures, fonts and the made-up businesses' brand kits.
-
-- `src/foundry/desk.py` reads every room message, acts on approvals and turns requests into jobs.
-- `src/foundry/coordinator.py` works out who owes what, asks each person, reads their answers and reminds them.
-- `src/foundry/jobs.py` and `gates.py` hold the job states and who may approve, in code rather than in prompts.
-- `src/foundry/cards.py`, `chain.py` and `daily.py` are the approval cards, the "who said that?" chain and the daily report.
-- `src/foundry/tools/` are the tools the maker agents call: decks, charts, graphics and the log.
-- `src/foundry/dashboard/` is the dashboard, and `switch_client.py` is the one place Foundry talks to Switch.
-- `setup.sh`, `setup.ps1` and `tools/` set it all up; `scripts/` hold the demo scenes.
-
-## The team
-
-| Agent | Runs on | Job |
-|---|---|---|
-| `foundry-desk` | Foundry's own process | Reads every room, sorts messages, runs approvals, delivers |
-| `foundry-brief` | Claude | Turns a request into a one-page brief |
-| `foundry-deck` | Claude, with the `build_deck`, `write_copy`, `render_pictures` and `check_design` tools | Makes on-brand slides and a branded PDF of written copy, looks at pictures of them and fixes what it sees |
-| `foundry-visual` | Claude, with the `render_graphic`, `render_pictures` and `check_design` tools | Makes on-brand graphics in a composition it chooses, looks at them and fixes what it sees |
-| `foundry-reviewer` | Set by `FOUNDRY_REVIEWER_PROVIDER`. Claude in the recent runs, and Codex in the earlier run by another vendor. OpenCode works too | Checks the work against the brief, the brand kit and the design guide, from pictures of every slide |
-
-Each agency client made from now on has its own set of these four, named with its own ending, such as `foundry-deck-phatakha`, each in its own folder. That includes Lalten Cafe's and Green Valley's rooms on a fresh stack, because the rule that one client's work stays out of another's is not only for the demos. **Rooms already in your `.env` have no ending, so they keep the shared agents until their rooms are made again,** and the desk says so in its log at start. An internal company or department shares one set across its rooms. When `FOUNDRY_IMAGES=on`, both makers also get a `generate_image` tool.
-
-## Features and the Switch pieces behind them
-
-| Feature | Switch piece |
-|---|---|
-| Rooms, agents and documents for one client from one file | `version: 2` room template, with `from-template-document` |
-| Agency or internal room tree from one setting | Template `if:` on `org_mode` |
-| An internal department reusing the same agents | Template `filled` and `allow_existing` |
-| An agency client with agents of its own | A template param, `agent_suffix`, that ends each agent's name, and a folder named for the agent |
-| Reading all chat without being mentioned | Agent event stream with `filter=all` |
-| Who may ask and who may answer | Agent addressing policies, then Foundry's own check in `gates.py` |
-| Approvals with buttons | Approval cards on an agent session |
-| Questions with their answers as choices | Question cards on an agent session |
-| Notes and answers on WhatsApp | The open adapter from sandbox-quantum/switch#1166 with our button and list cards, in `integrations/whatsapp` |
-| Brand kit, business pack and design guide | Room documents, in the inside rooms only |
-| Deck, graphic, copy, picture and design check tools | MCP servers in each maker's `.mcp.json` |
-| Sending files and stickers | Room media route |
-| Agents on a machine you control | Agent controller, and the `agent_management` flag |
-| Keeping clients out of the workrooms | Separate rooms grouped and linked by label, with the desk alone in both |
-
-## Run it
+## Run the real thing
 
 Foundry is open source and runs on Agent Switch, which has its own licence. It runs on your own machine: one person can run several companies, each as its own project with its own rooms, brand folder, jobs and log. The dashboard answers only on this machine, so it doesn't ask anyone to sign in, which means anyone using this computer can use it.
 
-Once it's running, **Settings** in the dashboard shows what's connected, gives the steps for connecting Telegram, Slack and Mattermost, holds the keys and models, and makes a new project from a brand folder under `brands/`. An agent can run on a signed-in `claude`, `codex` or `opencode` CLI, or the desk can use a Claude API key. Saved keys go in `.env` and are never shown again. An agent's program is fixed when its project is made, so a change there reaches only new projects. Everything else takes effect after a restart. Gemini and OpenRouter haven't been proved here, so they aren't offered.
+**You need:**
 
-A hosted version, with sign-up and bots you just install, is what comes next. It isn't built.
+- [Docker](https://www.docker.com/products/docker-desktop/), running. Nothing can install it for you.
+- [uv](https://docs.astral.sh/uv/). If it's missing, the command says so and asks first. Saying yes fetches uv's official install script and runs it, and that script may change your shell profile or PATH, as [uv's own page](https://docs.astral.sh/uv/reference/installer/) says for macOS and Linux.
+- [Node](https://nodejs.org/) 24 or newer, because Switch's console needs it. Its corepack gets the right pnpm.
+- A signed-in [Claude Code](https://claude.com/claude-code). **Codex is not needed.** Codex alone can't run the real path, because the makers reach their deck and picture tools through a `.mcp.json` file that only Claude Code reads, and the desk's classifier uses Claude Code's login or `ANTHROPIC_API_KEY`.
+- About 10 GB of free disk.
 
-To have your own AI agent do it, paste this into Claude Code, Codex, Gemini CLI or another agent that can run commands: `Clone <the repo's address> and follow SETUP-WITH-AI.md in it to set up Foundry on my machine.` If you've already cloned it, `Follow SETUP-WITH-AI.md to set up Foundry on my machine.` in that folder does the same. It never asks for a token or key in chat, because you enter those in Settings yourself. This hasn't been tried on a clean machine yet.
-
-Otherwise there are two commands. On Windows, use `powershell -ExecutionPolicy Bypass -File .\setup.ps1` wherever this says `./setup.sh`, with the same flags. A default Windows machine refuses to run a script any other way. The Bypass applies only to that one run and changes no setting on your machine.
-
-**To look at it, with no agents and nothing else installed but [uv](https://docs.astral.sh/uv/):**
-
-```bash
-./setup.sh --try
-```
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\setup.ps1 --try
-```
-
-This starts the dashboard on made-up data and prints its address. No agents run, and pressing a button sends nothing anywhere. It opens no connection to anything outside this machine, doesn't read or write a real `.env`, and every page has a banner that says the data is made up. It takes about half a minute: 28 seconds on a fast connection with uv fetching Python and the packages, and 20 seconds once it has them. Press Ctrl+C to stop it.
-
-**To run the real thing:**
+**Then one command:**
 
 ```bash
 ./setup.sh
@@ -159,6 +235,15 @@ This starts the dashboard on made-up data and prints its address. No agents run,
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\setup.ps1
 ```
+
+On Windows, use the PowerShell line wherever this says `./setup.sh`, with the same flags. A default Windows machine refuses to run a script any other way. The Bypass applies only to that one run and changes no setting on your machine.
+
+To have your own AI agent set it up, paste this into Claude Code, Codex, Gemini CLI or another agent that can run commands: `Clone https://github.com/23f3001304/foundry and follow SETUP-WITH-AI.md in it to set up Foundry on my machine.` It never asks for a token or key in chat, because you enter those in Settings yourself. This hasn't been tried on a clean machine yet.
+
+Once it's running, **Settings** in the dashboard shows what's connected, gives the steps for connecting Telegram, Slack and Mattermost, holds the keys and models, and makes a new project from a brand folder under `brands/`. An agent can run on a signed-in `claude`, `codex` or `opencode` CLI, or the desk can use a Claude API key. Saved keys go in `.env` and are never shown again. An agent's program is fixed when its project is made, so a change there reaches only new projects. Everything else takes effect after a restart. Gemini and OpenRouter haven't been proved here, so they aren't offered. A hosted version, with sign-up and bots you just install, is what comes next. It isn't built.
+
+<details>
+<summary><b>What the command does, step by step, and its other flags</b></summary>
 
 From a fresh clone, this gets you a working Foundry on your machine. It takes under 3 minutes when Docker already has the images and uv its packages, which is the only way it has been timed, and we'd guess 15 to 20 minutes on a machine with neither, for 2.5 GB of images. It asks which demo you want rooms for, or give it `--demo it_firm`, `--demo investment_firm`, `--demo agency` or `--demo coffee_shop`, and `--yes` to accept what it would otherwise ask. In order, it:
 
@@ -180,13 +265,6 @@ From a fresh clone, this gets you a working Foundry on your machine. It takes un
 
 It never prints a secret. Each step checks whether it is already done, so if one fails, do what its one sentence says and run the command again.
 
-You need:
-
-- [Docker](https://www.docker.com/products/docker-desktop/), running. Nothing can install it for you.
-- [uv](https://docs.astral.sh/uv/). If it's missing, the command says so and asks first. Saying yes fetches uv's official install script and runs it, and that script may change your shell profile or PATH, as [uv's own page](https://docs.astral.sh/uv/reference/installer/) says for macOS and Linux.
-- [Node](https://nodejs.org/) 24 or newer, because Switch's console needs it. Its corepack gets the right pnpm.
-- A signed-in [Claude Code](https://claude.com/claude-code). **Codex is not needed.** Codex alone can't run the real path, because the makers reach their deck and picture tools through a `.mcp.json` file that only Claude Code reads, and the desk's classifier uses Claude Code's login or `ANTHROPIC_API_KEY`. This comes from reading the code, not from a run: Codex is out of usage here until Dec 4. With the reviewer on Claude, a vendor is checking its own work.
-- About 10 GB of free disk.
 
 Then:
 
@@ -196,13 +274,107 @@ Then:
 | `./setup.sh --stop` | Stops only processes it recorded starting, once each one's number and start time show it is the same process, and what those started. A maker's tool server it can't connect to them is left running, and it says which to close. |
 | `./setup.sh --reset` | Says what will go, asks, then removes only what it recorded making: its containers, volumes and network, the images it pulled, its parts of `.foundry`, the `.env` it wrote, `.venv` if it made it, and the agents' folder if its controller made it. Anything else stays, and it says what. With Docker off it refuses and changes nothing. |
 
-To play a demo once it's up, see steps 6 to 9 below. Your addresses are the ones it printed, which may not be the ports written there.
+To play a demo once it's up, see [Play the demos](#play-the-demos). Your addresses are the ones it printed, which may not be the ports written there.
 
-### Doing it by hand
+</details>
+
+## Play the demos
+
+Each demo plays scripted people against the real desk, real agents and real models. Run the real thing first, then open one.
+
+<details>
+<summary><b>Try it by hand: a café's menu launch and a builder's site note</b></summary>
+
+Sign in to Mattermost at http://127.0.0.1:8065 and open the `lalten` room. After a minute of quiet, or `FOUNDRY_QUIET_SECONDS` if you set it lower, the desk picks this up:
+
+> We need a short deck for our weekend menu launch and one poster to go with it. Kerala filter coffee is the new special, and we open at 7am on Saturday.
+
+Then open the `green-valley` room and try a note from the site:
+
+> palm court pe bhijli wala aaya tha, row 2 ki wiring ho gayi
+
+The contact sheet lists two electricians at Palm Court, so the desk asks which one. Reply with `Electrician A`, and a sign-off card shows the report and the change.
+
+`brands/shilagate-homes/sources/reports.md` has fixed dates. A note that says "the work started 2 days ago" only finds its match when the dates line up, so edit that file to suit the day you try it.
+
+</details>
+
+<details>
+<summary><b>The IT firm: a release status deck with three Team Leads owing figures</b></summary>
+
+Morpankh Systems is a fictional IT firm, and its client Harsingar Stores is made up too. A Delivery Manager asks for a release status deck, and three Team Leads each owe the figures for it. Team Lead A answers, Team Lead B says "blocked on QA", and Team Lead C says nothing. **The team's messages are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models.**
+
+Put Mattermost's admin sign-in and team name in `.env`. They are in Switch's own `.env`. Then make the scripted people, what they said before the scene, and 28 days of earlier work for the dashboard's charts. The history is marked as seeded in the log, and the dashboard's Overview and Responses say so. Running it again is safe at any age: it writes only what's missing, and says so when nothing is. After fresh rooms or a new bridge, run it again too: it writes no history a second time and moves each person it seeded to the new rooms and ids, so a person whose only line is seeded is asked in the new room. Anyone who really wrote since is still asked where they last wrote, until they write in the new room or the `foundry-*.db` files are deleted (they are in `.foundry/data` if the one command made them, and in this folder if you set Foundry up by hand). These scripts sign in as the admin and reset the password of anyone with a scripted person's name, so they refuse any `MATTERMOST_URL` or `SWITCH_URL` that isn't on this machine.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py ensure it_firm
+uv run --env-file .env python scripts/seed_history.py it_firm
+```
+
+In `.env`, set `FOUNDRY_QUIET_SECONDS=8`, and set `FOUNDRY_SET_TIMES` to two clock times, 25 and 28 minutes from now. Restart the desk, then play the scene from another terminal. It prints a timeline, and each step waits for what Foundry really does.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py play it_firm
+```
+
+The inputs are due 8 minutes in. The scene needs a reviewer that can run, or it stops at the review. See "What has actually been run" for how far it got.
+
+</details>
+
+<details>
+<summary><b>The investment firm: a quarterly review with five offices and one figure that jumps</b></summary>
+
+Kasauti Capital Partners is a fictional global investment firm, and every figure in it is made up. An Analyst Lead asks for a quarterly review deck, and Office Heads A to E each owe their office's assets under management. Four answer by chat, and Office Head C sends a file last. Office Head E's figure is made to jump, to more than three times its last quarter's and far from the other offices, and the desk's check for a figure far from its peers names it on the final card. The makers are told to work the deck's charts out with the data tools, from the answers, the file and `brands/demo-investment-firm/sources/quarterly_aum.csv`, so each figure traces to its calculation and its file, and a figure from a sent file to whoever sent it. **The offices' messages and file are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models. Its reports are internal summaries of made-up numbers, never advice.**
+
+The rooms come from step 4. Make the scripted people and what they said before the scene, as for the IT firm. The same refusal of any stack that isn't on this machine applies.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py ensure investment_firm
+uv run --env-file .env python scripts/seed_history.py investment_firm
+```
+
+Set `FOUNDRY_QUIET_SECONDS=8` in `.env`. The file Office Head C sends is `scripts/scenes/data/office-c-q2-fy27.csv`. The desk keeps it in `FOUNDRY_INPUTS_DIR`, and the makers' data tools open it from there, so the desk and the tools must mean the same folder. `tools/setup_makers.py` writes that folder into each maker's `.mcp.json` as a full path, so run the desk and the room set-up from this folder with the same `.env`, or give `FOUNDRY_INPUTS_DIR` as a full path. Restart the desk, then play the scene from another terminal.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py play investment_firm
+```
+
+The inputs are due 15 minutes in and the deck 60 minutes in. The scene needs a reviewer that can run, or it stops at the review. The brief agent reads the room's earlier messages, so a second play in the same rooms gets a brief that says it repeats the earlier request. Use fresh rooms before recording. See "What has actually been run" for how far it got.
+
+</details>
+
+<details>
+<summary><b>The marketing agency: two clients, two full campaign sets, agents of their own</b></summary>
+
+Bhorvela Studio is a fictional marketing agency with two fictional clients. Phatakha Pop is a loud fizzy drinks brand, and Ambaryug Teas is a quiet heritage tea house. A Marketing Manager at each asks for a full campaign set: a deck, a poster, social posts at 1080x1080 and 1080x1920, and written copy. Each client's kit leads its set, so the two are meant to come out looking and sounding different, and in the one live run they did. The agency's Account Director approves each brief and each finished set inside the studio rooms, and is a member of each client's review room too, because a long reply of the reviewer's is cut short on the sign-off card and the whole of it is there. The clients see nothing of any of it. **The people's messages are scripted. Everything Foundry says back, and every file, comes from the real desk, real agents and real models.** **This scene has been run live once, on Nov 5, 2026, with every agent on Claude, from a worktree against a running stack and not a fresh clone, and the run needed a person's help twice: the makers' tool servers timed out connecting and were restarted, and the reviewers' notes asked for layouts the tools cannot make. No picture was drawn, and a maker told directly to reach the other client's files was not tried.** See "What has actually been run" for exactly how far it got.
+
+What this demo shows about clients:
+
+- **Each client has agents of its own.** `foundry-deck-phatakha` and `foundry-deck-ambaryug` are different agents in different folders. A client's tools write only in that maker's own folder, show a picture only from it or the client's own brand folder, and open only that client's jobs and brand folder. The desk takes a file only from that client's makers' folders. A maker, reviewer or brief agent from one client is ignored in the other's rooms.
+- **A client only learns the stage.** Asked where its work is, it is told "being made" or "being checked", with no name of anyone inside and no who-owes list. Who-owes-what runs in internal mode only.
+- **Each client is its own bucket.** The desk picks the bucket from the room, and nothing a model sends can name one. Two clients' files and log entries never mix in a lookup.
+- **Clients never reach the dashboard.** It answers only on the machine running it, acting as the Account Director for that agency's project.
+- **Pictures are off by default.** With `FOUNDRY_IMAGES` off, the set is still complete, and its written copy has a "Pictures" section that says no pictures were drawn. With `FOUNDRY_IMAGES=on`, the makers may draw at most two pictures with `generate_image`, which calls the same Vertex model as `tools/gen_assets.py`. **Those pictures are AI-generated, and the files say so.** Google's policy bars passing generated content off as made only by people.
+
+Before the seed in step 4 makes these two clients' rooms, set `FOUNDRY_REVIEWER_PROVIDER=claude` and leave `FOUNDRY_REVIEWER_MODEL` empty in `.env`. Each client gets a reviewer of its own, and a reviewer's provider can't be changed once it is made. Then make the scripted people and play the scene. In `.env`, set `FOUNDRY_QUIET_SECONDS=8` first, and restart the desk after the seed so it follows the new rooms.
+
+```bash
+uv run --env-file .env python scripts/demo_people.py ensure agency
+uv run --env-file .env python scripts/demo_people.py play agency
+```
+
+Then open the files each client was given and read them. Phatakha Pop's set should name Mango Masala and never Ambaryug, and Ambaryug Teas' set should name the First Flush Reserve and never Phatakha.
+
+</details>
+
+## Doing it by hand
+
+<details>
+<summary><b>The same steps without the command: Switch, the agent controller, Foundry, the rooms and the desk</b></summary>
 
 These are the same steps without the command. Use them to see what each part does, or if the command can't run on your machine. You need Docker, uv, Node 24 or newer with pnpm, and a signed-in [Claude Code](https://claude.com/claude-code). You need a signed-in [Codex CLI](https://github.com/openai/codex) (`npm install -g @openai/codex`, then `codex login`) only if you set the reviewer to Codex. Commands use a POSIX shell, such as Git Bash on Windows.
 
-#### 1. Start Switch
+### 1. Start Switch
 
 These steps were tested at commit `2d72c57`.
 
@@ -227,7 +399,7 @@ docker compose -f deploy/local/standalone-docker-compose.yml --profile collab --
 
 The API is on port 8000 and Mattermost on port 8065. Sign in details are in Switch's `.env`: `GATEWAY_ADMIN_EMAIL` and `GATEWAY_ADMIN_PASSWORD` for the API, `MATTERMOST_ADMIN_USER` and `MATTERMOST_ADMIN_PASSWORD` for Mattermost.
 
-#### 2. Start the agent controller
+### 2. Start the agent controller
 
 This runs the agents on your machine. From `switch/console`:
 
@@ -251,7 +423,7 @@ Leave this running in its own terminal, one where the `claude` command works, an
 node packages/agent-controller/dist/cli.mjs run --data-dir ../controller-data --no-self-update
 ```
 
-#### 3. Set up Foundry
+### 3. Set up Foundry
 
 In a new terminal, from this repository:
 
@@ -265,7 +437,7 @@ Put the Switch admin email and password in `.env` as `SWITCH_EMAIL` and `SWITCH_
 uv run --env-file .env python tools/register_desk.py
 ```
 
-#### 4. Create the rooms
+### 4. Create the rooms
 
 This makes rooms for both fictional clients, one internal department to show the other room tree, the four rooms of Morpankh Systems, the fictional IT firm, the six rooms of Kasauti Capital Partners, the fictional investment firm, and the rooms of the marketing agency's two clients, Phatakha Pop and Ambaryug Teas. Each agency client is given agents of its own. The seed also writes each maker's `.mcp.json` and saves the room ids in `.env`.
 
@@ -289,7 +461,7 @@ With the outside room on one app and the inside rooms on another, the account is
 
 An agent that already exists keeps the instructions it was made with, because this only puts it back in its slot. So a stack made before the design guide does not get the guide by running this again: the new rooms hold it, and the old agents are never told to read it. To get it, run these steps again on a wiped Switch stack, or run `create_rooms` first, which gives the makers their tools and new rooms with the guide, and then change those agents' instructions in Switch Console to the ones in `templates/foundry.template.yaml`. Restart the makers either way, because they pick up `foundry-design` and `state_style` when they start. The desk names any room with no guide in its start log. It can't read an agent's instructions, so it can't name an agent.
 
-#### 5. Start the desk
+### 5. Start the desk
 
 Restart it whenever you add rooms, because it only follows the rooms named in `.env` when it starts.
 
@@ -297,7 +469,7 @@ Restart it whenever you add rooms, because it only follows the rooms named in `.
 uv run --env-file .env python -m foundry
 ```
 
-#### 6. Try it
+### 6. Try it (also under Play the demos)
 
 Sign in to Mattermost at http://127.0.0.1:8065 and open the `lalten` room. After a minute of quiet, or `FOUNDRY_QUIET_SECONDS` if you set it lower, the desk picks this up:
 
@@ -311,66 +483,31 @@ The contact sheet lists two electricians at Palm Court, so the desk asks which o
 
 `brands/shilagate-homes/sources/reports.md` has fixed dates. A note that says "the work started 2 days ago" only finds its match when the dates line up, so edit that file to suit the day you try it.
 
-#### 7. Play the IT firm demo
+</details>
 
-Morpankh Systems is a fictional IT firm, and its client Harsingar Stores is made up too. A Delivery Manager asks for a release status deck, and three Team Leads each owe the figures for it. Team Lead A answers, Team Lead B says "blocked on QA", and Team Lead C says nothing. **The team's messages are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models.**
+## Where the code is
 
-Put Mattermost's admin sign-in and team name in `.env`. They are in Switch's own `.env`. Then make the scripted people, what they said before the scene, and 28 days of earlier work for the dashboard's charts. The history is marked as seeded in the log, and the dashboard's Overview and Responses say so. Running it again is safe at any age: it writes only what's missing, and says so when nothing is. After fresh rooms or a new bridge, run it again too: it writes no history a second time and moves each person it seeded to the new rooms and ids, so a person whose only line is seeded is asked in the new room. Anyone who really wrote since is still asked where they last wrote, until they write in the new room or the `foundry-*.db` files are deleted (they are in `.foundry/data` if the one command made them, and in this folder if you set Foundry up by hand). These scripts sign in as the admin and reset the password of anyone with a scripted person's name, so they refuse any `MATTERMOST_URL` or `SWITCH_URL` that isn't on this machine.
+Start with these. Most other files are pictures, fonts and the made-up businesses' brand kits.
 
-```bash
-uv run --env-file .env python scripts/demo_people.py ensure it_firm
-uv run --env-file .env python scripts/seed_history.py it_firm
-```
+| Path | What it does |
+|---|---|
+| `src/foundry/desk.py` | Reads every room message, acts on approvals and turns requests into jobs |
+| `src/foundry/coordinator.py` | Works out who owes what, asks each person, reads their answers and reminds them |
+| `src/foundry/jobs.py`, `gates.py` | The job states and who may approve, in code rather than in prompts |
+| `src/foundry/cards.py`, `chain.py`, `daily.py` | The approval cards, the "who said that?" chain and the daily report |
+| `src/foundry/research.py` | Looks up public figures with their sources before the makers start |
+| `src/foundry/voice.py` | Voice notes in, through Sarvam |
+| `src/foundry/tools/` | The tools the maker agents call: decks, charts, graphics, pictures and the log |
+| `src/foundry/dashboard/` | The dashboard |
+| `src/foundry/switch_client.py` | The one place Foundry talks to Switch |
+| `templates/foundry.template.yaml` | The Switch room template: rooms, agents and documents |
+| `setup.sh`, `setup.ps1`, `tools/` | Set it all up |
+| `scripts/` | The demo scenes |
 
-In `.env`, set `FOUNDRY_QUIET_SECONDS=8`, and set `FOUNDRY_SET_TIMES` to two clock times, 25 and 28 minutes from now. Restart the desk, then play the scene from another terminal. It prints a timeline, and each step waits for what Foundry really does.
+## Good to know
 
-```bash
-uv run --env-file .env python scripts/demo_people.py play it_firm
-```
-
-The inputs are due 8 minutes in. The scene needs a reviewer that can run, or it stops at the review. See "What has actually been run" for how far it got.
-
-#### 8. Play the investment firm demo
-
-Kasauti Capital Partners is a fictional global investment firm, and every figure in it is made up. An Analyst Lead asks for a quarterly review deck, and Office Heads A to E each owe their office's assets under management. Four answer by chat, and Office Head C sends a file last. Office Head E's figure is made to jump, to more than three times its last quarter's and far from the other offices, and the desk's check for a figure far from its peers names it on the final card. The makers are told to work the deck's charts out with the data tools, from the answers, the file and `brands/demo-investment-firm/sources/quarterly_aum.csv`, so each figure traces to its calculation and its file, and a figure from a sent file to whoever sent it. **The offices' messages and file are scripted. Everything Foundry says back, and the deck, comes from the real desk, real agents and real models. Its reports are internal summaries of made-up numbers, never advice.**
-
-The rooms come from step 4. Make the scripted people and what they said before the scene, as for the IT firm. The same refusal of any stack that isn't on this machine applies.
-
-```bash
-uv run --env-file .env python scripts/demo_people.py ensure investment_firm
-uv run --env-file .env python scripts/seed_history.py investment_firm
-```
-
-Set `FOUNDRY_QUIET_SECONDS=8` in `.env`. The file Office Head C sends is `scripts/scenes/data/office-c-q2-fy27.csv`. The desk keeps it in `FOUNDRY_INPUTS_DIR`, and the makers' data tools open it from there, so the desk and the tools must mean the same folder. `tools/setup_makers.py` writes that folder into each maker's `.mcp.json` as a full path, so run the desk and the room set-up from this folder with the same `.env`, or give `FOUNDRY_INPUTS_DIR` as a full path. Restart the desk, then play the scene from another terminal.
-
-```bash
-uv run --env-file .env python scripts/demo_people.py play investment_firm
-```
-
-The inputs are due 15 minutes in and the deck 60 minutes in. The scene needs a reviewer that can run, or it stops at the review. The brief agent reads the room's earlier messages, so a second play in the same rooms gets a brief that says it repeats the earlier request. Use fresh rooms before recording. See "What has actually been run" for how far it got.
-
-#### 9. Play the marketing agency demo
-
-Bhorvela Studio is a fictional marketing agency with two fictional clients. Phatakha Pop is a loud fizzy drinks brand, and Ambaryug Teas is a quiet heritage tea house. A Marketing Manager at each asks for a full campaign set: a deck, a poster, social posts at 1080x1080 and 1080x1920, and written copy. Each client's kit leads its set, so the two are meant to come out looking and sounding different, and in the one live run they did. The agency's Account Director approves each brief and each finished set inside the studio rooms, and is a member of each client's review room too, because a long reply of the reviewer's is cut short on the sign-off card and the whole of it is there. The clients see nothing of any of it. **The people's messages are scripted. Everything Foundry says back, and every file, comes from the real desk, real agents and real models.** **This scene has been run live once, on Nov 5, 2026, with every agent on Claude, from a worktree against a running stack and not a fresh clone, and the run needed a person's help twice: the makers' tool servers timed out connecting and were restarted, and the reviewers' notes asked for layouts the tools cannot make. No picture was drawn, and a maker told directly to reach the other client's files was not tried.** See "What has actually been run" for exactly how far it got.
-
-What this demo shows about clients:
-
-- **Each client has agents of its own.** `foundry-deck-phatakha` and `foundry-deck-ambaryug` are different agents in different folders. A client's tools write only in that maker's own folder, show a picture only from it or the client's own brand folder, and open only that client's jobs and brand folder. The desk takes a file only from that client's makers' folders. A maker, reviewer or brief agent from one client is ignored in the other's rooms.
-- **A client only learns the stage.** Asked where its work is, it is told "being made" or "being checked", with no name of anyone inside and no who-owes list. Who-owes-what runs in internal mode only.
-- **Each client is its own bucket.** The desk picks the bucket from the room, and nothing a model sends can name one. Two clients' files and log entries never mix in a lookup.
-- **Clients never reach the dashboard.** It answers only on the machine running it, acting as the Account Director for that agency's project.
-- **Pictures are off by default.** With `FOUNDRY_IMAGES` off, the set is still complete, and its written copy has a "Pictures" section that says no pictures were drawn. With `FOUNDRY_IMAGES=on`, the makers may draw at most two pictures with `generate_image`, which calls the same Vertex model as `tools/gen_assets.py`. **Those pictures are AI-generated, and the files say so.** Google's policy bars passing generated content off as made only by people.
-
-Before the seed in step 4 makes these two clients' rooms, set `FOUNDRY_REVIEWER_PROVIDER=claude` and leave `FOUNDRY_REVIEWER_MODEL` empty in `.env`. Each client gets a reviewer of its own, and a reviewer's provider can't be changed once it is made. Then make the scripted people and play the scene. In `.env`, set `FOUNDRY_QUIET_SECONDS=8` first, and restart the desk after the seed so it follows the new rooms.
-
-```bash
-uv run --env-file .env python scripts/demo_people.py ensure agency
-uv run --env-file .env python scripts/demo_people.py play agency
-```
-
-Then open the files each client was given and read them. Phatakha Pop's set should name Mango Masala and never Ambaryug, and Ambaryug Teas' set should name the First Flush Reserve and never Phatakha.
-
-### Good to know
+<details>
+<summary><b>Notes on reviewers, approvers, voice, fonts, old databases, WhatsApp and keeping clients apart</b></summary>
 
 - **What the one command leaves behind:** what it makes is in `.foundry`, `.env` and `.venv`, all git-ignored, along with uv's own Python and cache, and uv itself if you let it install uv. The rest is Docker's containers, volumes and images under a compose project named `foundry-` and eight letters and numbers, and the agents' working folder at `~/.switch/agents/127.0.0.1-<port>`, which holds a small `.foundry-owner-*` file for each Foundry folder using it. `--reset` removes those too, except that it leaves the agents' folder, and says so, when another Foundry folder on the same port also uses it or its mark is missing. It leaves what Claude Code and Switch keep about each session in their own folders, `~/.claude/projects` and `~/.local/state/switch/sdk-sessions`, because those are theirs. It refuses to run over a `.env` it didn't write, so run it from a fresh clone if you already have a Foundry.
 - **Two Foundrys on one machine:** Switch's README says to run one agent controller per machine. A second with its own data folder and its own server ran beside a live one here without either touching the other.
@@ -388,6 +525,8 @@ Then open the files each client was given and read them. Phatakha Pop's set shou
 - **The reviewer's words stay off a client's card.** A client signing in their own room signs without them, because they can name agents and people the client never sees. So if the reviewer asks for a check, it is missed unless someone inside acts on it. The words stay in the review room, and an approver who signs inside reads them on the card, up to 500 characters. This is tested in code and not run live.
 - **Agency clients have their own makers, and an internal business's rooms share one folder.** An internal company or department is one business, so its rooms share one set of agents with one working folder. Agency clients do not: each is given agents of its own, in a folder of its own, because in our live check, when the makers were shared, a maker told to open decks already made read another client's deck and left the fact out by its own choice. Nothing in the code stopped it reading. Now a client's own maker tools write only in that maker's folder, read a picture only from it or the client's brand folder, and open only that client's jobs, and the desk takes a file only from that client's makers' folders. That confines the tools and the desk. It does not confine an agent's own access to the machine's files, which still reach any folder, and its agents are only told that other clients' folders are not theirs. The desk goes by the name of the folder a file is in, so it cannot tell a real maker's folder from another folder of the same name. The tool and desk confinement was run live on Nov 5, 2026, as the first table above says, and the agent's own access was not tried, so don't put real clients' confidential work on this setup as it stands. Switch itself lets any agent list every room, in all clients' businesses, and an agent of the same owner can remove another agent from a room. Reading a room's messages needs membership by Switch's own rule, and that was not seen refused here, because the desk is a member of every room, so it was the desk, not a maker, that was run against these operations.
 - **Pictures of slides use PowerPoint only when none is open.** With one open, the makers carry on without pictures, and the reviewer judges from the words. Foundry itself never stops it, so if a PowerPoint with no window stays running, or a maker says it stopped answering, close PowerPoint in Task Manager and restart the makers.
+
+</details>
 
 ## Art and credits
 
