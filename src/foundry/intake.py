@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 PROMPT = """You sort messages from a business's work chat.
 
 Reply with one word:
-{report_line}REQUEST if the message asks someone to make, write, design or change something, or says who owes an answer, date or figure that is wanted back.
+{report_line}CHAT if the message talks to Foundry, the team's assistant, and only wants a reply it can give straight away: small talk, how it is, or a question of fact such as the weather, a definition or a quick sum. Nothing is to be made.
+REQUEST if the message asks someone to make, write, design or change something, or says who owes an answer, date or figure that is wanted back.
 CONTEXT if the message only shares information or is ordinary conversation.
 UNSURE if you cannot tell which it is.
 
@@ -30,6 +31,7 @@ class Kind(Enum):
     REQUEST = "request"
     UNSURE = "unsure"
     REPORT = "report"
+    CHAT = "chat"
 
 
 def classify(text: str, llm: Callable[[str], str], update_rule: str = "") -> Kind:

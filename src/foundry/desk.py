@@ -77,7 +77,7 @@ from foundry.delivery import DELIVERED, deliver, deliver_answers, deliver_report
 from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, parse_reply, resolve_approver, revise_notes
 from foundry.intake import Kind, classify
 from foundry.people import People
-from foundry.meetings import NOW as MEETING_NOW, REMIND_BEFORE, SET as MEETING_SET, SOON as MEETING_SOON, MeetingStore, joined, read_meeting, when_words as meeting_when
+from foundry.meetings import NOW as MEETING_NOW, NOW_YOURS as MEETING_NOW_YOURS, REMIND_BEFORE, SET as MEETING_SET, SOON as MEETING_SOON, SOON_YOURS as MEETING_SOON_YOURS, SOUNDS_LIKE_A_MEETING, MeetingStore, joined, read_meeting, when_words as meeting_when
 from foundry.items import MAKES_NOTHING, OWES_FORMAT, ItemStore
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
 from foundry.log import DESIGN_STYLE, NEVER_A_SOURCE, Entry, Log
@@ -1979,7 +1979,9 @@ class Desk:
         if self._set_meeting(burst):
             return
         kind = classify(burst.text, self.llm, self.settings.pack_for(burst.room_id).update_rule)
-        if kind is Kind.REPORT:
+        if kind is Kind.CHAT:
+            self._chat(burst)
+        elif kind is Kind.REPORT:
             self._start_report(burst)
         elif kind is Kind.REQUEST:
             job = self._open_job(burst)
@@ -1995,6 +1997,12 @@ class Desk:
 
     def _set_meeting(self, burst: Burst) -> bool:
         names = {writer.sender: writer.sender_name for writer in self.log.writers(self.settings.bucket_for(burst.room_id)) if writer.sender_name and not writer.sender.startswith(AGENT_SENDER_PREFIX)}
+        # People named in the message who have never written here are found in the chat app's directory, so they are reminded too.
+        if self.people is not None and SOUNDS_LIKE_A_MEETING.search(burst.text):
+            try:
+                names |= {person.sender: person.name for person in self.people.on(burst.room_id) if person.name.casefold() in burst.text.casefold()}
+            except Exception as error:
+                logger.warning("Could not read the chat app's directory: %s", error)
         now = self.clock()
         try:
             found = read_meeting(burst.text, names.get(burst.sender, burst.sender), sorted(set(names.values())), now, self.deep_llm or self.llm)
@@ -2004,22 +2012,37 @@ class Desk:
         if found is None:
             return False
         at, what, people = found
-        self.meetings.add(burst.room_id, at, what, people)
-        self.client.post_message(burst.room_id, MEETING_SET.format(what=what, when=meeting_when(at, now), people=joined(people), before=int(REMIND_BEFORE.total_seconds() // 60)))
-        if self._sticker_mode(burst.room_id) == "playful":
-            self._sticker(burst.room_id, "approved", mode="playful")
+        by_name = {name.casefold(): sender for sender, name in names.items()}
+        senders = list(dict.fromkeys(sender for name in people if (sender := by_name.get(name.casefold()))))
+        self.meetings.add(burst.room_id, at, what, people, senders)
+        said = MEETING_SET.format(what=what, when=meeting_when(at, now), people=joined(people), before=int(REMIND_BEFORE.total_seconds() // 60))
+        # A meeting is personal, so each person hears it in their private room with Foundry. The group only hears it when nobody can be reached there.
+        rooms = [room for sender in dict.fromkeys([burst.sender, *senders]) if (room := self._private_room(burst.room_id, sender))]
+        for room in rooms or [burst.room_id]:
+            self.client.post_message(room, said)
+            if self._sticker_mode(burst.room_id) == "playful":
+                self._sticker(room, "approved", mode="playful")
         return True
 
     def _remind(self, now: datetime) -> None:
+        before = int(REMIND_BEFORE.total_seconds() // 60)
         for meeting in self.meetings.due(now):
-            people = joined(meeting.people)
+            starting = now >= meeting.at
+            if not starting and meeting.soon_sent:
+                continue
             # Marked before it is posted, so a post that fails is not sent twice a tick for the rest of the meeting.
-            if now >= meeting.at:
-                self.meetings.mark(meeting.id, "now_sent")
-                self.client.post_message(meeting.room_id, MEETING_NOW.format(people=people, what=meeting.what))
-            elif not meeting.soon_sent:
-                self.meetings.mark(meeting.id, "soon_sent")
-                self.client.post_message(meeting.room_id, MEETING_SOON.format(people=people, what=meeting.what, before=int(REMIND_BEFORE.total_seconds() // 60), time=meeting_when(meeting.at, now)))
+            self.meetings.mark(meeting.id, "now_sent" if starting else "soon_sent")
+            when = meeting_when(meeting.at, now)
+            # Each person is reminded on their own, in their private room with Foundry. Only when nobody can be is the room it was set in told instead.
+            reached = 0
+            for sender in meeting.senders:
+                private = self._private_room(meeting.room_id, sender)
+                if private:
+                    self.client.post_message(private, (MEETING_NOW_YOURS if starting else MEETING_SOON_YOURS).format(what=meeting.what, before=before, time=when))
+                    reached += 1
+            if not reached:
+                words = MEETING_NOW if starting else MEETING_SOON
+                self.client.post_message(meeting.room_id, words.format(people=joined(meeting.people), what=meeting.what, before=before, time=when))
 
     def _talks_to_foundry(self, burst: Burst) -> bool:
         if "foundry" in burst.text.casefold():
