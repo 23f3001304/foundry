@@ -85,7 +85,7 @@ class SwitchClient:
     def open_direct_room(self, bridge_id: str, username: str) -> str:
         """A room with Foundry and one person on their chat app, which Switch opens without them writing first. Its id."""
         made = self._call("POST", f"/agents/{self.agent_id}/ops/create_room", headers=self._session_headers(), json={
-            "name": f"Foundry and {username}", "agent_names": [DESK_NAME], "user_names": [username], "channel_type": "direct", "bridge_id": bridge_id,
+            "name": f"Foundry and {username}", "description": "Where Foundry asks you for approvals and reminds you of meetings.", "agent_names": [DESK_NAME], "user_names": [username], "channel_type": "direct", "bridge_id": bridge_id,
         }).json()["result"]
         return made["id"]
 
