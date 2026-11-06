@@ -93,8 +93,9 @@ def chat_llm(model: str | None = None) -> Callable[[str], str]:
             tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
             messages=[{"role": "user", "content": prompt}],
         )
-        # Only the last text block is the answer. The ones before it are the model saying what it is looking up.
-        texts = [block.text for block in response.content if block.type == "text"]
-        return texts[-1] if texts else ""
+        # The answer is every piece of text after the last search result: a cited answer comes in several pieces. What comes before is the model saying what it is looking up.
+        blocks = list(response.content)
+        last_search = max((at for at, block in enumerate(blocks) if block.type.endswith("tool_result")), default=-1)
+        return "".join(block.text for block in blocks[last_search + 1:] if block.type == "text")
 
     return call
