@@ -81,6 +81,8 @@ It prints the dashboard's address. No agents run, pressing a button sends nothin
 
 ## A five-minute tour for judges
 
+Prefer to watch? **[▶ The five-minute tour on YouTube](https://youtu.be/eIpmLqts9nQ)** walks through these pages in order.
+
 | | Page | What to look at |
 |:-:|---|---|
 | 1 | **Overview** | What's stuck, what waits on you, and the last 14 days. Switch businesses at the top. |
