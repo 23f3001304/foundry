@@ -5,6 +5,8 @@
 <h3 align="center">Ask for work in the chat you already use. Agents make it, a person signs it off.</h3>
 
 <p align="center">
+  <a href="https://youtu.be/Vo6fOzDyTKc"><b>▶ Demo film</b></a> &nbsp;·&nbsp;
+  <a href="https://youtu.be/eIpmLqts9nQ"><b>▶ Five-minute tour</b></a> &nbsp;·&nbsp;
   <a href="#try-it-in-30-seconds"><b>Try it in 30 seconds</b></a> &nbsp;·&nbsp;
   <a href="#a-five-minute-tour-for-judges"><b>Judge's tour</b></a> &nbsp;·&nbsp;
   <a href="#how-it-works"><b>How it works</b></a> &nbsp;·&nbsp;
@@ -30,9 +32,19 @@ It works in Slack, Telegram, Mattermost, Discord and Teams, by text or by voice 
 
 > Lalten Cafe, Shilagate Homes, Morpankh Systems, Kasauti Capital Partners, Bhorvela Studio, Phatakha Pop and Ambaryug Teas are fictional, and so is everything in their folders, including every figure. The dashboard pages in the demo film come from live runs, with part of the 14-day chart history seeded.
 
+## Watch
+
+<table>
+  <tr>
+    <td width="50%" align="center"><a href="https://youtu.be/Vo6fOzDyTKc"><img src="https://img.youtube.com/vi/Vo6fOzDyTKc/maxresdefault.jpg" alt="Foundry demo film on YouTube"></a><br><b><a href="https://youtu.be/Vo6fOzDyTKc">Demo film</a></b> (2:58)<br><sub>What Foundry does, from a request in chat to signed-off work</sub></td>
+    <td width="50%" align="center"><a href="https://youtu.be/eIpmLqts9nQ"><img src="https://img.youtube.com/vi/eIpmLqts9nQ/maxresdefault.jpg" alt="Foundry five-minute tour on YouTube"></a><br><b><a href="https://youtu.be/eIpmLqts9nQ">Five-minute tour</a></b><br><sub>The dashboard page by page, and where the code is</sub></td>
+  </tr>
+</table>
+
 ## Contents
 
 - [What it is](#what-it-is)
+- [Watch](#watch)
 - [Try it in 30 seconds](#try-it-in-30-seconds)
 - [A five-minute tour for judges](#a-five-minute-tour-for-judges)
 - [What sets it apart](#what-sets-it-apart)
