@@ -15,6 +15,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -397,6 +398,20 @@ def fresh_pictures(path: Path | str) -> Pictures:
     except Exception as error:
         logger.warning("Could not read the pictures of %s: %s", file.name, error)
     return Pictures([], NOT_MADE)
+
+
+def draw_aside(paths: list[str]) -> threading.Thread:
+    """Draws the pictures of these files on a thread of its own and returns it already started, so whoever asks keeps going while a renderer runs."""
+    def draw() -> None:
+        for path in paths:
+            try:
+                pictures_of(path)
+            except Exception as error:
+                logger.warning("Could not draw the pictures of %s: %s", Path(path).name, error)
+
+    thread = threading.Thread(target=draw, daemon=True)
+    thread.start()
+    return thread
 
 
 def pictures_of(path: Path | str, seconds: float = RENDER_SECONDS) -> Pictures:

@@ -79,6 +79,7 @@ from foundry.gates import Decision, Gate, QueuedCardGate, only_switch_reads, par
 from foundry.intake import Kind, classify
 from foundry.research import needs_research, research, research_file, save
 from foundry.people import People, mentioned
+from foundry.reading import is_short_ask
 from foundry.meetings import NOW as MEETING_NOW, NOW_YOURS as MEETING_NOW_YOURS, REMIND_BEFORE, SET as MEETING_SET, SOON as MEETING_SOON, SOON_YOURS as MEETING_SOON_YOURS, SOUNDS_LIKE_A_MEETING, MeetingStore, joined, read_meeting, when_words as meeting_when
 from foundry.items import MAKES_NOTHING, OWES_FORMAT, ItemStore
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
@@ -88,7 +89,7 @@ from foundry.stickers import EVENTS as STICKER_EVENTS, branded_sticker, mode_for
 from foundry.switch_client import Outcome, SwitchClient
 from foundry.tables import TABLE_KINDS, client_documents, is_file_answer, table_text
 from foundry.text import headline, no_controls, on_the_network, quiet
-from foundry.tools.pictures import LOOKS, NOT_MADE, Pictures, fresh_pictures, pictures_of, slide_count
+from foundry.tools.pictures import LOOKS, NOT_MADE, Pictures, draw_aside, fresh_pictures, slide_count
 from foundry.voice import Transcript, VoiceError, speak, transcribe, translate
 
 logger = logging.getLogger(__name__)
@@ -1015,8 +1016,7 @@ class Desk:
             self._drawing.pop(job.id, None)
             return True
         if drawing is None:
-            self._drawing[job.id] = threading.Thread(target=lambda: [pictures_of(path) for path in missing], daemon=True)
-            self._drawing[job.id].start()
+            self._drawing[job.id] = draw_aside(missing)
         return False
 
     def _ask_reviewer(self, job: Job) -> bool:
@@ -2102,7 +2102,10 @@ class Desk:
             self.store.save(job)
         elif self._talks_to_foundry(burst):
             self._chat(burst)
-        # A message Foundry can't sort and that wasn't said to it is the team talking among themselves, so Foundry stays out of it.
+        elif kind is Kind.UNSURE and is_short_ask(burst.text):
+            # A short word like "yes?" from someone who owes something here is told what is still owed. From anyone else it gets nothing.
+            self.coordinator.still_owed(burst)
+        # Any other message Foundry can't sort and that wasn't said to it is the team talking among themselves, so Foundry stays out of it.
 
     def _research_path(self, job: Job) -> Path:
         return research_file(self.settings.inputs_dir, job.bucket, job.id)
