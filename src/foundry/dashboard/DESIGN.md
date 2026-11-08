@@ -104,7 +104,7 @@ Each has one definition, with its states: rest, hover, focus (one shared ring), 
 | Legend | `legend()`, `.legend` | Diamonds in the line's own colour, with mono values |
 | Icon tile | `tile()`, `.tile` | One family's gradient beside a section title |
 | Figure | `.figure` | Label with its arrow beside it, and the number under them, on the hero's bar. The whole figure is the link |
-| Pill | `.pill` | A short fact or a count. `.pill-needs` needs you |
+| Pill | `.pill` | A short fact or a count. `.pill-needs` needs you, `.pill-meeting` the job follows up a Wispr meeting |
 | Chip | `.chip-link` | A filter, kept in the address, with a dot in the stage's family |
 | Button | `button` `.button` | `.primary`, `.danger` (inverted, not red), `.quiet`, `.button-wide` |
 | Nav item | `.nav-item` `.tab` | Side bar and bottom bar. Where you are is a soft filled row |

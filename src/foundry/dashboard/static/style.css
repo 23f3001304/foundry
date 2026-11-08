@@ -658,6 +658,8 @@ main > .section-foot { margin-top: var(--gap); }
 
 .pill { display: inline-block; flex: none; padding-inline: var(--space-8); color: var(--ink-soft); font-family: var(--font-mono); font-size: var(--text-12); line-height: var(--space-20); font-weight: 500; white-space: nowrap; background: var(--hover); border-radius: var(--radius-4); }
 .pill-needs { color: var(--ember-text); font-family: var(--font); font-weight: 600; background: var(--ember-wash); }
+.pill-meeting { color: var(--azure-text); font-family: var(--font); font-weight: 600; background: var(--azure-wash); }
+.meeting-summary, .meeting-tasks { margin-bottom: var(--space-12); }
 
 /* Small marks. Each says the same as the word beside it, so they are hidden from a screen reader. */
 

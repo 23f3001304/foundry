@@ -2195,6 +2195,8 @@ class Desk:
         burst = Burst(room_id, sender, follow_up_request(notes), self.clock(), language)
         job = self._open_job(burst)
         job.brief, job.language = burst.text, burst.language
+        # The brief agent rewrites the brief, so the meeting itself is kept apart, for the dashboard.
+        job.meeting = meeting_notes.record(notes, link)
         self.store.save(job)
         self._sticker(room_id, "brief_received")
         self._ask_for_brief(job)

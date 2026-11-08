@@ -62,6 +62,28 @@ def read_share_link(url: str, call: Callable[[str, dict], str]) -> MeetingNotes:
     return MeetingNotes(str(data.get("title") or "The meeting").strip(), str(data.get("created_at") or data.get("start") or "").strip(), summary, tasks)
 
 
+SOURCE = "Wispr Flow"
+
+
+def _task_line(task: dict) -> dict:
+    # Wispr names the parts of a task in more than one way; the dashboard shows who, what and when.
+    what = next((str(task[key]).strip() for key in ("text", "title", "task", "description") if task.get(key)), "")
+    who = next((str(task[key]).strip() for key in ("assignee", "owner", "person", "who") if task.get(key)), "")
+    return {"who": who, "what": what, "due": str(task.get("due") or "").strip()}
+
+
+def record(notes: MeetingNotes, link: str) -> dict:
+    """What a job keeps of the meeting it follows up, for the dashboard. Only a real Wispr share link is kept, as the link back."""
+    return {
+        "source": SOURCE,
+        "title": notes.title,
+        "when": notes.when,
+        "summary": notes.summary,
+        "tasks": [line for line in (_task_line(task) for task in notes.tasks) if line["what"]],
+        "link": find_share_link(link) or "",
+    }
+
+
 def follow_up_request(notes: MeetingNotes) -> str:
     """What the desk drafts a brief from, as if someone had typed it."""
     tasks = "\n".join(f"- {json.dumps(task, ensure_ascii=False)}" for task in notes.tasks) or "- none listed apart from what the summary says"

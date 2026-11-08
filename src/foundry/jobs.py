@@ -92,6 +92,9 @@ class Job:
     makes_nothing: bool = False
     # Which parts of those answers have gone out, so a try after a failure or a restart carries on from the first that has not.
     answers_sent: list[str] = field(default_factory=list)
+    # The meeting a follow-up came from, as meeting_notes.record() keeps it: where the notes were read, the title, when, the
+    # summary and the tasks. The brief agent rewrites the brief, so this is what the dashboard shows of the meeting. None otherwise.
+    meeting: dict | None = None
 
     @property
     def approval_room(self) -> str:
@@ -112,9 +115,9 @@ def advance(job: Job, event: str) -> Job:
     return job
 
 
-COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report", "language", "question", "bucket", "token", "heard", "attention", "pending_fix", "sweeps", "makes_nothing", "answers_sent")
+COLUMNS = ("id", "room_id", "requester", "approver", "state", "revision_rounds", "brief", "artifacts", "approval", "revision_notes", "waiting_on", "asked_at", "kind", "sent_at", "report", "language", "question", "bucket", "token", "heard", "attention", "pending_fix", "sweeps", "makes_nothing", "answers_sent", "meeting")
 # Columns added to a table that may already hold jobs. A job from before one of them has this value, which is the normal path.
-ADDED_COLUMNS = {"makes_nothing": "INTEGER NOT NULL DEFAULT 0", "answers_sent": "TEXT NOT NULL DEFAULT '[]'"}
+ADDED_COLUMNS = {"makes_nothing": "INTEGER NOT NULL DEFAULT 0", "answers_sent": "TEXT NOT NULL DEFAULT '[]'", "meeting": "TEXT"}
 
 
 class JobStore:
@@ -128,7 +131,7 @@ class JobStore:
                     approval TEXT, revision_notes TEXT, waiting_on TEXT NOT NULL, asked_at TEXT,
                     kind TEXT NOT NULL, sent_at TEXT, report TEXT, language TEXT, question TEXT,
                     bucket TEXT NOT NULL, token TEXT NOT NULL, heard TEXT, attention TEXT NOT NULL, pending_fix TEXT NOT NULL, sweeps INTEGER NOT NULL,
-                    makes_nothing INTEGER NOT NULL DEFAULT 0, answers_sent TEXT NOT NULL DEFAULT '[]')"""
+                    makes_nothing INTEGER NOT NULL DEFAULT 0, answers_sent TEXT NOT NULL DEFAULT '[]', meeting TEXT)"""
             )
             have = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
             for name, kind in ADDED_COLUMNS.items():
@@ -175,7 +178,8 @@ class JobStore:
                     ON CONFLICT(id) DO UPDATE SET {", ".join(f"{name} = excluded.{name}" for name in COLUMNS[1:])}""",
                 (job.id, job.room_id, job.requester, job.approver, job.state.value,
                  job.revision_rounds, job.brief, json.dumps(job.artifacts), json.dumps(job.approval), job.revision_notes, json.dumps(job.waiting_on), job.asked_at, job.kind, job.sent_at, job.report, job.language, json.dumps(job.question),
-                 job.bucket, job.token, job.heard, json.dumps(job.attention), job.pending_fix, job.sweeps, int(job.makes_nothing), json.dumps(job.answers_sent)),
+                 job.bucket, job.token, job.heard, json.dumps(job.attention), job.pending_fix, job.sweeps, int(job.makes_nothing), json.dumps(job.answers_sent),
+                 json.dumps(job.meeting) if job.meeting else None),
             )
 
     def _select(self, clause: str, *values: str) -> list[Job]:
@@ -185,4 +189,4 @@ class JobStore:
 
 
 def _job(row: tuple) -> Job:
-    return Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16]), row[17], row[18], row[19], json.loads(row[20]), row[21], row[22], bool(row[23]), json.loads(row[24]))
+    return Job(*row[:4], State(row[4]), row[5], row[6], json.loads(row[7]), json.loads(row[8]), row[9], json.loads(row[10]), *row[11:16], json.loads(row[16]), row[17], row[18], row[19], json.loads(row[20]), row[21], row[22], bool(row[23]), json.loads(row[24]), json.loads(row[25]) if row[25] else None)

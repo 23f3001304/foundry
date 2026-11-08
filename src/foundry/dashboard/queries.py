@@ -1,6 +1,7 @@
 """Everything the pages show, read from the files the desk writes. Each file is opened read-only for the one question asked, so a page can't change a job, a card or the log."""
 
 import os
+import re
 import sqlite3
 from collections.abc import Collection
 from contextlib import closing
@@ -21,6 +22,7 @@ from foundry.desk import Settings, approving_confirms_voice
 from foundry.items import IN, Item, ItemState, _item, desk_wrote, status_line
 from foundry.items import COLUMNS as ITEM_COLUMNS
 from foundry.jobs import Job, State, _job
+from foundry.jobs import ADDED_COLUMNS as JOB_ADDED
 from foundry.jobs import COLUMNS as JOB_COLUMNS
 from foundry.log import Entry, Log
 from foundry.text import headline, shown_name
@@ -156,6 +158,15 @@ SHARED = "Other businesses use this connection too, so only its health is shown 
 READ_TIMEOUT = 2
 # Every page counts for its navigation, and no page should wait on those counts: a locked file just means no badge this time.
 NAV_TIMEOUT = 0.25
+# A follow-up job's meeting, from foundry.meeting_notes.record().
+MEETING_SOURCE = "Wispr Flow"
+MEETING_UNTITLED = "A meeting"
+WISPR_SHARED = "https://notes.wisprflow.ai/shared/"
+
+
+def _default_of(kind: str) -> str:
+    found = re.search(r"\bDEFAULT\s+(.+)$", kind)
+    return found.group(1) if found else "NULL"
 
 
 def open_read_only(path: Path | str, timeout: float = READ_TIMEOUT) -> sqlite3.Connection:
@@ -259,6 +270,22 @@ class JobRow:
     # Who approves it, by name, and the colour family its stage goes by.
     approver: str = ""
     family: str = ""
+    # The title of the meeting a follow-up came from, for the Wispr mark beside its name. Empty for any other job.
+    meeting: str = ""
+
+
+@dataclass
+class MeetingView:
+    """The meeting a follow-up job came from, as the job page shows it. Notes are shown as text, never as markup."""
+
+    source: str
+    title: str
+    when: str
+    summary: list[str]
+    # Who took it on, what it is, and when it is due, as the notes say; any of who and due may be empty.
+    tasks: list[tuple[str, str, str]]
+    # Back to the notes in Wispr, only when it is a real Wispr share link.
+    link: str = ""
 
 
 @dataclass
@@ -397,6 +424,7 @@ class JobPage:
     entries: int = 0
     charts: list[JobChart] = field(default_factory=list)
     banner: Banner | None = None
+    meeting: MeetingView | None = None
 
 
 @dataclass
@@ -711,13 +739,20 @@ class Reader:
         with closing(open_read_only(path)) as db:
             return db.execute(sql, values).fetchall()
 
+    def _job_columns(self) -> str:
+        # The desk adds new columns when it starts, and the dashboard runs on its own. A jobs file the desk hasn't opened
+        # since then still reads, with each missing column at its default.
+        with closing(open_read_only(self.settings.jobs_path)) as db:
+            have = {row[1] for row in db.execute("PRAGMA table_info(jobs)")}
+        return ", ".join(name if name in have or name not in JOB_ADDED else f"{_default_of(JOB_ADDED[name])} AS {name}" for name in JOB_COLUMNS)
+
     def jobs(self, buckets: Collection[str]) -> list[Job]:
         marks = ", ".join("?" * len(buckets))
-        rows = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE bucket IN ({marks}) ORDER BY rowid DESC", *buckets)
+        rows = self._rows(self.settings.jobs_path, f"SELECT {self._job_columns()} FROM jobs WHERE bucket IN ({marks}) ORDER BY rowid DESC", *buckets)
         return [_job(row) for row in rows]
 
     def job_of(self, user: User, job_id: str) -> Job | None:
-        rows = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", job_id)
+        rows = self._rows(self.settings.jobs_path, f"SELECT {self._job_columns()} FROM jobs WHERE id = ?", job_id)
         job = _job(rows[0]) if rows else None
         # A job of another client is not found, so nobody can tell it exists.
         return job if job is not None and job.bucket in user.businesses else None
@@ -912,6 +947,7 @@ class Reader:
             job.id, job.bucket, bucket_name(job.bucket), title_of(job), stage, sprite, owes, self._waiting(job, cards, known), tone_of(job),
             step, steps_of(job, bool(items)), sum(item.state in IN for item in counted), len(counted),
             approver=known.get(job.approver) or shown_name("", job.approver) or NO_OWNER, family=family_of(tone_of(job), step),
+            meeting=(str(job.meeting.get("title") or "") or MEETING_UNTITLED) if job.meeting else "",
         )
 
     def job_rows(self, user: User) -> list[JobRow]:
@@ -990,7 +1026,25 @@ class Reader:
             self._job_charts(job, entries),
         )
         page.banner = self._banner(job, page, entries)
+        page.meeting = self.meeting_view(job.meeting) if job.meeting else None
         return page
+
+    def meeting_view(self, meeting: dict) -> MeetingView:
+        # Wispr gives the time as ISO text. One that doesn't read as a time is shown as it came.
+        when = str(meeting.get("when") or "")
+        try:
+            at = datetime.fromisoformat(when.replace("Z", "+00:00"))
+            when = self.when(at if at.tzinfo else at.replace(tzinfo=UTC))
+        except ValueError:
+            pass
+        link = str(meeting.get("link") or "")
+        tasks = meeting.get("tasks") if isinstance(meeting.get("tasks"), list) else []
+        return MeetingView(
+            str(meeting.get("source") or MEETING_SOURCE), str(meeting.get("title") or "") or MEETING_UNTITLED, when,
+            [line.strip() for line in str(meeting.get("summary") or "").splitlines() if line.strip()],
+            [(str(task.get("who") or ""), str(task.get("what") or ""), str(task.get("due") or "")) for task in tasks if isinstance(task, dict) and task.get("what")],
+            link if link.startswith(WISPR_SHARED) else "",
+        )
 
     def _job_charts(self, job: Job, entries: list[Entry]) -> list[JobChart]:
         # Only what this job's own log says. Each line is a running count, so the space between two of them is the real gap: asked for and not yet in, opened and not yet answered.
@@ -1144,7 +1198,7 @@ class Reader:
         if entry is None:
             return None
         path = Path(entry.ref)
-        job = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", entry.job_id or "")
+        job = self._rows(self.settings.jobs_path, f"SELECT {self._job_columns()} FROM jobs WHERE id = ?", entry.job_id or "")
         here = path.is_file()
         return Viewed(entry.id, path.name, entry.job_id or "", title_of(_job(job[0])) if job else NO_BRIEF, path.suffix.lower() in PICTURES, here, len(_slides_of(path)) if here else 0)
 
@@ -1202,7 +1256,7 @@ class Reader:
         except (NotFlagged, ValueError, KeyError):
             return None
         known = self._names(user)[entry.bucket]
-        job = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", entry.job_id or "")
+        job = self._rows(self.settings.jobs_path, f"SELECT {self._job_columns()} FROM jobs WHERE id = ?", entry.job_id or "")
         via = any(other.ref == str(entry.id) for other in self.log.of_kind(entry.bucket, "dashboard_action"))
         flagged = Flagged(entry.id, entry.text, name_of(entry, known), self.when(entry.at), bucket_name(entry.bucket), entry.job_id or "", entry.ref or "")
         target = (entry.ref or "").removeprefix("file:").removeprefix("text:")
@@ -1308,7 +1362,7 @@ class Reader:
         if command.action == "reload_pack":
             file = payload.get("file")
             return f"Changed {file} and read the business's pack again" if is_data_file(file) else "Read the business's pack again"
-        rows = self._rows(self.settings.jobs_path, f"SELECT {', '.join(JOB_COLUMNS)} FROM jobs WHERE id = ?", str(payload.get("job_id", "")))
+        rows = self._rows(self.settings.jobs_path, f"SELECT {self._job_columns()} FROM jobs WHERE id = ?", str(payload.get("job_id", "")))
         job = title_of(_job(rows[0])) if rows else "a job"
         what = {"restart": "Restart", "flag": "Flag something in"}.get(command.action) or DUE_ACTIONS[command.action]
         return f"{what} {job}" if command.action == "flag" else f"{what}: {job}"

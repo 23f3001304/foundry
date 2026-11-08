@@ -24,6 +24,7 @@
 <div class="state-pills">
   <span class="state-pill is-current fam-{{ job.row.family }}"><span class="dot" aria-hidden="true"></span><span class="stage {{ job.row.tone }} is-bare">{{ job.row.stage }}</span></span>
   {% if user.businesses|length > 1 %}<a class="state-pill" href="{{ link('/', business=job.row.bucket) }}"><span class="dot fam-none" aria-hidden="true"></span>{{ job.row.client }}</a>{% endif %}
+  {% if job.meeting %}<a class="state-pill" href="#meeting"><span class="dot fam-azure" aria-hidden="true"></span>From {{ job.meeting.source }} meeting notes</a>{% endif %}
 </div>
 
 {% if job.banner %}
@@ -136,6 +137,29 @@
     {% endfor %}
     </tbody>
   </table>
+{% endcall %}
+{% endif %}
+
+{# The meeting's own words, as text: notes come from a recorder, so they are never read as markup. #}
+{% if job.meeting %}
+{% call fold("meeting", "responses", "azure", "From the meeting", job.meeting.when) %}
+  <p class="lead-in">{{ job.meeting.title }}</p>
+  {% if job.meeting.summary %}<div class="prose meeting-summary">{% for line in job.meeting.summary %}<p>{{ line }}</p>{% endfor %}</div>{% endif %}
+  {% if job.meeting.tasks %}
+  <table class="list meeting-tasks">
+    <thead><tr><th>Who took it on</th><th>Task</th><th>Due</th></tr></thead>
+    <tbody>
+    {% for who, what, due in job.meeting.tasks %}
+    <tr>
+      <td data-label="Who took it on">{{ who or "No one named" }}</td>
+      <td data-label="Task">{{ what }}</td>
+      <td data-label="Due">{{ due or "Not given" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  <p class="small">Foundry read these notes from {{ job.meeting.source }} and asked each person for their task.{% if job.meeting.link %} <a href="{{ job.meeting.link }}" target="_blank" rel="noopener noreferrer">Open the notes in {{ job.meeting.source }}</a>{% endif %}</p>
 {% endcall %}
 {% endif %}
 
