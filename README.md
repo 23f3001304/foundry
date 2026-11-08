@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  Built on <a href="https://github.com/sandbox-quantum/switch">Agent Switch</a> for <b>Flip the Switch, Track 01 (Best Business Workflow)</b>
+  Built on <a href="https://github.com/sandbox-quantum/switch">Agent Switch</a> for <b>Flip the Switch</b>, entered in <b>Best Business Workflow</b> and <b>Best Personal or Creative Workflow</b>
 </p>
 
 ---
