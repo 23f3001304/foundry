@@ -51,6 +51,8 @@ class Meeting:
     now_sent: bool
     # Each person's Switch id, where it is known, so each can be reminded on their own.
     senders: list[str]
+    # Who set it in chat, so the tasks from it come back to them.
+    setter: str = ""
 
 
 def zone() -> ZoneInfo:
@@ -95,15 +97,37 @@ class MeetingStore:
         self.path = str(path)
         with closing(self._connect()) as db, db:
             db.execute("CREATE TABLE IF NOT EXISTS meetings (id INTEGER PRIMARY KEY AUTOINCREMENT, room_id TEXT NOT NULL, at REAL NOT NULL, what TEXT NOT NULL, people TEXT NOT NULL, soon_sent INTEGER NOT NULL DEFAULT 0, now_sent INTEGER NOT NULL DEFAULT 0, senders TEXT NOT NULL DEFAULT '[]')")
-            if "senders" not in {row[1] for row in db.execute("PRAGMA table_info(meetings)")}:
-                db.execute("ALTER TABLE meetings ADD COLUMN senders TEXT NOT NULL DEFAULT '[]'")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(meetings)")}
+            for column, kind in (("senders", "TEXT NOT NULL DEFAULT '[]'"), ("setter", "TEXT NOT NULL DEFAULT ''"), ("followed", "INTEGER NOT NULL DEFAULT 0")):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE meetings ADD COLUMN {column} {kind}")
+            # Each recording and share link already followed up, so none is followed up twice, by a paste and by the desk finding it.
+            db.execute("CREATE TABLE IF NOT EXISTS followed_notes (key TEXT PRIMARY KEY)")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=10)
 
-    def add(self, room_id: str, at: datetime, what: str, people: list[str], senders: list[str] | None = None) -> None:
+    def add(self, room_id: str, at: datetime, what: str, people: list[str], senders: list[str] | None = None, setter: str = "") -> None:
         with closing(self._connect()) as db, db:
-            db.execute("INSERT INTO meetings (room_id, at, what, people, senders) VALUES (?, ?, ?, ?, ?)", (room_id, at.timestamp(), what, json.dumps(people), json.dumps(senders or [])))
+            db.execute("INSERT INTO meetings (room_id, at, what, people, senders, setter) VALUES (?, ?, ?, ?, ?, ?)", (room_id, at.timestamp(), what, json.dumps(people), json.dumps(senders or []), setter))
+
+    def waiting_for_notes(self, now: datetime, after: timedelta) -> list[Meeting]:
+        """Meetings set in chat that started at least this long ago and whose notes have not been followed up."""
+        with closing(self._connect()) as db:
+            rows = db.execute("SELECT id, room_id, at, what, people, soon_sent, now_sent, senders, setter FROM meetings WHERE followed = 0 AND at <= ?", ((now - after).timestamp(),)).fetchall()
+        return [Meeting(row[0], row[1], datetime.fromtimestamp(row[2], UTC), row[3], json.loads(row[4]), bool(row[5]), bool(row[6]), json.loads(row[7]), row[8]) for row in rows]
+
+    def mark_followed(self, meeting_id: int) -> None:
+        with closing(self._connect()) as db, db:
+            db.execute("UPDATE meetings SET followed = 1 WHERE id = ?", (meeting_id,))
+
+    def followed(self, *keys: str) -> bool:
+        with closing(self._connect()) as db:
+            return any(db.execute("SELECT 1 FROM followed_notes WHERE key = ?", (key,)).fetchone() for key in keys if key)
+
+    def follow(self, *keys: str) -> None:
+        with closing(self._connect()) as db, db:
+            db.executemany("INSERT OR IGNORE INTO followed_notes (key) VALUES (?)", [(key,) for key in keys if key])
 
     def due(self, now: datetime) -> list[Meeting]:
         with closing(self._connect()) as db:

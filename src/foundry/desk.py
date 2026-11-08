@@ -80,6 +80,8 @@ from foundry.intake import Kind, classify
 from foundry.research import needs_research, research, research_file, save
 from foundry.people import People, mentioned
 from foundry.reading import is_short_ask
+from foundry import meeting_notes
+from foundry.meeting_notes import NOT_CONNECTED as MEETING_NOT_CONNECTED, READING as MEETING_READING, UNREADABLE as MEETING_UNREADABLE, find_share_link, follow_up_request, read_share_link
 from foundry.meetings import NOW as MEETING_NOW, NOW_YOURS as MEETING_NOW_YOURS, REMIND_BEFORE, SET as MEETING_SET, SOON as MEETING_SOON, SOON_YOURS as MEETING_SOON_YOURS, SOUNDS_LIKE_A_MEETING, MeetingStore, joined, read_meeting, when_words as meeting_when
 from foundry.items import MAKES_NOTHING, OWES_FORMAT, ItemStore
 from foundry.jobs import MAX_REVISION_ROUNDS, Job, JobStore, State, advance
@@ -649,6 +651,11 @@ class Desk:
         self._private = dict(settings.private_rooms)
         self.chat_llm = chat_llm
         self.research_llm = research_llm
+        # Wispr Flow's MCP, called as (tool, arguments) -> text, once the owner has connected it. Meeting links are read through it.
+        self.wispr: Callable[[str, dict], str] | None = None
+        # Recordings from before this are never placed in a company unasked, so connecting Wispr doesn't bring up every old meeting. None looks back a day.
+        self.wispr_since: datetime | None = None
+        self._wispr_checked: datetime | None = None
         self.speaker = speaker
         self.translator = translator
         self.buffer = MessageBuffer(settings.buffer_path, settings.quiet_seconds)
@@ -699,6 +706,8 @@ class Desk:
                     logger.exception("Could not handle the outcome for %s, so it comes round again on the next tick.", outcome.request_id)
         with _isolated("remind people of their meetings"):
             self._remind(now)
+        with _isolated("follow up the meetings Wispr recorded"):
+            self._follow_up_recordings(now)
         with _isolated("take the dashboard's commands"):
             self.apply_commands()
         with _isolated("ask the reviewer again about the work it was not told of"):
@@ -1947,6 +1956,8 @@ class Desk:
             self._take_voice_answer(card, outcome.chosen_from(card.choices), outcome.answered_at or self.clock())
         elif card.trigger is Trigger.LATE_FIX:
             self._take_late_fix_answer(card, outcome.chosen_from(card.choices))
+        elif card.trigger is Trigger.MEETING_COMPANY:
+            self._take_meeting_company_answer(card, outcome.chosen_from(card.choices))
         elif card.is_merged:
             self._take_routine_answer(card, outcome)
         elif card.trigger in ITEM_CARDS:
@@ -2081,6 +2092,9 @@ class Desk:
                 burst = replace(burst, text=self.people.named(burst.room_id, burst.text))
             except Exception as error:
                 logger.warning("Could not read who was tagged: %s", error)
+        if (link := find_share_link(burst.text)) is not None:
+            self._follow_up_meeting(burst, link)
+            return
         meeting_set, rest = self._set_meeting(burst)
         if meeting_set and not rest:
             return
@@ -2158,6 +2172,99 @@ class Desk:
         self.client.post_message(burst.room_id, MOVED_TO.format(name=name))
         return True
 
+    def _follow_up_meeting(self, burst: Burst, link: str) -> None:
+        """A Wispr Flow meeting link pasted in chat: the room it was pasted in says which company it is for."""
+        if self.wispr is None:
+            self.client.post_message(burst.room_id, MEETING_NOT_CONNECTED)
+            return
+        if self.meetings.followed(link):
+            self.client.post_message(burst.room_id, meeting_notes.ALREADY_FOLLOWED)
+            return
+        self.client.post_message(burst.room_id, MEETING_READING)
+        if not self._follow_up_link(burst.room_id, burst.sender, link, burst.language):
+            self.client.post_message(burst.room_id, MEETING_UNREADABLE)
+
+    def _follow_up_link(self, room_id: str, sender: str, link: str, language: str | None = None, key: str = "") -> bool:
+        """The meeting's tasks become a job that asks each owner for theirs, with nothing to make. False when the notes can't be read."""
+        try:
+            notes = read_share_link(link, self.wispr)
+        except Exception as error:
+            logger.warning("Could not read the meeting notes at %s: %s", link, error)
+            return False
+        self.meetings.follow(link, key)
+        burst = Burst(room_id, sender, follow_up_request(notes), self.clock(), language)
+        job = self._open_job(burst)
+        job.brief, job.language = burst.text, burst.language
+        self.store.save(job)
+        self._sticker(room_id, "brief_received")
+        self._ask_for_brief(job)
+        self.store.save(job)
+        return True
+
+    def _follow_up_recordings(self, now: datetime) -> None:
+        """Meetings Wispr recorded, found without anyone pasting a link.
+
+        A meeting set in chat is followed up in its own room. Any other goes to the company its people are in, or the owner is asked which.
+        """
+        if self.wispr is None or (self._wispr_checked is not None and (now - self._wispr_checked).total_seconds() < meeting_notes.CHECK_EVERY_SECONDS):
+            return
+        self._wispr_checked = now
+        since = now - timedelta(seconds=meeting_notes.LOOK_BACK_SECONDS)
+        recordings = [meeting for meeting in meeting_notes.recordings_in(self.wispr("search_meetings", {"since": since.isoformat(), "limit": 50}))
+                      if not self.meetings.followed(f"wispr:{meeting['id']}", meeting["share_link"])]
+        for meeting in self.meetings.waiting_for_notes(now, timedelta(seconds=meeting_notes.LOOK_FROM_SECONDS)):
+            if (now - meeting.at).total_seconds() > meeting_notes.GIVE_UP_SECONDS:
+                self.meetings.mark_followed(meeting.id)
+                continue
+            found = meeting_notes.recording_for(meeting.at, recordings)
+            if found is None:
+                continue
+            asker = meeting.setter or (meeting.senders[0] if meeting.senders else self.settings.approver or "")
+            if self._follow_up_link(meeting.room_id, asker, found["share_link"], key=f"wispr:{found['id']}"):
+                self.meetings.mark_followed(meeting.id)
+                recordings.remove(found)
+        floor = self.wispr_since or since
+        for found in recordings:
+            if meeting_notes._when(found["start"]) >= floor:
+                self._place_recording(found)
+
+    def _companies(self) -> dict[str, list[str]]:
+        """Each company Foundry works for, by bucket, with the names of the people known in it."""
+        companies: dict[str, list[str]] = {}
+        for bucket in dict.fromkeys(self.settings.bucket_for(room) for room in self.settings.workrooms):
+            names = {writer.sender_name for writer in self.log.writers(bucket) if writer.sender_name and not writer.sender.startswith(AGENT_SENDER_PREFIX)}
+            if self.people is not None:
+                try:
+                    names |= {person.name for person in self.people.on(self.settings.home_room(bucket))}
+                except Exception as error:
+                    logger.warning("Could not read the chat app's directory for %s: %s", bucket, error)
+            companies[bucket] = sorted(names)
+        return companies
+
+    def _place_recording(self, found: dict) -> None:
+        key, link, title = f"wispr:{found['id']}", found["share_link"], str(found.get("title") or "The meeting")
+        companies = self._companies()
+        attendees = meeting_notes.names_in(self.wispr("get_meeting_participants_enriched", {"meeting_id": found["id"]}))
+        company = meeting_notes.company_of(attendees, companies)
+        if company is not None:
+            self._follow_up_link(self.settings.home_room(company), self.settings.approver or "", link, key=key)
+            return
+        owner = self.settings.approver
+        room = self.settings.private_rooms.get(owner or "")
+        # Followed now, whatever happens next, so the same recording is never asked about twice.
+        self.meetings.follow(key, link)
+        if not companies or not owner or not room:
+            logger.info("Nobody to ask which company the recording %s was for, so it is left alone.", title)
+            return
+        self.cards.submit(Trigger.MEETING_COMPANY, owner, self.settings.bucket_for(room), room, quiet(meeting_notes.WHICH_COMPANY_TITLE.format(title=title)),
+                          meeting_notes.WHICH_COMPANY_DETAIL.format(title=quiet(title)), [*companies, meeting_notes.NONE_OF_THESE], data={"link": link})
+
+    def _take_meeting_company_answer(self, card: Card, choice: str | None) -> None:
+        if choice and choice != meeting_notes.NONE_OF_THESE and choice in self._companies():
+            if not self._follow_up_link(self.settings.home_room(choice), card.person, card.data.get("link", "")):
+                self.client.post_message(card.room_id, MEETING_UNREADABLE)
+        self.cards.finish(card.request_id, ANSWERED)
+
     def _name_of(self, room_id: str, sender: str) -> str:
         bucket = self.settings.bucket_for(room_id)
         named = self.log.people_named(bucket) | {writer.sender: writer.sender_name for writer in self.log.writers(bucket) if writer.sender_name}
@@ -2185,7 +2292,7 @@ class Desk:
         at, what, people, rest = found
         by_name = {name.casefold(): sender for sender, name in names.items()}
         senders = list(dict.fromkeys(sender for name in people if (sender := by_name.get(name.casefold()))))
-        self.meetings.add(burst.room_id, at, what, people, senders)
+        self.meetings.add(burst.room_id, at, what, people, senders, setter=burst.sender)
         said = MEETING_SET.format(what=what[:1].upper() + what[1:], when=meeting_when(at, now), people=joined(people), before=int(REMIND_BEFORE.total_seconds() // 60))
         # A meeting is personal, so each person hears it in their private room with Foundry. The group only hears it when nobody can be reached there.
         rooms = [room for sender in dict.fromkeys([burst.sender, *senders]) if (room := self._private_room(burst.room_id, sender))]

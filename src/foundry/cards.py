@@ -31,6 +31,8 @@ class Trigger(Enum):
     DAILY_REPORT = "daily_report"
     ATTENTION_NOTE = "attention_note"
     ALREADY_TOLD = "already_told"
+    # Which company a meeting Wispr recorded was for, asked of the owner when who was in it doesn't say.
+    MEETING_COMPANY = "meeting_company"
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,7 @@ ROUTE = {
     Trigger.STUCK: Route("approver", True),
     Trigger.REMINDER: Route("owner", True),
     Trigger.LATE_FIX: Route("approver", True),
+    Trigger.MEETING_COMPANY: Route("approver", True),
     Trigger.DAILY_REPORT: Route("approver", False),
     Trigger.ATTENTION_NOTE: Route("approver", False),
     Trigger.ALREADY_TOLD: Route("asker", False),

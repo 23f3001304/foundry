@@ -88,6 +88,11 @@ def start_desk() -> bool:
                 people=People() if os.environ.get("SWITCH_EMAIL") else None,
                 on_private_room=lambda rooms: write_env(ENV_FILE, {PRIVATE_ROOMS_KEY: private_rooms_text(rooms)}))
     desk.draw_before_review = True
+    # Meeting links pasted in chat are read through Wispr Flow once the owner has connected it (python -m foundry.wispr login).
+    from foundry import wispr
+    desk.wispr = wispr.call if wispr.TOKEN_PATH.exists() else None
+    # Only meetings recorded since Wispr was connected are placed in a company unasked, so older recordings never come up.
+    desk.wispr_since = wispr.connected_at()
     try:
         return asyncio.run(run_until_rooms_change(desk, settings.all_rooms()))
     except httpx.HTTPStatusError as error:
